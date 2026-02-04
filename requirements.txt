@@ -4,3 +4,5 @@ numpy
 pandas
 joblib
 gunicorn
+tqdm
+open3d
