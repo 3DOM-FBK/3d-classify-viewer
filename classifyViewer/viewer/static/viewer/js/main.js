@@ -1,9 +1,11 @@
+import { createButton, createButtonGrid, textVisible, textNotVisible, loadPointCloudTXT, loadPointCloudPLY, frameCameraOnMesh } from "./functions.js";
+
 // Ottieni il canvas e crea l'engine
 var canvas = document.getElementById("renderCanvas");
 var engine = new BABYLON.Engine(canvas, true);
 
 // Crea la scena
-var scene = new BABYLON.Scene(engine);
+export var scene = new BABYLON.Scene(engine);
 
 // Aggiungi camera orbitale
 var camera = new BABYLON.ArcRotateCamera("camera", Math.PI / 2, Math.PI / 4, 10, BABYLON.Vector3.Zero(), scene);
@@ -12,8 +14,8 @@ camera.attachControl(canvas, true);
 // Aggiungi luce
 var light = new BABYLON.HemisphericLight("light", new BABYLON.Vector3(0, 1, 0), scene);
 
-// Aggiungi un cubo semplice
-var box = BABYLON.MeshBuilder.CreateBox("box", { size: 2 }, scene);
+// // Aggiungi un cubo semplice
+// var box = BABYLON.MeshBuilder.CreateBox("box", { size: 2 }, scene);
 
 // Render loop
 engine.runRenderLoop(function () {
@@ -25,9 +27,14 @@ window.addEventListener("resize", function () {
     engine.resize();
 });
 
-// To remove is only for testing the request
-const response = fetch("/load-points/");
-console.log(response);
-response.then(res => res.json()).then(data => {
-    console.log("Numero di punti:", data.points.length);
-});
+const importPCButton = createButton("Import PointCCloud", "importPC");
+
+importPCButton.addEventListener("click", () =>{
+    // const response = fetch("/load-points/");
+    // response.then(res => res.json()).then(data => {
+    //     const filepath = "classifyViewer/viewer/static/viewer/data/cloud.txt"
+    //     console.log("File path:", filepath);
+    //     const point_cloud = loadPointCloudTXT (filepath);
+    //     frameCameraOnMesh(camera, point_cloud);
+    // });
+  });
