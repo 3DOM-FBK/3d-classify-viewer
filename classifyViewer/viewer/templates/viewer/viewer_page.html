@@ -24,7 +24,7 @@
         }
     </style>
     <!-- Carica BabylonJS dai static della tua app -->
-    <script src="{% static 'viewer/js/babylon.js' %}"></script>
+    <script src="{% static 'viewer/js/babylon_js/babylon.js' %}"></script>
 </head>
 
 <body>
@@ -57,7 +57,7 @@
         window.addEventListener("resize", function () {
             engine.resize();
         });
-        
+
         // To remove is only for testing the request
         const response = fetch("/load-points/");
         console.log(response);
