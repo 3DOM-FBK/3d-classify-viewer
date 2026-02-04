@@ -57,6 +57,14 @@
         window.addEventListener("resize", function () {
             engine.resize();
         });
+        
+        // To remove is only for testing the request
+        const response = fetch("/load-points/");
+        console.log(response);
+        response.then(res => res.json()).then(data => {
+            console.log("Numero di punti:", data.points.length);
+        });
+
     </script>
 </body>
 
