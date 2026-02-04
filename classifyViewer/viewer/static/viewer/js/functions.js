@@ -27,10 +27,6 @@ export async function loadPointCloudPLY(url) {
         const result = await BABYLON.SceneLoader.ImportMeshAsync("", "", url, scene);
         const mesh = result.meshes[0];
 
-        // Centro e scala
-        // centerMesh(mesh);
-        // normalizeScale(mesh, 1);
-
         // Materiale point cloud
         const mat = new BABYLON.StandardMaterial("pointMat", scene);
         mat.pointsCloud = true;

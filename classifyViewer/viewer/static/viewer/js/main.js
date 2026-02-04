@@ -11,6 +11,17 @@ export var scene = new BABYLON.Scene(engine);
 var camera = new BABYLON.ArcRotateCamera("camera", Math.PI / 2, Math.PI / 4, 10, BABYLON.Vector3.Zero(), scene);
 camera.attachControl(canvas, true);
 
+// Impostazioni scroll graduale / smooth
+camera.lowerRadiusLimit = null;
+camera.upperRadiusLimit = 20;
+camera.wheelDeltaPercentage = 0.05;
+camera.inertia = 0.8;
+camera.useNaturalPinchZoom = true;
+
+// Rotazione verticale libera
+camera.lowerBetaLimit = 0.01;
+camera.upperBetaLimit = Math.PI - 0.01;
+
 // Aggiungi luce
 var light = new BABYLON.HemisphericLight("light", new BABYLON.Vector3(0, 1, 0), scene);
 
@@ -32,9 +43,10 @@ const importPCButton = createButton("Import PointCCloud", "importPC");
 importPCButton.addEventListener("click", () =>{
     // const response = fetch("/load-points/");
     // response.then(res => res.json()).then(data => {
-    //     const filepath = "classifyViewer/viewer/static/viewer/data/cloud.txt"
-    //     console.log("File path:", filepath);
-    //     const point_cloud = loadPointCloudTXT (filepath);
-    //     frameCameraOnMesh(camera, point_cloud);
+        
     // });
+    const filepath = "static/viewer/data/cloud.txt"
+    console.log("File path:", filepath);
+    const point_cloud = loadPointCloudTXT(filepath, scene);
+    frameCameraOnMesh(camera, point_cloud);
   });
