@@ -7,7 +7,7 @@ import {
     createSlider,
     createOutlineItem,
     createClassItem,
-    loadPointCloudTXT,
+    loadPointCloud,
     frameCameraOnMesh
 } from "./functions.js";
 
@@ -249,7 +249,7 @@ const fpsCounterDisplay = document.getElementById('fps-counter');
 
 importPCButton.addEventListener("click", () => {
     const filepath = "static/viewer/data/cloud.txt";
-    loadPointCloudTXT(filepath, scene).then(pc => {
+    loadPointCloud(filepath, scene).then(pc => {
         if (pc) {
             sceneObjects.currentPointCloud = pc;
 

@@ -107,12 +107,6 @@ export async function loadPointCloud(url, scene) {
             return null;
         }
     } else if (url.endsWith(".txt")) {
-        return await loadPointCloudTXT(url, scene);
-    } else {
-        console.error("Unsupported file format:", url);
-        return null;
-    }
-    else if (url.endsWith(".txt")) {
         try {
             console.log("Loading point cloud from:", url);
 
@@ -181,7 +175,12 @@ export async function loadPointCloud(url, scene) {
             console.error("Error loading TXT:", err);
             return null;
         }
+    
+    } else {
+        console.error("Unsupported file format:", url);
+        return null;
     }
+    
 }
 
 export async function exportPointCloud(mesh, filepath, format = "ply", binary = true) {
