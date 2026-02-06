@@ -121,3 +121,9 @@ STATIC_URL = '/static/'
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# 🔧 Increase the upload limit (default is 2.5MB)
+DATA_UPLOAD_MAX_MEMORY_SIZE = 5242880000  # 5GB in bytes
+
+# 🔧 Optional: also increase the limit for files
+FILE_UPLOAD_MAX_MEMORY_SIZE = 5242880000  # 5GB
