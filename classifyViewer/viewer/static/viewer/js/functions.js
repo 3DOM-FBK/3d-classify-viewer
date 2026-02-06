@@ -24,52 +24,81 @@ export function textVisible(textName){
 export async function loadPointCloud(url, scene) {
     if (url.endsWith(".ply")) {
         try {
-            console.log("Load point cloud from:", url);
+            console.log("Loading point cloud from:", url);
 
-            BABYLON.SceneLoader.ShowLoadingScreen = false;
+            // 🔧 Carica prima i dati del PLY
+            const result = await BABYLON.SceneLoader.ImportMeshAsync("", "", url, scene);
+            const tempMesh = result.meshes[0];
 
-            const result = await BABYLON.SceneLoader.ImportMeshAsync(
-                "",
-                "",
-                url,
-                scene,
-                (evt) => {
-                    if (evt.lengthComputable) {
-                        const percent = Math.floor((evt.loaded / evt.total) * 100);
-                        if (percent % 10 === 0) {
-                            console.log(`Loading: ${percent}%`);
-                        }
-                    }
-                }, 
-                ".ply"
-            );
+            // Estrai dati
+            const positions = tempMesh.getVerticesData(BABYLON.VertexBuffer.PositionKind);
+            const colors = tempMesh.getVerticesData(BABYLON.VertexBuffer.ColorKind);
+            const normals = tempMesh.getVerticesData(BABYLON.VertexBuffer.NormalKind);
 
-            const mesh = result.meshes[0];
+            const numPoints = positions.length / 3;
+            // console.log(`📊 Punti caricati: ${numPoints.toLocaleString()}`);
 
-            mesh.refreshBoundingInfo(true);
-            mesh.createNormals(true);
-
-
-            // // Dopo aver caricato il mesh
-            // if (mesh) {
-            //     const positions = mesh.getVerticesData(BABYLON.VertexBuffer.PositionKind);
-            //     const numPoints = positions.length / 3;
-            //     const estimatedMB = (numPoints * 40) / 1024 / 1024;
+            // 🔧 CREA POINT CLOUD SYSTEM
+            const pcs = new BABYLON.PointsCloudSystem("pcs", 1, scene);
+            pcs.pointSize = 3;
+            // Funzione per inizializzare ogni punto
+            pcs.addPoints(numPoints, (particle, i) => {
+                const idx = i * 3;
                 
-            //     console.log("📊 Punti caricati:", numPoints.toLocaleString());
-            //     console.log("📊 Memoria stimata:", Math.round(estimatedMB), "MB");
-            // }
+                // Posizione
+                particle.position.set(
+                    positions[idx],
+                    positions[idx + 1],
+                    positions[idx + 2]
+                );
 
-            return mesh;
+                // Colore
+                if (colors) {
+                    const colorIdx = i * 4;
+                    particle.color = new BABYLON.Color4(
+                        colors[colorIdx],
+                        colors[colorIdx + 1],
+                        colors[colorIdx + 2],
+                        1.0
+                    );
+                }
+
+                // Normale (opzionale)
+                if (normals) {
+                    // PCS non usa direttamente le normali, ma puoi salvarle
+                    particle.normal = new BABYLON.Vector3(
+                        normals[idx],
+                        normals[idx + 1],
+                        normals[idx + 2]
+                    );
+                }
+            });
+
+            // 🔧 Build del PCS
+            await pcs.buildMeshAsync();
+
+            // 🔧 Ottimizzazioni
+            pcs.mesh.alwaysSelectAsActiveMesh = true; // Sempre visibile
+            pcs.computeParticleColor = false; // Usa colori già impostati
+            pcs.computeParticleTexture = false;
+
+            // Rimuovi mesh temporanea
+            tempMesh.dispose();
+
+            // console.log(`✅ Point Cloud System creato con ${numPoints.toLocaleString()} punti`);
+            pcs.mesh.isPickable = true;
+            pcs.mesh.refreshBoundingInfo(true);
+
+            return pcs.mesh;
 
         } catch (err) {
-            console.error(`ERROR to load ply ${url}:`, err);
+            console.error(`Error loading PLY:`, err);
             return null;
         }
     }
     else if (url.endsWith(".txt")) {
         try {
-            console.log("Load point cloud from:", url);
+            console.log("Loading point cloud from:", url);
 
             const response = await fetch(url);
             const text = await response.text();
@@ -78,7 +107,7 @@ export async function loadPointCloud(url, scene) {
             const positions = [];
             const colors = [];
 
-            for (let i = 1; i < lines.length; i++) { // salta header
+            for (let i = 1; i < lines.length; i++) {
                 const line = lines[i].trim();
                 if (!line) continue;
 
@@ -94,43 +123,48 @@ export async function loadPointCloud(url, scene) {
                 }
             }
 
-            // console.log("Numero di punti:", positions.length / 3);
+            const numPoints = positions.length / 3;
+            // console.log(`📊 Punti caricati: ${numPoints.toLocaleString()}`);
 
-            // 🔹 Creiamo una mesh vuota
-            const mesh = new BABYLON.Mesh("pointCloudTXT", scene);
-
-            // 🔹 Applichiamo VertexData
-            const vertexData = new BABYLON.VertexData();
-            vertexData.positions = positions;
-            if (colors.length > 0) vertexData.colors = colors;
-
-            const normals = [];
-            for (let i = 0; i < positions.length; i += 3) {
-                normals.push(0, 1, 0); 
-            }
-            vertexData.normals = normals;
-
-            vertexData.applyToMesh(mesh, true);
-
-            const mat = new BABYLON.StandardMaterial("pointMatTXT", scene);
-            mat.pointsCloud = true;
-            mat.pointSize = 1.0; 
-            mat.disableLighting = true;
-            mat.emissiveColor = new BABYLON.Color3(1, 1, 1); 
-            // Abilita vertex colors
-            mat.useVertexColors = true; 
+            // 🔧 CREA POINT CLOUD SYSTEM
+            const pcs = new BABYLON.PointsCloudSystem("pcs", 1, scene);
             
-            mesh.material = mat;
-            mesh.computeWorldMatrix(true);
+            pcs.addPoints(numPoints, (particle, i) => {
+                const idx = i * 3;
+                
+                particle.position.set(
+                    positions[idx],
+                    positions[idx + 1],
+                    positions[idx + 2]
+                );
 
-            return mesh;
+                if (colors.length > 0) {
+                    const colorIdx = i * 4;
+                    particle.color = new BABYLON.Color4(
+                        colors[colorIdx],
+                        colors[colorIdx + 1],
+                        colors[colorIdx + 2],
+                        1.0
+                    );
+                }
+            });
+
+            await pcs.buildMeshAsync();
+
+            pcs.mesh.alwaysSelectAsActiveMesh = true;
+            pcs.computeParticleColor = false;
+            pcs.computeParticleTexture = false;
+
+            // console.log(`✅ Point Cloud System creato`);
+            pcs.mesh.isPickable = true;
+            pcs.mesh.refreshBoundingInfo(true);
+
+            return pcs.mesh;
 
         } catch (err) {
-            console.error("ERROR to load TXT:", err);
+            console.error("Error loading TXT:", err);
+            return null;
         }
-    } else {
-        console.error("Unsupported file format:", url);
-        return null;
     }
 }
 
@@ -348,7 +382,7 @@ async function processSaveQueue() {
     const { filepath, blob, resolve, reject } = saveQueue.shift();
     
     try {
-        console.log(`Saving (${saveQueue.length} in queue): ${filepath}`);
+        // console.log(`Saving (${saveQueue.length} in queue): ${filepath}`);
         
         const arrayBuffer = await blob.arrayBuffer();
         const buffer = new Uint8Array(arrayBuffer);

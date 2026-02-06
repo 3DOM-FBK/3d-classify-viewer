@@ -48,28 +48,85 @@ window.addEventListener("resize", function () {
 
 const importPCButton = createButton("Export PointCloud", "importPC");
 console.clear();
-// Testa quanta memoria ha il tuo browser
-console.log("Max heap size:", performance.memory?.jsHeapSizeLimit / 1024 / 1024, "MB");
-console.log("Used heap:", performance.memory?.usedJSHeapSize / 1024 / 1024, "MB");
-// Stima punti massimi
-const maxMemoryMB = 4000; // 2GB sicuri
-const bytesPerPoint = 40;
-const maxPoints = (maxMemoryMB * 1024 * 1024) / bytesPerPoint;
-console.log("Punti massimi stimati:", Math.floor(maxPoints / 1000000), "milioni");
-// Output: ~52 milioni di punti
+// // Testa quanta memoria ha il tuo browser
+// console.log("Max heap size:", performance.memory?.jsHeapSizeLimit / 1024 / 1024, "MB");
+// console.log("Used heap:", performance.memory?.usedJSHeapSize / 1024 / 1024, "MB");
+// // Stima punti massimi
+// const maxMemoryMB = 4000; // 2GB sicuri
+// const bytesPerPoint = 40;
+// const maxPoints = (maxMemoryMB * 1024 * 1024) / bytesPerPoint;
+// console.log("Punti massimi stimati:", Math.floor(maxPoints / 1000000), "milioni");
+// // Output: ~52 milioni di punti
 const folder_path = "static/viewer/data/";
 const export_folder_path = "/app/classifyViewer/viewer/static/viewer/data/";
-const filepath = folder_path + "c78Europ_segm.ply";
+const filepath = folder_path + "cloud.ply";
 const pointCloud = await loadPointCloud(filepath, scene);
+const positions = pointCloud.getVerticesData(
+    BABYLON.VertexBuffer.PositionKind
+);
 frameCameraOnMesh(camera, pointCloud);
-
+ 
 importPCButton.addEventListener("click", async () => {
 
     // Salva PLY binary
-    await exportPointCloud(pointCloud, export_folder_path + "c78_exp.ply", "ply", true);
+    //await exportPointCloud(pointCloud, export_folder_path + "c78_exp.ply", "ply", true);
 
     // // Salva TXT ascii
-    // await exportPointCloud(pointCloud, folder_path + "/c78_exp.txt", "txt", false);
+    await exportPointCloud(pointCloud, export_folder_path + "c78_exp.txt", "txt", true);
     
 });
 
+scene.onPointerDown = (evt) => {
+    const ray = scene.createPickingRay(
+        evt.clientX,
+        evt.clientY,
+        BABYLON.Matrix.Identity(),
+        camera
+    );
+
+    let closestDist = Infinity;
+    let closestPoint = null;
+
+    for (let i = 0; i < positions.length; i += 3) {
+        const p = new BABYLON.Vector3(
+            positions[i],
+            positions[i + 1],
+            positions[i + 2]
+        );
+
+        const dist = BABYLON.Vector3.Distance(ray.origin, p);
+        if (dist < closestDist) {
+            closestDist = dist;
+            closestPoint = p;
+        }
+    }
+
+    if (closestPoint) {
+        console.log("🎯 Selected point:", closestPoint);
+
+        const sphere = BABYLON.MeshBuilder.CreateSphere(
+            "marker",
+            { diameter: 0.05 },
+            scene
+        );
+        sphere.position.copyFrom(closestPoint);
+    }
+};
+
+
+
+function highlightPoint(mesh, index) {
+    const positions = mesh.getVerticesData(BABYLON.VertexBuffer.PositionKind);
+
+    const p = new BABYLON.Vector3(
+        positions[index],
+        positions[index + 1],
+        positions[index + 2]
+    );
+
+    const sphere = BABYLON.MeshBuilder.CreateSphere("sel", {
+        diameter: 0.02
+    }, scene);
+
+    sphere.position = p;
+}
