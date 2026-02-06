@@ -1,43 +1,656 @@
-/*====================
------DEFAULT VARIABLES
-======================*/
-:root{
-    --canvas-bg-color: #242426;
-    --panel-color: #1C1C1E;
-    --selected-color: #7C55CE;
-    --text-color: #707070;
-    --button-font-size: 18px;
-    --button-border-radius: 18px;
-    --button-padding: 7px 30px;
-    --button-height: 5%;
-    --button-grid-gap: 20px;
+:root {
+    --bg-dark: #121214;
+    --panel-bg: #1e1e20;
+    --border-color: #2d2d30;
+    --accent-blue: #3b82f6;
+    --text-primary: #e1e1e6;
+    --text-muted: #8d8d99;
+    --header-height: 40px;
+    --grid-lines: #8d8d99;
 }
-html, body {
+
+/* Scrollbar Minimalista */
+::-webkit-scrollbar {
+    width: 6px;
+    /* Molto sottile */
+    height: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+    /* Sfondo trasparente */
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--border-color);
+    /* Colore neutro per non distrarre */
+    border-radius: 10px;
+    transition: background 0.3s;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--text-muted);
+    /* Si schiarisce al passaggio del mouse */
+}
+
+/* Firefox support */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-color) transparent;
+}
+
+html,
+body {
     overflow: hidden;
     width: 100%;
     height: 100%;
     margin: 0;
     padding: 0;
+    background-color: var(--bg-dark);
+    color: var(--text-primary);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.app-container {
+    display: flex;
+    width: 100%;
+    height: 100vh;
+}
+
+/* Pannelli Laterali */
+.side-panel {
+    background-color: var(--panel-bg);
+    display: flex;
+    flex-direction: column;
+    min-width: 150px;
+    max-width: 500px;
+}
+
+#sidebar-left {
+    width: 250px;
+    border-right: 1px solid var(--border-color);
+}
+
+#sidebar-right {
+    width: 300px;
+    border-left: 1px solid var(--border-color);
+}
+
+.panel-header {
+    height: var(--header-height);
+    background-color: rgba(255, 255, 255, 0.05);
+    display: flex;
+    align-items: center;
+    padding: 0 15px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    letter-spacing: 1px;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.panel-content {
+    flex: 1;
+    padding: 15px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+/* Viewport Centrale */
+#central-viewport {
+    flex: 1;
+    position: relative;
+    background-color: var(--bg-dark);
+    overflow: hidden;
 }
 
 #renderCanvas {
-    background-color: var(--canvas-bg-color);  
     width: 100%;
     height: 100%;
     touch-action: none;
     display: block;
+    outline: none;
 }
 
-#importPC{
-    background-color: var(--canvas-bg-color);
-    color: var(--text-color);
-    font-size: var(--button-font-size);
-    border-radius: var(--button-border-radius);
-    padding: var(--button-padding);
-    position: absolute;
-    top: 10dvh;
-    right: 15dvw;
-    transform: translateX(50%);
+/* Resizer Handles */
+.resizer {
+    width: 4px;
+    background-color: transparent;
+    cursor: col-resize;
+    z-index: 10;
+    transition: background-color 0.2s;
+}
+
+.resizer:hover,
+.resizer.active {
+    background-color: var(--accent-blue);
+}
+
+/* UI Elements */
+.property-group {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 10px;
+    font-size: 0.9rem;
+}
+
+.btn {
+    background-color: var(--accent-blue);
+    color: white;
+    border: none;
+    border-radius: 4px;
+    padding: 10px 16px;
     cursor: pointer;
-    z-index: 1;
+    font-size: 0.9rem;
+    font-weight: 500;
+    transition: background-color 0.2s, opacity 0.2s;
+    width: 100%;
+    text-align: center;
+}
+
+#exportPC {
+    background-color: transparent;
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+}
+
+#exportPC:hover {
+    background-color: var(--border-color);
+}
+
+.btn:hover {
+    opacity: 0.85;
+}
+
+#importPC:hover {
+    opacity: 0.85;
+}
+
+/* Toolbar Superiore */
+.toolbar-container {
+    position: absolute;
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    background-color: var(--panel-bg);
+    padding: 6px;
+    border-radius: 12px;
+    display: flex;
+    gap: 8px;
+    border: 1px solid var(--border-color);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+    z-index: 1000;
+    /* Aumentato per stare sopra il canvas */
+    pointer-events: auto;
+    /* Assicura che i click vengano catturati */
+    /* min-width: 220px; */
+    justify-content: center;
+}
+
+/* Barra Info Inferiore */
+.info-bar-container {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background-color: rgba(30, 30, 32, 0.85);
+    backdrop-filter: blur(10px);
+    padding: 0 20px;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    border-top: 1px solid var(--border-color);
+    z-index: 1000;
+    pointer-events: none;
+}
+
+.info-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.info-label {
+    font-size: 0.65rem;
+    font-weight: 700;
+    color: var(--text-muted);
+    letter-spacing: 0.5px;
+}
+
+.info-value {
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--text-primary);
+    font-family: 'Monaco', 'Consolas', monospace;
+    min-width: 60px;
+}
+
+.tool-btn {
+    width: 38px;
+    height: 38px;
+    background-color: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    color: var(--text-primary);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.tool-btn:hover {
+    background-color: var(--accent-blue);
+    border-color: var(--accent-blue);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+}
+
+.tool-btn:active {
+    transform: translateY(0) scale(0.95);
+}
+
+.tool-btn img {
+    width: 20px;
+    height: 20px;
+    opacity: 0.8;
+    filter: brightness(0) invert(1);
+    /* Rende le icone bianche */
+    transition: opacity 0.2s, transform 0.2s;
+    object-fit: contain;
+}
+
+.tool-btn:hover img {
+    opacity: 1;
+    transform: scale(1.1);
+}
+
+/* Tooltip Custom */
+.tool-btn,
+.header-action-btn {
+    position: relative;
+}
+
+.tool-btn::after,
+.header-action-btn::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    top: calc(100% + 10px);
+    left: 50%;
+    transform: translateX(-50%) translateY(10px);
+    background-color: #1e1e20;
+    color: var(--text-primary);
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 0.75rem;
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transition: all 0.2s ease;
+    border: 1px solid var(--border-color);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    z-index: 1001;
+}
+
+.tool-btn:hover::after,
+.header-action-btn:hover::after {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+    transition-delay: 0.6s;
+    /* Appare solo se il mouse si ferma per 0.6s */
+}
+
+/* Sezioni Accordion */
+.accordion-section {
+    border-bottom: 1px solid var(--border-color);
+    margin: -15px -15px 15px -15px;
+    /* Compensa il padding del parent */
+}
+
+.accordion-header {
+    padding: 8px 15px;
+    /* Leggermente più compatto verticalmente */
+    background-color: rgba(255, 255, 255, 0.02);
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05rem;
+    transition: background-color 0.2s;
+    border: none;
+    text-align: left;
+    min-height: 22px;
+}
+
+.accordion-header span:first-child {
+    flex: 1;
+    /* Prende tutto lo spazio a sinistra */
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    pointer-events: none;
+}
+
+.accordion-header-actions {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    margin-right: 15px;
+    /* Distanza dalla freccia */
+}
+
+.header-action-btn {
+    background: none;
+    border: none;
+    padding: 2px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    opacity: 0.5;
+    transition: all 0.2s;
+}
+
+.header-action-btn:hover {
+    opacity: 1;
+    transform: scale(1.1);
+}
+
+.header-action-btn img {
+    width: 16px;
+    height: 16px;
+    filter: brightness(0) invert(1);
+    display: block;
+}
+
+.accordion-header:hover {
+    background-color: rgba(255, 255, 255, 0.05);
+    color: var(--text-primary);
+}
+
+.accordion-arrow {
+    content: "";
+    font-size: 0.6rem;
+    opacity: 0.5;
+    transition: transform 0.3s;
+    flex-shrink: 0;
+}
+
+.accordion-arrow::before {
+    content: "\25bc";
+}
+
+.accordion-section.collapsed .accordion-arrow {
+    transform: rotate(-90deg);
+}
+
+.accordion-content {
+    padding: 15px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.accordion-section.collapsed .accordion-content {
+    display: none;
+}
+
+/* Property Groups inside Accordion */
+.property-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.85rem;
+}
+
+.property-label {
+    color: var(--text-muted);
+}
+
+.property-value {
+    color: var(--text-primary);
+    font-weight: 500;
+}
+
+.property-input {
+    background-color: rgba(0, 0, 0, 0.2);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    color: var(--text-primary);
+    padding: 4px 8px;
+    font-size: 0.8rem;
+    width: 100px;
+    text-align: right;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+.property-input:focus {
+    border-color: var(--accent-blue);
+}
+
+.property-row-vertical {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+}
+
+.label-container {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.property-value-display {
+    font-size: 0.75rem;
+    color: var(--accent-blue);
+    font-weight: 600;
+}
+
+/* Slider Style */
+.property-slider {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 4px;
+    background: var(--border-color);
+    border-radius: 2px;
+    outline: none;
+}
+
+.property-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    background: var(--accent-blue);
+    cursor: pointer;
+    border-radius: 50%;
+    transition: transform 0.1s;
+}
+
+.property-slider::-webkit-slider-thumb:hover {
+    transform: scale(1.2);
+}
+
+/* Toggle Switch Style (Mobile-like) */
+.switch {
+    position: relative;
+    display: inline-block;
+    width: 34px;
+    height: 18px;
+}
+
+.switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.switch-slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: var(--border-color);
+    transition: .3s cubic-bezier(0.4, 0, 0.2, 1);
+    border-radius: 20px;
+}
+
+.switch-slider:before {
+    position: absolute;
+    content: "";
+    height: 14px;
+    width: 14px;
+    left: 2px;
+    bottom: 2px;
+    background-color: white;
+    transition: .3s cubic-bezier(0.4, 0, 0.2, 1);
+    border-radius: 50%;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+.switch input:checked+.switch-slider {
+    background-color: var(--accent-blue);
+}
+
+.switch input:checked+.switch-slider:before {
+    transform: translateX(16px);
+}
+
+/* Outline Items */
+.outline-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-left: 10px;
+    padding-right: 0px;
+}
+
+.outline-main-info {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex: 1;
+}
+
+.outline-visibility-btn {
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    opacity: 0.5;
+    transition: opacity 0.2s;
+}
+
+.outline-visibility-btn:hover {
+    opacity: 1;
+}
+
+.outline-visibility-btn.off {
+    opacity: 0.3;
+}
+
+.outline-visibility-icon {
+    width: 14px;
+    height: 14px;
+    filter: brightness(0) invert(1);
+    object-fit: contain;
+}
+
+.outline-icon {
+    width: 16px;
+    height: 16px;
+    opacity: 0.7;
+    /* filter: brightness(0) invert(1); */
+    /* Rende l'icona bianca */
+    object-fit: contain;
+}
+
+.outline-name-input {
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--text-primary);
+    font-size: 0.8rem;
+    padding: 2px 4px;
+    border-radius: 4px;
+    width: 100%;
+    outline: none;
+    transition: all 0.2s;
+}
+
+.outline-name-input:hover {
+    background-color: rgba(255, 255, 255, 0.05);
+}
+
+.outline-name-input:focus {
+    background-color: rgba(0, 0, 0, 0.2);
+    border-color: var(--accent-blue);
+}
+
+/* Context Menu Style */
+.context-menu {
+    position: fixed;
+    background-color: #1e1e20;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 6px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    z-index: 2000;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 200px;
+    animation: fadeInScale 0.1s ease-out;
+}
+
+@keyframes fadeInScale {
+    from {
+        opacity: 0;
+        transform: scale(0.95);
+    }
+
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+.context-menu-item {
+    background: none;
+    border: none;
+    color: var(--text-primary);
+    padding: 10px 12px;
+    text-align: left;
+    font-size: 0.8rem;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+}
+
+.context-menu-item:hover {
+    background-color: var(--accent-blue);
+    color: white;
+}
+
+.context-menu-item img {
+    width: 16px;
+    height: 16px;
+    filter: brightness(0) invert(1);
+    object-fit: contain;
 }

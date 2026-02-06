@@ -5,17 +5,63 @@
 
 <head>
     <meta charset="utf-8">
-    <title>Test BabylonJS</title>
+    <title>3DOM Classify Viewer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{% static 'viewer/css/styles.css' %}">
-    <!-- Carica BabylonJS dai static della tua app -->
+    <!-- Load BabylonJS from your app's static files -->
     <script src="{% static 'viewer/js/babylon_js/babylon.js' %}"></script>
-    <script src="{% static 'viewer/js/babylon_js/loaders/babylonjs.loaders.min.js' %}"></script>
-    
+    <script src="{% static 'viewer/js/babylon_js/materialsLibrary/babylonjs.materials.min.js' %}"></script>
 </head>
 
 <body>
-    <canvas id="renderCanvas"></canvas>
-    <script type="module" src="{% static 'viewer/js/main_g.js' %}"></script>
+    <div class="app-container">
+        <!-- Left Sidebar -->
+        <aside id="sidebar-left" class="panel side-panel">
+            <div class="panel-header">INSPECTOR</div>
+            <div id="sidebar-left-content" class="panel-content">
+                <!-- Accordion sections injected by JS -->
+            </div>
+        </aside>
+
+        <!-- Resizer 1 -->
+        <div class="resizer" id="resizer-left" data-direction="left"></div>
+
+        <!-- Central Viewport -->
+        <main id="central-viewport">
+            <canvas id="renderCanvas"></canvas>
+            <div id="top-toolbar" class="toolbar-container">
+                <!-- Buttons injected by JS -->
+            </div>
+            <div id="scene-info-bar" class="info-bar-container">
+                <!-- <div class="info-item">
+                    <span class="info-label">MOUSE:</span>
+                    <span id="mouse-coords" class="info-value">X: 0.00 Y: 0.00 Z: 0.00</span>
+                </div> -->
+                <div class="info-item">
+                    <span class="info-label">POINTS:</span>
+                    <span id="point-count" class="info-value">0</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">FPS:</span>
+                    <span id="fps-counter" class="info-value">0</span>
+                </div>
+            </div>
+        </main>
+
+        <!-- Resizer 2 -->
+        <div class="resizer" id="resizer-right" data-direction="right"></div>
+
+        <!-- Right Inspector -->
+        <aside id="sidebar-right" class="panel side-panel">
+            <div class="panel-header">TOOLS</div>
+            <div id="sidebar-right-content" class="panel-content">
+                <!-- Accordion sections injected by JS -->
+            </div>
+        </aside>
+    </div>
+    <script type="module" src="{% static 'viewer/js/main.js' %}"></script>
 </body>
 
 </html>
