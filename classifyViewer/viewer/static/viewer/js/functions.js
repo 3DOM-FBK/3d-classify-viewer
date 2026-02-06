@@ -34,7 +34,7 @@ export async function loadPointCloud(url, scene) {
                 (evt) => {
                     if (evt.lengthComputable) {
                         const percent = Math.floor((evt.loaded / evt.total) * 100);
-                        if (percent % 10 === 0) {
+                        if (percent % 25 === 0) {
                             console.log(`Loading: ${percent}%`);
                         }
                     }
@@ -43,14 +43,9 @@ export async function loadPointCloud(url, scene) {
 
             const mesh = result.meshes[0];
 
-            const mat = new BABYLON.StandardMaterial("pointMat", scene);
-            mat.pointsCloud = true;
-            mat.pointSize = 2.0;
-            mat.disableLighting = true;
-            mesh.material = mat;
-
             mesh.refreshBoundingInfo(true);
-
+            mesh.createNormals(true);
+            
             // console.log("✅ Nuvola PLY caricata:", mesh);
             return mesh;
 
@@ -96,19 +91,25 @@ export async function loadPointCloud(url, scene) {
             vertexData.positions = positions;
             if (colors.length > 0) vertexData.colors = colors;
 
-            vertexData.applyToMesh(mesh, true); // true = updateBoundingInfo
+            const normals = [];
+            for (let i = 0; i < positions.length; i += 3) {
+                normals.push(0, 1, 0); 
+            }
+            vertexData.normals = normals;
 
-            // 🔹 Materiale point cloud
+            vertexData.applyToMesh(mesh, true);
+
             const mat = new BABYLON.StandardMaterial("pointMatTXT", scene);
             mat.pointsCloud = true;
-            mat.pointSize = 2.0;
+            mat.pointSize = 1.0; 
             mat.disableLighting = true;
-            mesh.material = mat;
-
-            // 🔹 Aggiorna bounding info e centra camera
-            mesh.computeWorldMatrix(true);
+            mat.emissiveColor = new BABYLON.Color3(1, 1, 1); 
+            // Abilita vertex colors
+            mat.useVertexColors = true; 
             
-            // console.log("✅ Nuvola TXT caricata:", mesh);
+            mesh.material = mat;
+            mesh.computeWorldMatrix(true);
+
             return mesh;
 
         } catch (err) {

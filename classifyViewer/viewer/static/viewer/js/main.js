@@ -1,4 +1,4 @@
-import { createButton, createButtonGrid, textVisible, textNotVisible, loadPointCloudTXT, loadPointCloudPLY, frameCameraOnMesh } from "./functions.js";
+import { createButton, createButtonGrid, textVisible, textNotVisible, loadPointCloud, frameCameraOnMesh } from "./functions.js";
 
 // Ottieni il canvas e crea l'engine
 var canvas = document.getElementById("renderCanvas");
@@ -47,6 +47,6 @@ importPCButton.addEventListener("click", () =>{
     // });
     const filepath = "static/viewer/data/cloud.txt"
     console.log("File path:", filepath);
-    const point_cloud = loadPointCloudTXT(filepath, scene);
+    const point_cloud = loadPointCloud(filepath, scene);
     frameCameraOnMesh(camera, point_cloud);
   });
