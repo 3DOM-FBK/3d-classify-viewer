@@ -248,7 +248,7 @@ const fpsCounterDisplay = document.getElementById('fps-counter');
 // });
 
 importPCButton.addEventListener("click", () => {
-    const filepath = "static/viewer/data/cloud.txt";
+    const filepath = "static/viewer/data/c78Europ_segm.ply";
     loadPointCloud(filepath, scene).then(pc => {
         if (pc) {
             sceneObjects.currentPointCloud = pc;

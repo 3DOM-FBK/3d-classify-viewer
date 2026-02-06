@@ -59,7 +59,7 @@ console.clear();
 // // Output: ~52 milioni di punti
 const folder_path = "static/viewer/data/";
 const export_folder_path = "/app/classifyViewer/viewer/static/viewer/data/";
-const filepath = folder_path + "cloud.ply";
+const filepath = folder_path + "c78Europ_segm.ply";
 const pointCloud = await loadPointCloud(filepath, scene);
 const positions = pointCloud.getVerticesData(
     BABYLON.VertexBuffer.PositionKind
