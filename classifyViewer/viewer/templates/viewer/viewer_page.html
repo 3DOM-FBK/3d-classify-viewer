@@ -9,12 +9,13 @@
     <link rel="stylesheet" href="{% static 'viewer/css/styles.css' %}">
     <!-- Carica BabylonJS dai static della tua app -->
     <script src="{% static 'viewer/js/babylon_js/babylon.js' %}"></script>
+    <script src="{% static 'viewer/js/babylon_js/loaders/babylonjs.loaders.min.js' %}"></script>
     
 </head>
 
 <body>
     <canvas id="renderCanvas"></canvas>
-    <script type="module" src="{% static 'viewer/js/main.js' %}"></script>
+    <script type="module" src="{% static 'viewer/js/main_g.js' %}"></script>
 </body>
 
 </html>

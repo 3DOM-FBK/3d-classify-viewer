@@ -21,90 +21,109 @@ export function textVisible(textName){
     textName.style.opacity = "1";
 }
 // LOADING POINT CLOUD
-export async function loadPointCloudPLY(url) {
-    try {
-        console.log("📦 Carico nuvola di punti:", url);
-        const result = await BABYLON.SceneLoader.ImportMeshAsync("", "", url, scene);
-        const mesh = result.meshes[0];
+export async function loadPointCloud(url, scene) {
+    if (url.endsWith(".ply")) {
+        try {
+            console.log("Load point cloud from:", url);
 
-        // Materiale point cloud
-        const mat = new BABYLON.StandardMaterial("pointMat", scene);
-        mat.pointsCloud = true;
-        mat.pointSize = 2.0;
-        mesh.material = mat;
+            const result = await BABYLON.SceneLoader.ImportMeshAsync(
+                "",
+                "",
+                url,
+                scene,
+                (evt) => {
+                    if (evt.lengthComputable) {
+                        const percent = Math.floor((evt.loaded / evt.total) * 100);
+                        if (percent % 10 === 0) {
+                            console.log(`Loading: ${percent}%`);
+                        }
+                    }
+                }
+            );
 
-        console.log("Nuvola di punti caricata e centrata:", mesh);
-        return mesh;
-    } catch (err) {
-        console.error(`Errore caricamento PLY ${url}:`, err);
+            const mesh = result.meshes[0];
+
+            const mat = new BABYLON.StandardMaterial("pointMat", scene);
+            mat.pointsCloud = true;
+            mat.pointSize = 2.0;
+            mat.disableLighting = true;
+            mesh.material = mat;
+
+            mesh.refreshBoundingInfo(true);
+
+            // console.log("✅ Nuvola PLY caricata:", mesh);
+            return mesh;
+
+        } catch (err) {
+            console.error(`❌ Errore caricamento PLY ${url}:`, err);
+            return null;
+        }
     }
-}
+    else if (url.endsWith(".txt")) {
+        try {
+            console.log("Load point cloud from:", url);
 
-export async function loadPointCloudTXT(url, scene) {
-    try {
-        console.log("📦 Carico nuvola di punti TXT:", url);
+            const response = await fetch(url);
+            const text = await response.text();
+            const lines = text.split("\n");
 
-        const response = await fetch(url);
-        const text = await response.text();
+            const positions = [];
+            const colors = [];
 
-        const lines = text.split("\n");
+            for (let i = 1; i < lines.length; i++) { // salta header
+                const line = lines[i].trim();
+                if (!line) continue;
 
-        const positions = [];
-        const colors = [];
+                const values = line.split(/\s+/).map(Number);
+                if (values.length < 3) continue;
 
-        for (let i = 1; i < lines.length; i++) { // salta header
-            const line = lines[i].trim();
-            if (!line) continue;
+                const [x, y, z, r, g, b] = values;
 
-            const values = line.split(/\s+/).map(Number);
-            if (values.length < 3) continue;
+                positions.push(x, y, z);
 
-            const [x, y, z, r, g, b] = values;
-
-            positions.push(x, y, z);
-
-            // colore opzionale
-            if (r !== undefined && g !== undefined && b !== undefined) {
-                colors.push(r / 255, g / 255, b / 255, 1.0);
+                if (r !== undefined && g !== undefined && b !== undefined) {
+                    colors.push(r / 255, g / 255, b / 255, 1.0);
+                }
             }
+
+            // console.log("Numero di punti:", positions.length / 3);
+
+            // 🔹 Creiamo una mesh vuota
+            const mesh = new BABYLON.Mesh("pointCloudTXT", scene);
+
+            // 🔹 Applichiamo VertexData
+            const vertexData = new BABYLON.VertexData();
+            vertexData.positions = positions;
+            if (colors.length > 0) vertexData.colors = colors;
+
+            vertexData.applyToMesh(mesh, true); // true = updateBoundingInfo
+
+            // 🔹 Materiale point cloud
+            const mat = new BABYLON.StandardMaterial("pointMatTXT", scene);
+            mat.pointsCloud = true;
+            mat.pointSize = 2.0;
+            mat.disableLighting = true;
+            mesh.material = mat;
+
+            // 🔹 Aggiorna bounding info e centra camera
+            mesh.computeWorldMatrix(true);
+            
+            // console.log("✅ Nuvola TXT caricata:", mesh);
+            return mesh;
+
+        } catch (err) {
+            console.error("❌ Errore caricamento TXT:", err);
         }
-
-        console.log("Numero di punti:", positions.length / 3);
-
-        // 🔹 Mesh vuota
-        const mesh = new BABYLON.Mesh("pointCloudTXT", scene);
-
-        // 🔹 Vertex data
-        const vertexData = new BABYLON.VertexData();
-        vertexData.positions = positions;
-
-        if (colors.length > 0) {
-            vertexData.colors = colors;
-        }
-
-        vertexData.applyToMesh(mesh);
-
-        // 🔹 Materiale point cloud
-        const mat = new BABYLON.StandardMaterial("pointMatTXT", scene);
-        mat.pointsCloud = true;
-        mat.pointSize = 2.0;
-        mat.disableLighting = true;
-
-        mesh.material = mat;
-
-        console.log("✅ Nuvola TXT caricata:", mesh);
-        return mesh;
-
-    } catch (err) {
-        console.error("❌ Errore caricamento TXT:", err);
+    } else {
+        console.error("Unsupported file format:", url);
+        return null;
     }
 }
 
+// Centra camera sulla mesh
 export function frameCameraOnMesh(camera, mesh) {
-    mesh.computeWorldMatrix(true);
-
+    console.log("Centering camera on mesh:", mesh.name);
     const bbox = mesh.getBoundingInfo().boundingBox;
-
     const min = bbox.minimumWorld;
     const max = bbox.maximumWorld;
 
