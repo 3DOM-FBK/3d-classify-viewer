@@ -1,6 +1,6 @@
 from django.shortcuts import render
 from django.http import JsonResponse
-from viewer.functions import load_point_cloud
+from viewer.functions import load_point_cloud, launch_training_RF
 from django.views.decorators.csrf import csrf_exempt
 import base64
 import os
@@ -15,6 +15,22 @@ def load_points(request):
     # points = points[:5].tolist()  
     # print(f"Limited points count: {len(points)}")
     return JsonResponse({"filepath": file_path})
+
+def launch_RF_training(request):
+    if request.method == 'POST':
+        try:
+            print("[Launch RF training] Request body:", request.body[:200]) 
+            data = json.loads(request.body)
+            launch_training_RF(data)
+            return JsonResponse({"status": 'success', "message": "RF launched successfully."})
+
+        except Exception as e:
+            print("[Launch RF training ERROR] " + str(e))
+            print(traceback.format_exc())
+            return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+
+    return JsonResponse({'status': 'error', 'message': 'Method not allowed'}, status=405)
+    
 
 @csrf_exempt
 def save_file(request):

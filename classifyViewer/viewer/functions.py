@@ -6,6 +6,10 @@ from tqdm import tqdm
 import open3d as o3d
 from dataclasses import dataclass
 from typing import List, Tuple
+from .RF_training import main as training
+from .RF_classify import main as classification
+import sys
+import time
 
 def load_point_cloud(filepath):
     """
@@ -197,7 +201,24 @@ class LabelManager:
     def get_class_name(self, label_id):
         return self.id_to_name.get(label_id, "unknown")
 
+def launch_training_RF(data):
+    print("[Functions.py] Launching RF training with data:", data)
+    
+    folder_path = "/app/classifyViewer/viewer/static/viewer/data/"
 
+    # TODO: MODIFY THIS FOLDER PATH WITH THE REAL PATH OF THE DATASET FOLDER IN YOUR PROJECT
+    features_filepath = folder_path + "RF/training_using_gaussian/dataset/feature_index_gs.txt"
+    training_filepath = folder_path + "RF/training_using_gaussian/dataset/training.txt"
+    eval_filepath = folder_path + "RF/training_using_gaussian/dataset/validation.txt"
+    n_jobs = data['n_jobs']
+    n_estimators = data['nr_estimators']
+    max_depth = data['max_depth']
+    output_training_name = folder_path + "RF/training_using_gaussian/output/test_predicted"
+    model_savepath = folder_path + "RF/training_using_gaussian/output/model_avt_gaussian.pkl"
+    
+    print("\n[Functions.py] ---- START TRAINING SCRIPT -----\n")
+    training(features_filepath, training_filepath, eval_filepath, n_jobs, n_estimators, max_depth, output_training_name, model_savepath)
+    
 
 def main():
 

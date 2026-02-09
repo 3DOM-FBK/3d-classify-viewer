@@ -1,6 +1,6 @@
 from django.urls import path
 from . import views
-from .request_functions import load_points, save_file
+from .request_functions import load_points, save_file, launch_RF_training
 
 urlpatterns = [
     # path('', views.home, name='home'),
@@ -8,4 +8,5 @@ urlpatterns = [
     # Add more path to launch other functions
     path("load-points/", load_points),
     path("save_file/", save_file),
+    path("launch_RF_training/", launch_RF_training),
 ]
