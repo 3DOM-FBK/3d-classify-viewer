@@ -112,9 +112,11 @@ def subsampling_point_cloud(file_path, voxel_size=0.002):
         f"Points N after the voxel_down_sample ({voxel_size*100:.1f} cm): {len(pcd_down.points)}"
     )
 
-    temp_file = file_path.replace(".ply", f"_{int(voxel_size*100)}cm.ply")
-    o3d.io.write_point_cloud(temp_file, pcd_down)
-    return temp_file
+    output_filepath = file_path.replace(".ply", f"_{int(voxel_size*100)}cm.ply")
+    o3d.io.write_point_cloud(output_filepath, pcd_down)
+    print(f"Subsampled point cloud saved to: {output_filepath}")
+
+    return output_filepath
 
 # Standard RGB colors (0–255)
 
@@ -285,7 +287,7 @@ def main():
         print("After removing:", all_classes.list_labels())
 
     if subsampling_flag == True :
-            sampling_file_path = subsampling_point_cloud(file_path, voxel_size)
+        sampling_file_path = subsampling_point_cloud(file_path, voxel_size)
     
     # SELECT A REGION OF POINT USING BBOX AND RADIUS AND THEN EXPORT
     if select_region_flag == True:
@@ -324,5 +326,5 @@ def main():
         export_point_cloud(os.path.join(output_path, "cloud_bbox.txt"), subset_bbox, header)
         export_point_cloud(os.path.join(output_path, "cloud_rad.txt"), subset_radius, header)
 
-if __name__== '__main__':
-    main()
+# if __name__== '__main__':
+#     main()
