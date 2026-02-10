@@ -6,3 +6,8 @@ joblib
 gunicorn
 tqdm
 open3d
+trimesh
+torch
+pygltflib
+pathlib
+rtree
