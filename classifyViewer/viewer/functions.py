@@ -121,7 +121,7 @@ def subsampling_point_cloud(file_path, voxel_size=0.002):
 
 def mesh_to_point_cloud(mesh_path, num_points=5000000, sampling_method="uniform"):
     print("\n[Functions.py] ---- MESH TO POINT CLOUD -----\n")
-    mesh2pc(input_folder=mesh_path, num_points=num_points, sampling_method=sampling_method)
+    mesh2pc(mesh_path=mesh_path, num_points=num_points, sampling_method=sampling_method)
 
 
 

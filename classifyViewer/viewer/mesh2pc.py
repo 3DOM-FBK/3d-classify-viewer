@@ -35,7 +35,9 @@ def extract_textures_from_glb(glb_path):
     return textures
 
 
-def process_glb(mesh_path, num_points=3000000, sampling_method="uniform"):
+
+def main(mesh_path, num_points=5000000, sampling_method="uniform"):
+   
     print(f"[Loading mesh  from {mesh_path}]")
     start_time = time.time()
 
@@ -120,26 +122,6 @@ def process_glb(mesh_path, num_points=3000000, sampling_method="uniform"):
     print(f"Point cloud saved as: {out_file}, with {len(points_final)} points")
     print(f"Processing time: {minutes} min {seconds} sec")
 
-
-
-
-def main(input_folder, num_points=5000000, sampling_method="uniform"):
-   
-    folder = Path(input_folder)
-    if not folder.exists() or not folder.is_dir():
-        print(f"❌ Folder does not exist: {folder}")
-        return
-
-    glb_files = list(folder.glob("*.glb"))
-    tot_len = len(glb_files)
-    if tot_len == 0:
-        print(f"❌ No GLB files found in {folder}")
-        return
-    n_files = 1
-    for glb_file in glb_files:
-        print(f"===== [ {n_files} / {tot_len} ] =====")
-        process_glb(str(glb_file), num_points=num_points, sampling_method=sampling_method)
-        n_files += 1
 
 if __name__ == "__main__":
     main()
