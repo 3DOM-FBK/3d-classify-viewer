@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import List, Tuple
 from .RF_training import main as training
 from .RF_classify import main as classification
+from .mesh2pc import main as mesh2pc
 import sys
 import time
 
@@ -117,6 +118,12 @@ def subsampling_point_cloud(file_path, voxel_size=0.002):
     print(f"Subsampled point cloud saved to: {output_filepath}")
 
     return output_filepath
+
+def mesh_to_point_cloud(mesh_path, num_points=5000000, sampling_method="uniform"):
+    print("\n[Functions.py] ---- MESH TO POINT CLOUD -----\n")
+    mesh2pc(input_folder=mesh_path, num_points=num_points, sampling_method=sampling_method)
+
+
 
 # Standard RGB colors (0–255)
 
