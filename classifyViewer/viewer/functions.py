@@ -12,6 +12,90 @@ from .mesh2pc import main as mesh2pc
 import sys
 import time
 
+def export_point_cloud(filepath, points, header=None):
+    """
+    Export the point cloud in a txt file showing the loading bar 
+    
+    Args:
+        filepath (str): path of the output file
+        points (np.array): array points Nx3
+        header (str, optional): header optional to write in the first line
+    """
+    n_points = points.shape[0]
+    print("\n[FUNCTION] ---- EXPORT POINT CLOUD -----\n")
+    print(f"Exporting the point cloud {filepath}")
+
+    if n_points == 0:
+        print("Be careful, there are no points to export")
+        return
+
+    with open(filepath, 'w') as f:
+        # Scrivi header se presente
+        if header is not None:
+            f.write(header + '\n')
+
+        # Scrivi ogni punto con barra di progresso
+        for i in tqdm(range(n_points), desc="Exporting points"):
+            # Converte la riga in stringa separata da spazi
+            line = ' '.join(map(str, points[i]))
+            f.write(line + '\n')
+
+def subsampling_point_cloud(file_path, voxel_size=0.002):
+    print("\n[FUNCTION] ---- SUBSAMPLING POINT CLOUD -----\n")
+    print(f"Loading file for downsampling: {file_path}")
+    pcd = o3d.io.read_point_cloud(file_path)
+    print(f"Original Points N: {len(pcd.points)}")
+
+    pcd_down = pcd.voxel_down_sample(voxel_size=voxel_size)
+    print(
+        f"Points N after the voxel_down_sample ({voxel_size*100:.1f} cm): {len(pcd_down.points)}"
+    )
+
+    output_filepath = file_path.replace(".ply", f"_{int(voxel_size*100)}cm.ply")
+    o3d.io.write_point_cloud(output_filepath, pcd_down)
+    print(f"Subsampled point cloud saved to: {output_filepath}")
+
+    return output_filepath
+
+def mesh_to_point_cloud(mesh_path, num_points=5000000, sampling_method="uniform"):
+    print("\n[FUNCTION] ---- MESH TO POINT CLOUD -----\n")
+    mesh2pc(mesh_path=mesh_path, num_points=num_points, sampling_method=sampling_method)
+
+def launch_training_RF(data):
+    print("\n[FUNCTION] ---- TRAINING RANDOM FOREST -----\n")
+    
+    folder_path = "/app/classifyViewer/viewer/static/viewer/data/"
+
+    # TODO: MODIFY THIS FOLDER PATH WITH THE REAL PATH OF THE DATASET FOLDER IN YOUR PROJECT
+    features_filepath = folder_path + "RF/training_using_gaussian/dataset/feature_index_gs.txt"
+    training_filepath = folder_path + "RF/training_using_gaussian/dataset/training.txt"
+    eval_filepath = folder_path + "RF/training_using_gaussian/dataset/validation.txt"
+    n_jobs = data['n_jobs']
+    n_estimators = data['nr_estimators']
+    max_depth = data['max_depth']
+    output_training_name = folder_path + "RF/training_using_gaussian/output/test_predicted"
+    model_savepath = folder_path + "RF/training_using_gaussian/output/model_avt_gaussian.pkl"
+    
+    training(features_filepath, training_filepath, eval_filepath, n_jobs, n_estimators, max_depth, output_training_name, model_savepath)
+
+def launch_classify_RF():
+    print("[FUNCTION] ---- CLASSIFYING RANDOM FOREST -----")
+    
+    folder_path = "/app/classifyViewer/viewer/static/viewer/data/"
+
+    # TODO: MODIFY THIS FOLDER PATH WITH THE REAL PATH OF THE DATASET FOLDER IN YOUR PROJECT
+    features_filepath = folder_path + "RF/training_using_gaussian/dataset/feature_index_gs.txt"
+    model_savepath = folder_path + "RF/training_using_gaussian/output/model_avt_gaussian.pkl"
+    test_filepath = folder_path + "RF/training_using_gaussian/dataset/test_avt.txt"
+    output_classify_name = folder_path + "RF/training_using_gaussian/output/avt_gs_predicted"
+    
+    classification(features_filepath, model_savepath, test_filepath, output_classify_name)    
+
+
+# ---------------------------------------------------------------
+# TODO: DELETE THIS PARTS BELOW IF THERE ARE NOT USEFUL ANYMORE 
+# ---------------------------------------------------------------
+
 def load_point_cloud(filepath):
     """
     Read the point cloud from a .txt file showing the loading bar
@@ -36,34 +120,6 @@ def load_point_cloud(filepath):
             X.append([float(t) for t in tokens])
     
     return np.asarray(X, dtype=np.float32), header
-
-def export_point_cloud(filepath, points, header=None):
-    """
-    Export the point cloud in a txt file showing the loading bar 
-    
-    Args:
-        filepath (str): path of the output file
-        points (np.array): array points Nx3
-        header (str, optional): header optional to write in the first line
-    """
-    n_points = points.shape[0]
-    print(f"Exporting the point cloud {filepath}")
-
-    if n_points == 0:
-        print("Be careful, there are no points to export")
-        return
-
-    with open(filepath, 'w') as f:
-        # Scrivi header se presente
-        if header is not None:
-            f.write(header + '\n')
-
-        # Scrivi ogni punto con barra di progresso
-        for i in tqdm(range(n_points), desc="Exporting points"):
-            # Converte la riga in stringa separata da spazi
-            line = ' '.join(map(str, points[i]))
-            f.write(line + '\n')
-
 
 def select_points(points, mode="bbox", params=None):
     """
@@ -103,28 +159,6 @@ def select_points(points, mode="bbox", params=None):
 
     return selected
 
-def subsampling_point_cloud(file_path, voxel_size=0.002):
-    print(f"Loading file for downsampling: {file_path}")
-    pcd = o3d.io.read_point_cloud(file_path)
-    print(f"Original Points N: {len(pcd.points)}")
-
-    pcd_down = pcd.voxel_down_sample(voxel_size=voxel_size)
-    print(
-        f"Points N after the voxel_down_sample ({voxel_size*100:.1f} cm): {len(pcd_down.points)}"
-    )
-
-    output_filepath = file_path.replace(".ply", f"_{int(voxel_size*100)}cm.ply")
-    o3d.io.write_point_cloud(output_filepath, pcd_down)
-    print(f"Subsampled point cloud saved to: {output_filepath}")
-
-    return output_filepath
-
-def mesh_to_point_cloud(mesh_path, num_points=5000000, sampling_method="uniform"):
-    print("\n[Functions.py] ---- MESH TO POINT CLOUD -----\n")
-    mesh2pc(mesh_path=mesh_path, num_points=num_points, sampling_method=sampling_method)
-
-
-
 # Standard RGB colors (0–255)
 
 RED       = (255, 0, 0)
@@ -153,8 +187,6 @@ COLORS = {
     "brown": BROWN,
     "gray": GRAY,
 }
-
-
 
 @dataclass
 class LabelInfo:
@@ -209,38 +241,6 @@ class LabelManager:
 
     def get_class_name(self, label_id):
         return self.id_to_name.get(label_id, "unknown")
-
-def launch_training_RF(data):
-    print("[Functions.py] Launching RF training with data:", data)
-    
-    folder_path = "/app/classifyViewer/viewer/static/viewer/data/"
-
-    # TODO: MODIFY THIS FOLDER PATH WITH THE REAL PATH OF THE DATASET FOLDER IN YOUR PROJECT
-    features_filepath = folder_path + "RF/training_using_gaussian/dataset/feature_index_gs.txt"
-    training_filepath = folder_path + "RF/training_using_gaussian/dataset/training.txt"
-    eval_filepath = folder_path + "RF/training_using_gaussian/dataset/validation.txt"
-    n_jobs = data['n_jobs']
-    n_estimators = data['nr_estimators']
-    max_depth = data['max_depth']
-    output_training_name = folder_path + "RF/training_using_gaussian/output/test_predicted"
-    model_savepath = folder_path + "RF/training_using_gaussian/output/model_avt_gaussian.pkl"
-    
-    print("\n[Functions.py] ---- START TRAINING SCRIPT -----\n")
-    training(features_filepath, training_filepath, eval_filepath, n_jobs, n_estimators, max_depth, output_training_name, model_savepath)
-
-def launch_classify_RF():
-    print("[Functions.py] Launching RF classify")
-    
-    folder_path = "/app/classifyViewer/viewer/static/viewer/data/"
-
-    # TODO: MODIFY THIS FOLDER PATH WITH THE REAL PATH OF THE DATASET FOLDER IN YOUR PROJECT
-    features_filepath = folder_path + "RF/training_using_gaussian/dataset/feature_index_gs.txt"
-    model_savepath = folder_path + "RF/training_using_gaussian/output/model_avt_gaussian.pkl"
-    test_filepath = folder_path + "RF/training_using_gaussian/dataset/test_avt.txt"
-    output_classify_name = folder_path + "RF/training_using_gaussian/output/avt_gs_predicted"
-    
-    print("\n[Functions.py] ---- START CLASSIFY SCRIPT -----\n")
-    classification(features_filepath, model_savepath, test_filepath, output_classify_name)    
 
 def main():
 

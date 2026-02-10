@@ -19,13 +19,13 @@ def load_points(request):
 def launch_RF_training(request):
     if request.method == 'POST':
         try:
-            print("[Launch RF training] Request body:", request.body[:200]) 
+            print("[REQUEST FUNCTION] Launch RF training: ", request.body[:200]) 
             data = json.loads(request.body)
             launch_training_RF(data)
             return JsonResponse({"status": 'success', "message": "RF traininglaunched successfully."})
 
         except Exception as e:
-            print("[Launch RF training ERROR] " + str(e))
+            print("[REQUEST FUNCTION] Launch RF training ERROR " + str(e))
             print(traceback.format_exc())
             return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
 
@@ -34,12 +34,12 @@ def launch_RF_training(request):
 def launch_RF_classify(request):
     if request.method == 'POST':
         try:
-            print("[Launch RF classify] Request") 
+            print("[REQUEST FUNCTION] Launch RF classify") 
             launch_classify_RF()
             return JsonResponse({"status": 'success', "message": "RF classify launched successfully."})
 
         except Exception as e:
-            print("[Launch RF classify ERROR] " + str(e))
+            print("[REQUEST FUNCTION] Launch RF classify ERROR " + str(e))
             print(traceback.format_exc())
             return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
 
@@ -48,7 +48,7 @@ def launch_RF_classify(request):
 def subsample_pc(request):
     if request.method == 'POST':
         try:
-            print("[Subsample Point Cloud] Request body:", request.body[:200]) 
+            print("[REQUEST FUNCTION] Subsample Point Cloud:", request.body[:200]) 
             data = json.loads(request.body)
 
             file_path = data['file_path']
@@ -59,7 +59,7 @@ def subsample_pc(request):
             return JsonResponse({"status": 'success', "message": "Subsampling completed.", "output_file_path": output_file_path})
 
         except Exception as e:
-            print("[Subsample Point Cloud ERROR] " + str(e))
+            print("[REQUEST FUNCTION] Subsample Point Cloud ERROR " + str(e))
             print(traceback.format_exc())
             return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
 
@@ -68,7 +68,7 @@ def subsample_pc(request):
 def mesh2pc(request):
     if request.method == 'POST':
         try:
-            print("[Mesh to Point Cloud] Request body:", request.body[:200]) 
+            print("[REQUEST FUNCTION] Mesh to Point Cloud:", request.body[:200]) 
             data = json.loads(request.body)
 
             file_path = data['file_path']
@@ -80,17 +80,16 @@ def mesh2pc(request):
             return JsonResponse({"status": 'success', "message": "Mesh to Point Cloud completed."})
 
         except Exception as e:
-            print("[Mesh to Point Cloud ERROR] " + str(e))
+            print("[REQUEST FUNCTION] Mesh to Point Cloud ERROR " + str(e))
             print(traceback.format_exc())
             return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
 
     return JsonResponse({'status': 'error', 'message': 'Method not allowed'}, status=405) 
 
-@csrf_exempt
 def save_file(request):
     if request.method == 'POST':
         try:
-            print("[Save file] Request body:", request.body[:200]) 
+            print("[REQUEST FUNCTION] Save file: ", request.body[:200]) 
             
             data = json.loads(request.body)
             filepath = data['filepath']
@@ -114,13 +113,13 @@ def save_file(request):
             with open(filepath, 'wb') as f:
                 f.write(file_data)
             
-            print(f"[Save file] File salvato: {filepath} ({len(file_data)} bytes)")
+            print(f"[REQUEST FUNCTION] File saved: {filepath} ({len(file_data)} bytes)")
             
             return JsonResponse({'status': 'success', 'filepath': filepath})
             
         except Exception as e:
             # 🔍 Stampa l'errore completo
-            print("[Save file ERROR] " + str(e))
+            print("[REQUEST FUNCTION] Save file ERROR " + str(e))
             print(traceback.format_exc())
             return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
     
