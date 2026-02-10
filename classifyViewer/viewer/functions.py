@@ -227,7 +227,20 @@ def launch_training_RF(data):
     
     print("\n[Functions.py] ---- START TRAINING SCRIPT -----\n")
     training(features_filepath, training_filepath, eval_filepath, n_jobs, n_estimators, max_depth, output_training_name, model_savepath)
+
+def launch_classify_RF():
+    print("[Functions.py] Launching RF classify")
     
+    folder_path = "/app/classifyViewer/viewer/static/viewer/data/"
+
+    # TODO: MODIFY THIS FOLDER PATH WITH THE REAL PATH OF THE DATASET FOLDER IN YOUR PROJECT
+    features_filepath = folder_path + "RF/training_using_gaussian/dataset/feature_index_gs.txt"
+    model_savepath = folder_path + "RF/training_using_gaussian/output/model_avt_gaussian.pkl"
+    test_filepath = folder_path + "RF/training_using_gaussian/dataset/test_avt.txt"
+    output_classify_name = folder_path + "RF/training_using_gaussian/output/avt_gs_predicted"
+    
+    print("\n[Functions.py] ---- START CLASSIFY SCRIPT -----\n")
+    classification(features_filepath, model_savepath, test_filepath, output_classify_name)    
 
 def main():
 
