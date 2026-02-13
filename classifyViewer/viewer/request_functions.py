@@ -19,13 +19,14 @@ def load_points(request):
 def launch_RF_training(request):
     if request.method == 'POST':
         try:
-            print("[REQUEST FUNCTION] Launch RF training: ", request.body[:200]) 
+            print("\n[REQUEST FUNCTION] Launch RF training: ", request.body[:200]) 
             data = json.loads(request.body)
             launch_training_RF(data)
-            return JsonResponse({"status": 'success', "message": "RF traininglaunched successfully."})
+            print("\n")
+            return JsonResponse({"status": 'success', "message": "RF training launched successfully."})
 
         except Exception as e:
-            print("[REQUEST FUNCTION] Launch RF training ERROR " + str(e))
+            print("\n[REQUEST FUNCTION] Launch RF training ERROR " + str(e))
             print(traceback.format_exc())
             return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
 
@@ -34,12 +35,13 @@ def launch_RF_training(request):
 def launch_RF_classify(request):
     if request.method == 'POST':
         try:
-            print("[REQUEST FUNCTION] Launch RF classify") 
+            print("\n[REQUEST FUNCTION] Launch RF classify") 
             launch_classify_RF()
+            print("\n")
             return JsonResponse({"status": 'success', "message": "RF classify launched successfully."})
 
         except Exception as e:
-            print("[REQUEST FUNCTION] Launch RF classify ERROR " + str(e))
+            print("\n[REQUEST FUNCTION] Launch RF classify ERROR " + str(e))
             print(traceback.format_exc())
             return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
 
@@ -48,18 +50,19 @@ def launch_RF_classify(request):
 def subsample_pc(request):
     if request.method == 'POST':
         try:
-            print("[REQUEST FUNCTION] Subsample Point Cloud:", request.body[:200]) 
+            print("\n[REQUEST FUNCTION] Subsample Point Cloud:", request.body[:200]) 
             data = json.loads(request.body)
 
             file_path = data['file_path']
             voxel_size = data['voxel_size']
 
             output_file_path = subsampling_point_cloud(file_path, voxel_size)
+            print("\n")
 
             return JsonResponse({"status": 'success', "message": "Subsampling completed.", "output_file_path": output_file_path})
 
         except Exception as e:
-            print("[REQUEST FUNCTION] Subsample Point Cloud ERROR " + str(e))
+            print("\n[REQUEST FUNCTION] Subsample Point Cloud ERROR " + str(e))
             print(traceback.format_exc())
             return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
 
@@ -68,7 +71,7 @@ def subsample_pc(request):
 def mesh2pc(request):
     if request.method == 'POST':
         try:
-            print("[REQUEST FUNCTION] Mesh to Point Cloud:", request.body[:200]) 
+            print("\n[REQUEST FUNCTION] Mesh to Point Cloud:", request.body[:200]) 
             data = json.loads(request.body)
 
             file_path = data['file_path']
@@ -76,11 +79,12 @@ def mesh2pc(request):
             sampling_method = data['sampling_method']
 
             mesh_to_point_cloud(file_path, num_points=num_points, sampling_method=sampling_method)
+            print("\n")
 
             return JsonResponse({"status": 'success', "message": "Mesh to Point Cloud completed."})
 
         except Exception as e:
-            print("[REQUEST FUNCTION] Mesh to Point Cloud ERROR " + str(e))
+            print("\n[REQUEST FUNCTION] Mesh to Point Cloud ERROR " + str(e))
             print(traceback.format_exc())
             return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
 
@@ -89,7 +93,7 @@ def mesh2pc(request):
 def save_file(request):
     if request.method == 'POST':
         try:
-            print("[REQUEST FUNCTION] Save file: ", request.body[:200]) 
+            print("\n[REQUEST FUNCTION] Save file: ", request.body[:200]) 
             
             data = json.loads(request.body)
             filepath = data['filepath']
@@ -119,7 +123,7 @@ def save_file(request):
             
         except Exception as e:
             # 🔍 Stampa l'errore completo
-            print("[REQUEST FUNCTION] Save file ERROR " + str(e))
+            print("\n[REQUEST FUNCTION] Save file ERROR " + str(e))
             print(traceback.format_exc())
             return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
     

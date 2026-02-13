@@ -57,14 +57,17 @@ console.clear();
 // const maxPoints = (maxMemoryMB * 1024 * 1024) / bytesPerPoint;
 // console.log("Punti massimi stimati:", Math.floor(maxPoints / 1000000), "milioni");
 // // Output: ~52 milioni di punti
-const folder_path = "static/viewer/data/";
-const export_folder_path = "/app/classifyViewer/viewer/static/viewer/data/";
-const filepath = folder_path + "c78Europ_segm.ply";
-const pointCloud = await loadPointCloud(filepath, scene);
-const positions = pointCloud.getVerticesData(
-    BABYLON.VertexBuffer.PositionKind
-);
-frameCameraOnMesh(camera, pointCloud);
+
+
+// TEST IMPORT
+// const folder_path = "static/viewer/data/";
+// const export_folder_path = "/app/classifyViewer/viewer/static/viewer/data/";
+// const filepath = folder_path + "c78Europ_segm.ply";
+// const pointCloud = await loadPointCloud(filepath, scene);
+// const positions = pointCloud.getVerticesData(
+//     BABYLON.VertexBuffer.PositionKind
+// );
+// frameCameraOnMesh(camera, pointCloud);
  
 importPCButton.addEventListener("click", async () => {
 
@@ -113,6 +116,91 @@ scene.onPointerDown = (evt) => {
     }
 };
 
+
+const testGButton = createButton("Test G", "testG");
+testGButton.style.position = "absolute";
+testGButton.style.top = "90dvh";
+testGButton.style.right = "50dvw";
+testGButton.style.transform = "translateX(50%)";
+testGButton.style.width = "10dvh";
+
+// TODO: remove button
+// #testG{
+//     background-color: var(--canvas-bg-color);
+//     color: var(--text-color);
+//     font-size: var(--button-font-size);
+//     border-radius: var(--button-border-radius);
+//     padding: var(--button-padding);
+//     position: absolute;
+//     top: 90dvh;
+//     right: 50dvw;
+//     transform: translateX(50%);
+//     cursor: pointer;
+//     z-index: 1;
+// }
+
+testGButton.addEventListener("click", async () => {
+    
+    console.log("Sending request for testing the function...");
+
+    // TRAINING RF PARAMETERS
+    // const nr_estimators = "50-100-150-200";
+    // const max_depth = "None";
+    // const n_jobs = 12;
+
+    // const body = JSON.stringify({
+    //             nr_estimators: nr_estimators,
+    //             max_depth: max_depth,
+    //             n_jobs: n_jobs
+    //         })
+
+    // SUBSAMPLING PARAMETERS
+    const file_path = "/app/classifyViewer/viewer/static/viewer/data/c78_pc.ply";
+    const voxel_size = 0.05; // 5cm
+    const body = JSON.stringify({
+        file_path: file_path,
+        voxel_size: voxel_size
+    });
+
+    // MESH TO POINT CLOUD PARAMETERS
+    // const file_path = "/app/classifyViewer/viewer/static/viewer/data/c78.glb";
+    // const num_points = 5000000; // 5 millions points
+    // const sampling_method = "uniform"; // or "poisson"
+    // const body = JSON.stringify({
+    //     file_path: file_path,
+    //     num_points: num_points,
+    //     sampling_method: sampling_method
+    // });
+    
+    // Send request to launch function
+    const response = await send_request("subsample_pc/", "POST", body);
+    
+    if (response.ok) {  
+        console.log("Function completed successfully.");
+    } else {
+        const error = `Error: ${response.statusText}`;
+        console.error(`${error}`);
+    }
+
+
+});
+
+function getCSRFToken() {
+    return document.querySelector('meta[name="csrf-token"]').getAttribute('content');
+}
+
+
+async function send_request(which_function, method, body=null) {
+    const response = await fetch(which_function, {
+            method: method,
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCSRFToken()
+            },
+            body: body
+    });
+    return response;
+}
 
 
 function highlightPoint(mesh, index) {
