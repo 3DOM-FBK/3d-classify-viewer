@@ -55,7 +55,7 @@ export async function loadPointCloud(url, scene) {
             // Funzione per inizializzare ogni punto
             pcs.addPoints(numPoints, (particle, i) => {
                 const idx = i * 3;
-                
+
                 // Posizione
                 particle.position.set(
                     positions[idx],
@@ -72,6 +72,7 @@ export async function loadPointCloud(url, scene) {
                         colors[colorIdx + 2],
                         1.0
                     );
+                    particle.originalColor = particle.color.clone();
                 }
 
                 // Normale (opzionale)
@@ -99,6 +100,7 @@ export async function loadPointCloud(url, scene) {
             // console.log(`✅ Point Cloud System creato con ${numPoints.toLocaleString()} punti`);
             pcs.mesh.isPickable = true;
             pcs.mesh.refreshBoundingInfo(true);
+            pcs.mesh._pcs = pcs; // Link PCS to mesh for easy access
 
             return pcs.mesh;
 
@@ -110,38 +112,38 @@ export async function loadPointCloud(url, scene) {
         try {
             console.log("Loading point cloud from:", url);
 
-        const response = await fetch(url);
-        const text = await response.text();
-        const lines = text.split("\n");
+            const response = await fetch(url);
+            const text = await response.text();
+            const lines = text.split("\n");
 
-        const positions = [];
-        const colors = [];
+            const positions = [];
+            const colors = [];
 
             for (let i = 1; i < lines.length; i++) {
                 const line = lines[i].trim();
                 if (!line) continue;
 
-            const values = line.split(/\s+/).map(Number);
-            if (values.length < 3) continue;
+                const values = line.split(/\s+/).map(Number);
+                if (values.length < 3) continue;
 
-            const [x, y, z, r, g, b] = values;
-            positions.push(x, y, z);
+                const [x, y, z, r, g, b] = values;
+                positions.push(x, y, z);
 
-            // Optional color
-            if (r !== undefined && g !== undefined && b !== undefined) {
-                colors.push(r / 255, g / 255, b / 255, 1.0);
+                // Optional color
+                if (r !== undefined && g !== undefined && b !== undefined) {
+                    colors.push(r / 255, g / 255, b / 255, 1.0);
+                }
             }
-        }
 
             const numPoints = positions.length / 3;
             // console.log(`📊 Punti caricati: ${numPoints.toLocaleString()}`);
 
             // 🔧 CREA POINT CLOUD SYSTEM
             const pcs = new BABYLON.PointsCloudSystem("pcs", 1, scene);
-            
+
             pcs.addPoints(numPoints, (particle, i) => {
                 const idx = i * 3;
-                
+
                 particle.position.set(
                     positions[idx],
                     positions[idx + 1],
@@ -156,6 +158,7 @@ export async function loadPointCloud(url, scene) {
                         colors[colorIdx + 2],
                         1.0
                     );
+                    particle.originalColor = particle.color.clone();
                 }
             });
 
@@ -168,6 +171,7 @@ export async function loadPointCloud(url, scene) {
             // console.log(`✅ Point Cloud System creato`);
             pcs.mesh.isPickable = true;
             pcs.mesh.refreshBoundingInfo(true);
+            pcs.mesh._pcs = pcs; // Link PCS to mesh for easy access
 
             return pcs.mesh;
 
@@ -175,12 +179,12 @@ export async function loadPointCloud(url, scene) {
             console.error("Error loading TXT:", err);
             return null;
         }
-    
+
     } else {
         console.error("Unsupported file format:", url);
         return null;
     }
-    
+
 }
 
 export async function exportPointCloud(mesh, filepath, format = "ply", binary = true) {
@@ -398,7 +402,7 @@ async function processSaveQueue() {
 
     try {
         // console.log(`Saving (${saveQueue.length} in queue): ${filepath}`);
-        
+
         const arrayBuffer = await blob.arrayBuffer();
         const buffer = new Uint8Array(arrayBuffer);
 

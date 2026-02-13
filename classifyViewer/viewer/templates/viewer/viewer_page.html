@@ -32,7 +32,11 @@
         <!-- Central Viewport -->
         <main id="central-viewport">
             <canvas id="renderCanvas"></canvas>
-            <div id="top-toolbar" class="toolbar-container">
+            <div id="top-left-controls" class="top-left-controls-container">
+                <div id="view-menu" class="menu-item-container"></div>
+                <div id="color-menu" class="menu-item-container"></div>
+            </div>
+            <div id="right-toolbar" class="toolbar-container">
                 <!-- Buttons injected by JS -->
             </div>
             <div id="scene-info-bar" class="info-bar-container">
@@ -62,6 +66,7 @@
             </div>
         </aside>
     </div>
+    <meta name="csrf-token" content="{{ csrf_token }}">
     <script type="module" src="{% static 'viewer/js/main.js' %}"></script>
 </body>
 

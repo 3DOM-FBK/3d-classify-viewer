@@ -16,25 +16,177 @@ const sidebarLeft = document.getElementById('sidebar-left');
 const sidebarRight = document.getElementById('sidebar-right');
 const resizerLeft = document.getElementById('resizer-left');
 const resizerRight = document.getElementById('resizer-right');
-const topToolbar = document.getElementById('top-toolbar');
+const rightToolbar = document.getElementById('right-toolbar');
+const viewMenu = document.getElementById('view-menu');
+const colorMenu = document.getElementById('color-menu');
 
-// --- Top Toolbar Buttons Logic ---
+// --- View Menu Logic ---
+function initViewMenu() {
+    if (!viewMenu) return;
+
+    const btn = document.createElement('button');
+    btn.classList.add('dropdown-btn');
+    btn.textContent = "Perspective View";
+    viewMenu.appendChild(btn);
+
+    const dropdown = document.createElement('div');
+    dropdown.classList.add('dropdown-content');
+    viewMenu.appendChild(dropdown);
+
+    const views = [
+        { name: "Perspective", action: () => setCameraMode(BABYLON.Camera.PERSPECTIVE_CAMERA) },
+        { name: "Orthographic", action: () => setCameraMode(BABYLON.Camera.ORTHOGRAPHIC_CAMERA) },
+        { name: "Top View", action: () => setCameraView(0, -Math.PI / 2) },
+        { name: "Bottom View", action: () => setCameraView(0, Math.PI / 2) },
+        { name: "Front View", action: () => setCameraView(Math.PI / 2, Math.PI / 2) },
+        { name: "Left View", action: () => setCameraView(Math.PI, Math.PI / 2) }
+    ];
+
+    views.forEach(v => {
+        const opt = document.createElement('button');
+        opt.classList.add('dropdown-option');
+        opt.textContent = v.name;
+        opt.onclick = () => {
+            v.action();
+            btn.textContent = v.name + " View";
+            dropdown.classList.remove('show');
+        };
+        dropdown.appendChild(opt);
+    });
+
+    btn.onclick = (e) => {
+        e.stopPropagation();
+        closeAllDropdowns();
+        dropdown.classList.toggle('show');
+    };
+}
+
+// --- Color Menu Logic ---
+let currentColorMode = "color"; // "color" or "classification"
+
+function initColorMenu() {
+    if (!colorMenu) return;
+
+    const btn = document.createElement('button');
+    btn.classList.add('dropdown-btn');
+    btn.textContent = "Color View";
+    colorMenu.appendChild(btn);
+
+    const dropdown = document.createElement('div');
+    dropdown.classList.add('dropdown-content');
+    colorMenu.appendChild(dropdown);
+
+    const modes = [
+        { name: "Color View", value: "color" },
+        { name: "Classification View", value: "classification" }
+    ];
+
+    modes.forEach(m => {
+        const opt = document.createElement('button');
+        opt.classList.add('dropdown-option');
+        opt.innerHTML = `<style="width:16px; height:16px; filter:brightness(0) invert(1);"> ${m.name}`;
+
+        opt.onclick = () => {
+            switchColorMode(m.value);
+            btn.textContent = m.name;
+            dropdown.classList.remove('show');
+        };
+        dropdown.appendChild(opt);
+    });
+
+    btn.onclick = (e) => {
+        e.stopPropagation();
+        closeAllDropdowns();
+        dropdown.classList.toggle('show');
+    };
+}
+
+function closeAllDropdowns() {
+    document.querySelectorAll('.dropdown-content').forEach(d => d.classList.remove('show'));
+}
+
+document.addEventListener('click', closeAllDropdowns);
+
+function switchColorMode(mode) {
+    currentColorMode = mode;
+    const pcs = scene.getMeshByName("pcs_mesh"); // PCS mesh name is "pcs" + "_mesh" by default or check creation
+    // In our functions.js, we name it "pcs" and it returns pcs.mesh
+    // Actually, let's find it in sceneObjects
+    const pcMesh = sceneObjects.currentPointCloud;
+    if (!pcMesh || !pcMesh._pcs) return;
+
+    const pcsSystem = pcMesh._pcs;
+
+    pcsSystem.updateParticle = (particle) => {
+        if (mode === "color") {
+            particle.color.copyFrom(particle.originalColor || particle.color);
+        } else {
+            // Mock transformation: Use a color based on a mock classification (e.g. position-based for demo)
+            // In a real app, this would use a 'classification' attribute stored in the particle
+            const classId = particle.classificationId || Math.floor(particle.idx % 5);
+            const classColors = [
+                new BABYLON.Color4(1, 0, 0, 1), // Red
+                new BABYLON.Color4(0, 1, 0, 1), // Green
+                new BABYLON.Color4(0, 0, 1, 1), // Blue
+                new BABYLON.Color4(1, 1, 0, 1), // Yellow
+                new BABYLON.Color4(1, 0, 1, 1)  // Magenta
+            ];
+            particle.color.copyFrom(classColors[classId % classColors.length]);
+        }
+        return particle;
+    };
+
+    pcsSystem.setParticles();
+}
+
+function setCameraMode(mode) {
+    camera.mode = mode;
+    if (mode === BABYLON.Camera.ORTHOGRAPHIC_CAMERA) {
+        updateOrthoCamera();
+    }
+}
+
+function updateOrthoCamera() {
+    if (camera.mode !== BABYLON.Camera.ORTHOGRAPHIC_CAMERA) return;
+
+    // Simple ortho calculation based on distance/radius
+    const aspect = engine.getAspectRatio(camera);
+    const orthoSize = camera.radius || 10;
+
+    camera.orthoTop = orthoSize;
+    camera.orthoBottom = -orthoSize;
+    camera.orthoLeft = -orthoSize * aspect;
+    camera.orthoRight = orthoSize * aspect;
+}
+
+function setCameraView(alpha, beta) {
+    // Ensure we are in perspective if moving to standard views for better feel, 
+    // or keep current mode.
+    camera.alpha = alpha;
+    camera.beta = beta;
+    // Animate would be better, but let's keep it simple for now
+}
+
+// --- Right Toolbar Buttons Logic ---
 function initToolbar() {
-    if (!topToolbar) return;
+    console.log("Initializing toolbar...", rightToolbar);
+    if (!rightToolbar) {
+        console.error("Toolbar element #right-toolbar not found!");
+        return;
+    }
 
-    const iconBase = "static/viewer/icons/";
+    const iconBase = "/static/viewer/icons/";
     const tool1Img = `<img src="${iconBase}cursor.png" alt="Cursor">`;
     const tool2Img = `<img src="${iconBase}lasso-select.png" alt="Lasso Select">`;
     const tool3Img = `<img src="${iconBase}scissor.png" alt="Scissor">`;
     const tool4Img = `<img src="${iconBase}frame-to-pcd.png" alt="Frame to PCD">`;
 
-    createToolButton("tool-1", tool1Img, "Default mode", topToolbar);
-    createToolButton("tool-2", tool2Img, "Selection mode", topToolbar);
-    createToolButton("tool-3", tool3Img, "Cut mode", topToolbar);
-    createToolButton("tool-4", tool4Img, "Frame to PCD", topToolbar);
+    createToolButton("tool-1", tool1Img, "Default mode", rightToolbar);
+    createToolButton("tool-2", tool2Img, "Selection mode", rightToolbar);
+    createToolButton("tool-3", tool3Img, "Cut mode", rightToolbar);
+    createToolButton("tool-4", tool4Img, "Frame to PCD", rightToolbar);
+    console.log("Toolbar buttons created.");
 }
-
-initToolbar();
 
 // --- Sidebar Left: Accordion Sections ---
 const iconBase = "static/viewer/icons/";
@@ -170,6 +322,13 @@ camera.panningSensibility = 250;
 const light = new BABYLON.HemisphericLight("light", new BABYLON.Vector3(0, 1, 0), scene);
 light.intensity = 0.7;
 
+// Update ortho camera on zoom
+scene.onPointerObservable.add((pointerInfo) => {
+    if (pointerInfo.type === BABYLON.PointerEventTypes.POINTERWHEEL) {
+        updateOrthoCamera();
+    }
+});
+
 // --- Helpers: Grid ---
 const gridGround = BABYLON.MeshBuilder.CreateGround("gridGround", { width: 100, height: 100 }, scene);
 const gridMaterial = new BABYLON.GridMaterial("gridMaterial", scene);
@@ -281,4 +440,10 @@ engine.runRenderLoop(() => {
 
 window.addEventListener("resize", () => {
     engine.resize();
+    updateOrthoCamera();
 });
+
+// --- Initialize UI Menus ---
+initViewMenu();
+initColorMenu();
+initToolbar();
