@@ -71,28 +71,38 @@ function createChildAABB(parentBB, childIndex) {
     return { min, max };
 }
 
+
 /**
  * Potree 2.0 Loader for BabylonJS
- * 
- * Key design: since Django dev server does NOT support HTTP Range requests,
- * we load the full octree.bin into memory and slice from it per-node.
- * For production, this could be switched to Range requests.
+ *
+ * Uses HTTP Range requests via a Django endpoint to fetch only the needed
+ * bytes for each node from octree.bin. This way, even multi-GB files can
+ * be handled without loading the entire file into browser memory.
  */
 export class Potree2Loader {
     constructor(scene, baseUrl, options = {}) {
         this.scene = scene;
-        this.baseUrl = baseUrl;
+        this.baseUrl = baseUrl;         // e.g. "static/viewer/data/clusters"
         this.metadata = null;
-        this.root = null; // Potree2Node tree root
+        this.root = null;
         this.rootTransform = new BABYLON.TransformNode("Potree2Root", scene);
+
+        // Derive the Range request endpoint from the baseUrl
+        // baseUrl = "static/viewer/data/clusters"
+        // We strip the prefix "static/viewer/data/" to get the relative path for the Django endpoint
+        const dataPrefix = "static/viewer/data/";
+        if (baseUrl.startsWith(dataPrefix)) {
+            this.rangeBasePath = baseUrl.substring(dataPrefix.length);
+        } else {
+            this.rangeBasePath = baseUrl;
+        }
 
         // Parsed attributes info
         this.attributes = [];
         this.bytesPerPoint = 0;
 
-        // Full binary buffers (loaded entirely into memory)
+        // Full hierarchy.bin buffer (small enough to load entirely)
         this.hierarchyBuffer = null;
-        this.octreeBuffer = null;
 
         // Maps
         this.loadedNodes = new Map();   // name → mesh
@@ -103,6 +113,7 @@ export class Potree2Loader {
         this.pointSize = options.pointSize || 2;
         this.maxVisibleNodes = options.maxVisibleNodes || 500;
         this.maxVisiblePoints = options.maxVisiblePoints || 5_000_000;
+        this.maxConcurrentLoads = options.maxConcurrentLoads || 6;
 
         // Stats
         this.stats = {
@@ -116,12 +127,12 @@ export class Potree2Loader {
     // ========== PUBLIC API ==========
 
     /**
-     * Load metadata, hierarchy, octree buffer, and prepare for rendering.
+     * Load metadata, hierarchy, and prepare for rendering.
      */
     async load() {
         console.log("🌲 Potree2Loader: Loading from", this.baseUrl);
 
-        // 1. Load metadata.json
+        // 1. Load metadata.json (small file, normal fetch is fine)
         const metaResponse = await fetch(`${this.baseUrl}/metadata.json`);
         if (!metaResponse.ok) throw new Error(`Failed to load metadata.json: ${metaResponse.status}`);
         this.metadata = await metaResponse.json();
@@ -140,26 +151,17 @@ export class Potree2Loader {
         // 2. Parse attribute layout
         this._parseAttributes();
 
-        // 3. Load full hierarchy.bin into memory
+        // 3. Load hierarchy.bin (usually small, a few hundred KB to a few MB)
         console.log("📂 Loading hierarchy.bin...");
-        const hierResponse = await fetch(`${this.baseUrl}/hierarchy.bin`);
+        const hierUrl = this._getRangeUrl("hierarchy.bin");
+        const hierResponse = await fetch(hierUrl);
         if (!hierResponse.ok) throw new Error(`Failed to load hierarchy.bin: ${hierResponse.status}`);
         this.hierarchyBuffer = await hierResponse.arrayBuffer();
         console.log(`   hierarchy.bin loaded: ${this.hierarchyBuffer.byteLength.toLocaleString()} bytes`);
 
-        // 4. Load full octree.bin into memory
-        // Django dev server doesn't support Range requests, so we load it all.
-        console.log("📦 Loading octree.bin (may take a moment for large files)...");
-        const octreeResponse = await fetch(`${this.baseUrl}/octree.bin`);
-        if (!octreeResponse.ok) throw new Error(`Failed to load octree.bin: ${octreeResponse.status}`);
-        this.octreeBuffer = await octreeResponse.arrayBuffer();
-        console.log(`   octree.bin loaded: ${(this.octreeBuffer.byteLength / 1024 / 1024).toFixed(1)} MB`);
-
-        // 5. Parse the first hierarchy chunk to build the tree root
+        // 4. Build the octree from hierarchy
         const bbMin = this.metadata.boundingBox.min;
         const bbMax = this.metadata.boundingBox.max;
-
-        // Potree subtracts offset (= bbMin) from the bounding box to work in local coords
         const localBB = {
             min: [0, 0, 0],
             max: [bbMax[0] - bbMin[0], bbMax[1] - bbMin[1], bbMax[2] - bbMin[2]]
@@ -174,7 +176,7 @@ export class Potree2Loader {
         // Parse initial hierarchy chunk
         this._parseHierarchyChunk(this.root);
 
-        // Count total parsed nodes and log per-level stats
+        // Stats
         const allNodes = this._collectNodes(this.root);
         const levelStats = {};
         let totalNodePoints = 0;
@@ -195,33 +197,70 @@ export class Potree2Loader {
             pointCountDisplay.textContent = this.metadata.points.toLocaleString();
         }
 
-        // 6. Load initial nodes (root + level 1) immediately
+        // 5. Load initial nodes (root + first levels) via Range requests
         await this._loadInitialNodes();
 
         return this.rootTransform;
     }
 
     /**
+     * Build the URL for fetching files through the Django Range request endpoint.
+     */
+    _getRangeUrl(filename) {
+        return `/pointcloud-data/${this.rangeBasePath}/${filename}`;
+    }
+
+    /**
+     * Fetch a byte range from octree.bin via the Django endpoint.
+     * Returns an ArrayBuffer containing only the requested bytes.
+     */
+    async _fetchRange(filename, byteOffset, byteSize) {
+        const url = this._getRangeUrl(filename);
+        const first = Number(byteOffset);
+        const last = first + Number(byteSize) - 1;
+
+        const response = await fetch(url, {
+            headers: {
+                'Range': `bytes=${first}-${last}`
+            }
+        });
+
+        if (response.status === 206) {
+            // Successful Range response
+            return await response.arrayBuffer();
+        } else if (response.ok) {
+            // Server ignored Range header, returned full file
+            // This shouldn't happen with our custom view, but handle gracefully
+            console.warn(`⚠️ Server returned full file instead of range for ${filename}. Slicing locally.`);
+            const fullBuffer = await response.arrayBuffer();
+            return fullBuffer.slice(first, first + Number(byteSize));
+        } else {
+            throw new Error(`Range request failed for ${filename}: ${response.status} ${response.statusText}`);
+        }
+    }
+
+    /**
      * Load root and first levels of nodes right away so something is visible.
      */
     async _loadInitialNodes() {
-        console.log("🔄 Loading initial nodes (levels 0-2)...");
+        console.log("🔄 Loading initial nodes (root + levels 0-2)...");
         const allNodes = this._collectNodes(this.root);
 
-        // Sort by level, then by numPoints descending
+        // Select nodes at levels 0-2 with data
         const initialNodes = allNodes
             .filter(n => n.level <= 2 && n.numPoints > 0 && n.byteSize > 0n)
             .sort((a, b) => a.level - b.level || b.numPoints - a.numPoints);
 
-        console.log(`   Will load ${initialNodes.length} initial nodes`);
+        console.log(`   Will load ${initialNodes.length} initial nodes via Range requests`);
 
-        let loaded = 0;
-        for (const node of initialNodes) {
-            this._loadNodeSync(node);
-            loaded++;
+        // Load in batches to avoid too many concurrent requests
+        const batchSize = 6;
+        for (let i = 0; i < initialNodes.length; i += batchSize) {
+            const batch = initialNodes.slice(i, i + batchSize);
+            await Promise.all(batch.map(node => this._loadNode(node)));
         }
 
-        // Make all initial nodes visible
+        // Make all loaded initial nodes visible
         for (const node of initialNodes) {
             if (this.loadedNodes.has(node.name)) {
                 const mesh = this.loadedNodes.get(node.name);
@@ -231,35 +270,32 @@ export class Potree2Loader {
         }
 
         this.stats.visibleNodes = this.activeNodes.size;
-        console.log(`✅ Initial load complete: ${loaded} nodes, ${this.loadedNodes.size} meshes`);
+        console.log(`✅ Initial load complete: ${this.loadedNodes.size} meshes visible`);
     }
 
     /**
-     * Synchronously load a node from the in-memory octreeBuffer.
+     * Load a single node's data from octree.bin using a Range request.
      */
-    _loadNodeSync(node) {
-        if (this.loadedNodes.has(node.name)) return;
+    async _loadNode(node) {
+        if (this.loadedNodes.has(node.name) || this.loadingNodes.has(node.name)) return;
         if (node.byteSize === 0n || node.numPoints === 0) return;
+        if (this.loadingNodes.size >= this.maxConcurrentLoads) return;
+
+        this.loadingNodes.add(node.name);
+        this.stats.loadingNodes = this.loadingNodes.size;
 
         try {
-            const byteStart = Number(node.byteOffset);
-            const byteEnd = byteStart + Number(node.byteSize);
+            // Fetch only this node's bytes via Range request
+            const buffer = await this._fetchRange("octree.bin", node.byteOffset, node.byteSize);
 
-            if (byteEnd > this.octreeBuffer.byteLength) {
-                console.warn(`⚠️ Node ${node.name}: offset ${byteStart}-${byteEnd} exceeds octree.bin size ${this.octreeBuffer.byteLength}`);
-                return;
-            }
-
-            // Slice buffer for this node
-            const buffer = this.octreeBuffer.slice(byteStart, byteEnd);
-
-            // Verify: expected bytes = numPoints * bytesPerPoint
+            // Verify expected size
             const expectedBytes = node.numPoints * this.bytesPerPoint;
+            let numPoints = node.numPoints;
             if (buffer.byteLength < expectedBytes) {
-                console.warn(`⚠️ Node ${node.name}: buffer ${buffer.byteLength} < expected ${expectedBytes} (${node.numPoints} pts × ${this.bytesPerPoint} B/pt)`);
-                // Reduce numPoints to what we actually have
-                node.numPoints = Math.floor(buffer.byteLength / this.bytesPerPoint);
-                if (node.numPoints === 0) return;
+                console.warn(`⚠️ Node ${node.name}: got ${buffer.byteLength}B, expected ${expectedBytes}B`);
+                numPoints = Math.floor(buffer.byteLength / this.bytesPerPoint);
+                if (numPoints === 0) return;
+                node.numPoints = numPoints;
             }
 
             // Decode and create mesh
@@ -267,15 +303,18 @@ export class Potree2Loader {
             this.stats.loadedNodes++;
 
             if (this.stats.loadedNodes <= 30 || this.stats.loadedNodes % 50 === 0) {
-                console.log(`   ✅ Node ${node.name} (L${node.level}): ${node.numPoints.toLocaleString()} pts @ offset ${byteStart}`);
+                console.log(`   ✅ Node ${node.name} (L${node.level}): ${node.numPoints.toLocaleString()} pts`);
             }
         } catch (err) {
             console.error(`❌ Failed to load node ${node.name}:`, err);
+        } finally {
+            this.loadingNodes.delete(node.name);
+            this.stats.loadingNodes = this.loadingNodes.size;
         }
     }
 
     /**
-     * Update LOD: decides which nodes to show/hide based on camera.
+     * Update LOD: decides which nodes to show/hide/load based on camera.
      */
     update(camera) {
         if (!this.root || !camera) return;
@@ -287,7 +326,7 @@ export class Potree2Loader {
         // Traverse the octree, selecting visible nodes by screen-space error
         this._traverseForLOD(this.root, camera, priorityQueue);
 
-        // Sort by priority (higher = more important = should be loaded first)
+        // Sort by priority (higher = more important)
         priorityQueue.sort((a, b) => b.priority - a.priority);
 
         // Select nodes respecting budget
@@ -298,20 +337,18 @@ export class Potree2Loader {
             nodesToShow.add(entry.node.name);
             totalPoints += entry.node.numPoints;
 
-            // Load if not already loaded (synchronous from cached buffer)
-            if (!this.loadedNodes.has(entry.node.name)) {
-                this._loadNodeSync(entry.node);
+            // Load if not already loaded (async, via Range request)
+            if (!this.loadedNodes.has(entry.node.name) &&
+                !this.loadingNodes.has(entry.node.name)) {
+                this._loadNode(entry.node); // fire-and-forget, will show on next update
             }
         }
 
         // Show/hide nodes
-        let shown = 0, hidden = 0;
         for (const [name, mesh] of this.loadedNodes) {
             const shouldShow = nodesToShow.has(name);
             if (mesh.isVisible !== shouldShow) {
                 mesh.isVisible = shouldShow;
-                if (shouldShow) shown++;
-                else hidden++;
             }
             if (shouldShow) {
                 this.activeNodes.add(name);
@@ -323,7 +360,7 @@ export class Potree2Loader {
         // Update stats
         this.stats.visibleNodes = this.activeNodes.size;
         this.stats.totalPointsRendered = totalPoints;
-        this.stats.loadingNodes = 0;
+        this.stats.loadingNodes = this.loadingNodes.size;
     }
 
     setPointSize(size) {
@@ -353,7 +390,6 @@ export class Potree2Loader {
         this.activeNodes.clear();
         this.loadingNodes.clear();
         this.rootTransform.dispose();
-        this.octreeBuffer = null;
         this.hierarchyBuffer = null;
     }
 
@@ -367,7 +403,7 @@ export class Potree2Loader {
             this.attributes.push({
                 name: attr.name,
                 type: attr.type,
-                size: attr.size,            // total bytes for this attribute per point
+                size: attr.size,
                 numElements: attr.numElements,
                 elementSize: attr.elementSize,
                 byteOffset: byteOffset,
@@ -389,11 +425,6 @@ export class Potree2Loader {
     /**
      * Parse a hierarchy chunk from hierarchy.bin buffer.
      * Potree 2.0 format: 22 bytes per node, BFS order.
-     *   byte 0:    type (uint8)       — 0=normal, 2=proxy
-     *   byte 1:    childMask (uint8)  — 8 bits for 8 children
-     *   bytes 2-5: numPoints (uint32 LE)
-     *   bytes 6-13: byteOffset (BigInt64 LE) — into octree.bin (or hierarchy.bin for proxy)
-     *   bytes 14-21: byteSize (BigInt64 LE)
      */
     _parseHierarchyChunk(rootNode) {
         const buffer = this.hierarchyBuffer;
@@ -409,17 +440,13 @@ export class Potree2Loader {
         const bytesPerNode = 22;
         const numNodes = Math.floor((chunkEnd - chunkStart) / bytesPerNode);
 
-        // BFS array: first entry is rootNode itself
         const nodes = new Array(numNodes);
         nodes[0] = rootNode;
         let nodePos = 1;
 
         for (let i = 0; i < numNodes; i++) {
             const current = nodes[i];
-            if (!current) {
-                console.warn(`Hierarchy parse: null node at position ${i}/${numNodes}`);
-                break;
-            }
+            if (!current) break;
 
             const offset = i * bytesPerNode;
             const type = view.getUint8(offset + 0);
@@ -429,17 +456,14 @@ export class Potree2Loader {
             const byteSize = view.getBigInt64(offset + 14, true);
 
             if (current.nodeType === 2) {
-                // This was a proxy node — now fill in real data
                 current.byteOffset = byteOffset;
                 current.byteSize = byteSize;
                 current.numPoints = numPoints;
             } else if (type === 2) {
-                // New proxy node: byteOffset/Size refer to hierarchy.bin chunk
                 current.hierarchyByteOffset = byteOffset;
                 current.hierarchyByteSize = byteSize;
                 current.numPoints = numPoints;
             } else {
-                // Normal node
                 current.byteOffset = byteOffset;
                 current.byteSize = byteSize;
                 current.numPoints = numPoints;
@@ -448,12 +472,10 @@ export class Potree2Loader {
             current.nodeType = type;
             current.childMask = childMask;
 
-            // If this is a proxy node (type 2), don't expand children now
             if (current.nodeType === 2) {
                 continue;
             }
 
-            // Expand children based on childMask
             for (let childIdx = 0; childIdx < 8; childIdx++) {
                 if (!((1 << childIdx) & childMask)) continue;
 
@@ -468,21 +490,14 @@ export class Potree2Loader {
             }
         }
 
-        // Mark root as no longer proxy
         rootNode.nodeType = 0;
     }
 
-    /**
-     * Ensure hierarchy chunk is loaded for a proxy node.
-     */
     _ensureHierarchyLoaded(node) {
         if (node.nodeType !== 2) return;
         this._parseHierarchyChunk(node);
     }
 
-    /**
-     * Collect all nodes in the tree (DFS).
-     */
     _collectNodes(node) {
         const result = [node];
         for (const child of node.children) {
@@ -495,25 +510,18 @@ export class Potree2Loader {
 
     // ========== LOD TRAVERSAL ==========
 
-    /**
-     * Traverse octree and build priority list for LOD.
-     */
     _traverseForLOD(node, camera, priorityQueue) {
         if (!node || node.numPoints === 0) return;
 
-        // Lazy-load proxy hierarchy chunks
         if (node.nodeType === 2) {
             this._ensureHierarchyLoaded(node);
         }
 
-        // Calculate screen-space error (projected size)
         const sse = this._calculateSSE(node, camera);
 
-        // Always show root
         if (node.name === "r" || sse > 1.0) {
             priorityQueue.push({ node, priority: sse });
 
-            // Recurse into children if this node warrants detail
             if (sse > 2.0) {
                 for (const child of node.children) {
                     if (child) {
@@ -524,10 +532,6 @@ export class Potree2Loader {
         }
     }
 
-    /**
-     * Calculate screen-space error for a node.
-     * Projects node's spacing onto screen to determine pixel size.
-     */
     _calculateSSE(node, camera) {
         const bbCenter = this._getLocalCenter(node);
         const distance = BABYLON.Vector3.Distance(camera.position, bbCenter);
@@ -539,17 +543,10 @@ export class Potree2Loader {
         const fov = camera.fov || 0.8;
         const slope = Math.tan(fov / 2);
 
-        // Projected size of node spacing in pixels
         const projectedSize = (node.spacing / distance) * (screenWidth / (2 * slope));
-
         return projectedSize;
     }
 
-    /**
-     * Get center of a node's bounding box in local coords (same as positions).
-     * Since positions are already in local coords (offset subtracted), 
-     * the camera target should also be in local coords.
-     */
     _getLocalCenter(node) {
         const bb = node.boundingBox;
         const cx = (bb.min[0] + bb.max[0]) / 2;
@@ -560,10 +557,6 @@ export class Potree2Loader {
 
     // ========== MESH CREATION ==========
 
-    /**
-     * Decode binary buffer and create a BabylonJS point cloud mesh.
-     * Follows Potree's DecoderWorker.js logic exactly.
-     */
     _createMeshFromBuffer(node, buffer) {
         const view = new DataView(buffer);
         const numPoints = node.numPoints;
@@ -574,7 +567,6 @@ export class Potree2Loader {
         const metaOffset = this.metadata.offset;
         const bbMin = this.metadata.boundingBox.min;
 
-        // Find attribute byte offsets
         let posAttr = null;
         let rgbAttr = null;
 
@@ -594,12 +586,9 @@ export class Potree2Loader {
         for (let j = 0; j < numPoints; j++) {
             const pointOffset = j * this.bytesPerPoint;
 
-            // Bounds check
             if (pointOffset + posAttr.byteOffset + 12 > buffer.byteLength) break;
 
-            // Decode position (int32 × 3)
-            // Potree formula: (rawInt32 * scale) + offset - bbMin
-            // This places coordinates in local space relative to bounding box min
+            // Decode position: (rawInt32 * scale) + offset - bbMin
             const rawX = view.getInt32(pointOffset + posAttr.byteOffset + 0, true);
             const rawY = view.getInt32(pointOffset + posAttr.byteOffset + 4, true);
             const rawZ = view.getInt32(pointOffset + posAttr.byteOffset + 8, true);
@@ -612,16 +601,11 @@ export class Potree2Loader {
             positions[3 * j + 1] = y;
             positions[3 * j + 2] = z;
 
-            // Track bounds for debugging
-            if (j < numPoints) {
-                minX = Math.min(minX, x); maxX = Math.max(maxX, x);
-                minY = Math.min(minY, y); maxY = Math.max(maxY, y);
-                minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z);
-            }
+            minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+            minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+            minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z);
 
             // Decode RGB (uint16 × 3)
-            // Potree convention: value > 255 ? value / 256 : value → maps to 0-255 Uint8
-            // We normalize to 0-1 float for BabylonJS
             if (rgbAttr && pointOffset + rgbAttr.byteOffset + 6 <= buffer.byteLength) {
                 const rRaw = view.getUint16(pointOffset + rgbAttr.byteOffset + 0, true);
                 const gRaw = view.getUint16(pointOffset + rgbAttr.byteOffset + 2, true);
@@ -636,7 +620,6 @@ export class Potree2Loader {
                 colors[4 * j + 2] = b / 255.0;
                 colors[4 * j + 3] = 1.0;
             } else {
-                // Default white
                 colors[4 * j + 0] = 1.0;
                 colors[4 * j + 1] = 1.0;
                 colors[4 * j + 2] = 1.0;
@@ -644,7 +627,7 @@ export class Potree2Loader {
             }
         }
 
-        // Debug: log bounds of first few nodes
+        // Debug bounds for first few nodes
         if (this.stats.loadedNodes < 5) {
             console.log(`   📐 Node ${node.name} bounds: X[${minX.toFixed(2)}, ${maxX.toFixed(2)}] Y[${minY.toFixed(2)}, ${maxY.toFixed(2)}] Z[${minZ.toFixed(2)}, ${maxZ.toFixed(2)}]`);
         }
@@ -656,7 +639,6 @@ export class Potree2Loader {
         vertexData.colors = colors;
         vertexData.applyToMesh(mesh);
 
-        // Material: use vertex colors
         const mat = new BABYLON.StandardMaterial(`mat_p2_${node.name}`, this.scene);
         mat.pointsCloud = true;
         mat.pointSize = this.pointSize;
@@ -665,10 +647,9 @@ export class Potree2Loader {
         mesh.material = mat;
 
         mesh.parent = this.rootTransform;
-        mesh.isVisible = false; // Will be set to true by LOD or initial load
+        mesh.isVisible = false;
         mesh.isPickable = true;
 
-        // Store original colors for color mode switching
         mesh.metadata = {
             nodeInfo: {
                 name: node.name,
@@ -714,7 +695,6 @@ export class Potree2Loader {
 
 /**
  * Load a Potree 2.0 point cloud and setup LOD updates.
- * Returns a TransformNode with children meshes.
  */
 export async function loadPotree2PointCloud(basePath, scene, options = {}) {
     console.log("🚀 loadPotree2PointCloud:", basePath);
@@ -725,7 +705,6 @@ export async function loadPotree2PointCloud(basePath, scene, options = {}) {
     // Frame camera on the loaded point cloud
     const camera = scene.activeCamera;
     if (camera) {
-        // Set camera target to center of point cloud bounding box (in local coords)
         const bbMin = loader.metadata.boundingBox.min;
         const bbMax = loader.metadata.boundingBox.max;
         const localCenter = new BABYLON.Vector3(
@@ -743,8 +722,6 @@ export async function loadPotree2PointCloud(basePath, scene, options = {}) {
         console.log(`📷 Camera: target=${localCenter}, radius=${radius.toFixed(1)}`);
         camera.setTarget(localCenter);
         camera.radius = radius;
-
-        // Adjust clipping planes for the point cloud size
         camera.minZ = 0.1;
         camera.maxZ = radius * 10;
 
@@ -760,7 +737,7 @@ export async function loadPotree2PointCloud(basePath, scene, options = {}) {
             }
         });
 
-        // Periodic cleanup
+        // Periodic cleanup of inactive nodes
         setInterval(() => loader.cleanup(200), 30000);
     }
 

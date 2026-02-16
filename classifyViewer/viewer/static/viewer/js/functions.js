@@ -8,7 +8,6 @@ import {
 // =====================================================================
 // UNIFIED POINT CLOUD LOADER - Auto-detects format
 // =====================================================================
-
 /**
  * Unified point cloud loader - loads Potree 2.0 format
  */

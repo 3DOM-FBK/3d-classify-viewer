@@ -472,7 +472,6 @@ loadPCButton.addEventListener("click", async () => {
     const clusterFolder = "static/viewer/data/clusters";
     const currentPointSize = parseFloat(pointSizeSlider.value);
     const loadingOverlay = document.getElementById("loading-overlay");
-
     // Mostra Overlay
     if (loadingOverlay) loadingOverlay.classList.add("visible");
 
