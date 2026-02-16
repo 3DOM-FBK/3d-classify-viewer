@@ -817,6 +817,30 @@ export function createClassItem(name, iconSrc, parent) {
     mainInfo.appendChild(nameInput);
 
     row.appendChild(mainInfo);
+
+    // Color Selector
+    const colorWrapper = document.createElement('div');
+    colorWrapper.classList.add('class-color-wrapper');
+
+    const colorDot = document.createElement('div');
+    colorDot.classList.add('class-color-dot');
+
+    const defaultColors = ["#ef4444", "#3b82f6", "#10b981", "#f59e0b", "#8b5cf6", "#ec4899"];
+    let currentColor = defaultColors[Math.floor(Math.random() * defaultColors.length)];
+    colorDot.style.backgroundColor = currentColor;
+
+    colorDot.addEventListener('click', (e) => {
+        e.stopPropagation();
+        showColorPicker(colorDot, currentColor, (newColor) => {
+            currentColor = newColor;
+            colorDot.style.backgroundColor = newColor;
+            // Future: update classification colors in the scene
+        });
+    });
+
+    colorWrapper.appendChild(colorDot);
+    row.appendChild(colorWrapper);
+
     parent.appendChild(row);
 
     // Right-click event for context menu
@@ -892,6 +916,126 @@ export function showContextMenu(x, y, options) {
         };
         document.addEventListener('mousedown', closeMenu);
     }, 10);
+}
+
+// Helper to convert HSV to HEX
+function hsvToHex(h, s, v) {
+    h /= 360; s /= 100; v /= 100;
+    let r, g, b;
+    let i = Math.floor(h * 6);
+    let f = h * 6 - i;
+    let p = v * (1 - s);
+    let q = v * (1 - f * s);
+    let t = v * (1 - (1 - f) * s);
+    switch (i % 6) {
+        case 0: r = v, g = t, b = p; break;
+        case 1: r = q, g = v, b = p; break;
+        case 2: r = p, g = v, b = t; break;
+        case 3: r = p, g = q, b = v; break;
+        case 4: r = t, g = p, b = v; break;
+        case 5: r = v, g = p, b = q; break;
+    }
+    const toHex = x => {
+        const hex = Math.round(x * 255).toString(16);
+        return hex.length === 1 ? '0' + hex : hex;
+    };
+    return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}
+
+export function showColorPicker(anchor, currentColor, onSelect) {
+    const overlay = document.createElement('div');
+    overlay.classList.add('color-picker-overlay');
+    const popover = document.createElement('div');
+    popover.classList.add('color-picker-popover');
+    const rect = anchor.getBoundingClientRect();
+    popover.style.left = `${rect.right + 15}px`;
+    popover.style.top = `${rect.top - 20}px`;
+
+    let h = 0, s = 100, v = 100;
+
+    const svContainer = document.createElement('div');
+    svContainer.classList.add('sv-canvas-container');
+    svContainer.style.background = `linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, transparent), #ff0000`;
+    const svCursor = document.createElement('div');
+    svCursor.classList.add('sv-cursor');
+    svContainer.appendChild(svCursor);
+
+    const hueContainer = document.createElement('div');
+    hueContainer.classList.add('hue-slider-container');
+    const hueCursor = document.createElement('div');
+    hueCursor.classList.add('hue-cursor');
+    hueContainer.appendChild(hueCursor);
+
+    const hexInputGroup = document.createElement('div');
+    hexInputGroup.classList.add('hex-input-group');
+    hexInputGroup.innerHTML = `<span>#</span>`;
+    const hexInputField = document.createElement('input');
+    hexInputField.type = 'text';
+    hexInputField.classList.add('hex-field');
+    hexInputField.value = currentColor.replace('#', '');
+    hexInputGroup.appendChild(hexInputField);
+
+    const presets = document.createElement('div');
+    presets.classList.add('color-presets');
+    const defaultColors = ["#ef4444", "#f97316", "#f59e0b", "#22c55e", "#10b981", "#0ea5e9", "#3b82f6", "#6366f1", "#d946ef", "#64748b"];
+    defaultColors.forEach(col => {
+        const p = document.createElement('div');
+        p.classList.add('preset-color');
+        p.style.backgroundColor = col;
+        p.onclick = () => { onSelect(col); hexInputField.value = col.replace('#', ''); };
+        presets.appendChild(p);
+    });
+
+    function updateColor() {
+        const hex = hsvToHex(h, s, v);
+        hexInputField.value = hex.replace('#', '');
+        svContainer.style.backgroundColor = hsvToHex(h, 100, 100);
+        onSelect(hex);
+    }
+
+    let isDraggingSV = false;
+    let isDraggingHue = false;
+
+    const handleSV = (e) => {
+        const r = svContainer.getBoundingClientRect();
+        let x = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+        let y = Math.max(0, Math.min(1, (e.clientY - r.top) / r.height));
+        s = x * 100; v = (1 - y) * 100;
+        svCursor.style.left = `${x * 100}%`; svCursor.style.top = `${y * 100}%`;
+        updateColor();
+    };
+
+    const handleHue = (e) => {
+        const r = hueContainer.getBoundingClientRect();
+        let x = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+        h = x * 360; hueCursor.style.left = `${x * 100}%`;
+        updateColor();
+    };
+
+    svContainer.onmousedown = (e) => { isDraggingSV = true; handleSV(e); };
+    hueContainer.onmousedown = (e) => { isDraggingHue = true; handleHue(e); };
+
+    const moveListener = (e) => { if (isDraggingSV) handleSV(e); if (isDraggingHue) handleHue(e); };
+    const upListener = () => { isDraggingSV = false; isDraggingHue = false; };
+
+    window.addEventListener('mousemove', moveListener);
+    window.addEventListener('mouseup', upListener);
+
+    popover.appendChild(svContainer);
+    popover.appendChild(hueContainer);
+    popover.appendChild(hexInputGroup);
+    popover.appendChild(presets);
+
+    function close() {
+        popover.style.opacity = '0'; popover.style.transform = 'scale(0.95)';
+        window.removeEventListener('mousemove', moveListener);
+        window.removeEventListener('mouseup', upListener);
+        setTimeout(() => { overlay.remove(); popover.remove(); }, 150);
+    }
+
+    overlay.onclick = close;
+    document.body.appendChild(overlay);
+    document.body.appendChild(popover);
 }
 
 export function createModal(title, contentCallback, footerCallback) {

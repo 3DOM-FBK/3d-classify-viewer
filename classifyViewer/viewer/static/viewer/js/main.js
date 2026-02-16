@@ -21,6 +21,42 @@ const resizerRight = document.getElementById('resizer-right');
 const rightToolbar = document.getElementById('right-toolbar');
 const viewMenu = document.getElementById('view-menu');
 const colorMenu = document.getElementById('color-menu');
+const centralViewport = document.getElementById('central-viewport');
+
+// --- Tool Selection State ---
+let activeTool = "tool-1"; // Default mode
+
+// selection state
+let isDrawingLasso = false;
+let isDrawingRect = false;
+let lassoPoints = [];
+let rectStartPoint = null;
+let lassoOverlay = null;
+let lassoPath = null;
+let rectShape = null;
+
+function initLassoOverlay() {
+    if (document.getElementById('lasso-overlay')) return;
+
+    lassoOverlay = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    lassoOverlay.id = "lasso-overlay";
+    lassoOverlay.style.pointerEvents = "none";
+
+    lassoPath = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+    lassoPath.setAttribute("class", "lasso-path");
+    lassoPath.setAttribute("points", "");
+
+    rectShape = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    rectShape.setAttribute("class", "lasso-path");
+    rectShape.style.display = "none";
+
+    lassoOverlay.appendChild(lassoPath);
+    lassoOverlay.appendChild(rectShape);
+    centralViewport.appendChild(lassoOverlay);
+    lassoOverlay.style.display = "none";
+}
+
+initLassoOverlay();
 
 // --- View Menu Logic ---
 function initViewMenu() {
@@ -203,14 +239,41 @@ function initToolbar() {
 
     const iconBase = "/static/viewer/icons/";
     const tool1Img = `<img src="${iconBase}cursor.png" alt="Cursor">`;
-    const tool2Img = `<img src="${iconBase}lasso-select.png" alt="Lasso Select">`;
-    const tool3Img = `<img src="${iconBase}scissor.png" alt="Scissor">`;
-    const tool4Img = `<img src="${iconBase}frame-to-pcd.png" alt="Frame to PCD">`;
+    const tool2Img = `<img src="${iconBase}rec_select.png" alt="Rectangle Select">`;
+    const tool3Img = `<img src="${iconBase}lasso-select.png" alt="Lasso Select">`;
+    const tool4Img = `<img src="${iconBase}scissor.png" alt="Scissor">`;
+    const tool5Img = `<img src="${iconBase}frame-to-pcd.png" alt="Frame to PCD">`;
 
     createToolButton("tool-1", tool1Img, "Default mode", rightToolbar);
-    createToolButton("tool-2", tool2Img, "Selection mode", rightToolbar);
-    createToolButton("tool-3", tool3Img, "Cut mode", rightToolbar);
-    createToolButton("tool-4", tool4Img, "Frame to PCD", rightToolbar);
+    createToolButton("tool-2", tool2Img, "Rectangle selection", rightToolbar);
+    createToolButton("tool-3", tool3Img, "Lasso selection", rightToolbar);
+    createToolButton("tool-4", tool4Img, "Cut mode", rightToolbar);
+    createToolButton("tool-5", tool5Img, "Frame to PCD", rightToolbar);
+
+    // Initial active button
+    document.getElementById("tool-1").classList.add("active");
+
+    // Tool switching logic
+    [1, 2, 3, 4, 5].forEach(i => {
+        const btn = document.getElementById(`tool-${i}`);
+        btn.addEventListener('click', () => {
+            // Remove active from all
+            document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
+            // Add to current
+            btn.classList.add('active');
+            activeTool = `tool-${i}`;
+
+            // Disable camera control if selection or cut is active
+            if (activeTool === "tool-2" || activeTool === "tool-3" || activeTool === "tool-4") {
+                camera.detachControl(canvas);
+            } else {
+                camera.attachControl(canvas, true);
+            }
+
+            console.log("Active tool changed to:", activeTool);
+        });
+    });
+
     console.log("Toolbar buttons created.");
 }
 
@@ -367,6 +430,86 @@ scene.onBeforeRenderObservable.add(() => {
     if (camera.panningSensibility < 50) camera.panningSensibility = 50;
     if (camera.panningSensibility > 10000) camera.panningSensibility = 10000;
 });
+
+// --- Tools Logic (Lasso & Rect) using Babylon Observation ---
+scene.onPointerObservable.add((pointerInfo) => {
+    if (activeTool !== "tool-2" && activeTool !== "tool-3") return;
+
+    switch (pointerInfo.type) {
+        case BABYLON.PointerEventTypes.POINTERDOWN:
+            if (pointerInfo.event.button === 0) { // Left click
+                if (activeTool === "tool-2") {
+                    isDrawingRect = true;
+                    rectStartPoint = { x: scene.pointerX, y: scene.pointerY };
+                    lassoOverlay.style.display = "block";
+                    rectShape.style.display = "block";
+                    lassoPath.style.display = "none";
+                    updateRectShape();
+                } else {
+                    isDrawingLasso = true;
+                    lassoPoints = [[scene.pointerX, scene.pointerY]];
+                    lassoOverlay.style.display = "block";
+                    lassoPath.style.display = "block";
+                    rectShape.style.display = "none";
+                    updateLassoPath();
+                }
+            }
+            break;
+
+        case BABYLON.PointerEventTypes.POINTERMOVE:
+            if (isDrawingRect) {
+                updateRectShape();
+            } else if (isDrawingLasso) {
+                lassoPoints.push([scene.pointerX, scene.pointerY]);
+                updateLassoPath();
+            }
+            break;
+
+        case BABYLON.PointerEventTypes.POINTERUP:
+            if (isDrawingRect) {
+                isDrawingRect = false;
+                setTimeout(() => {
+                    if (!isDrawingRect) {
+                        lassoOverlay.style.display = "none";
+                        rectShape.style.display = "none";
+                    }
+                }, 1000);
+            } else if (isDrawingLasso) {
+                isDrawingLasso = false;
+                setTimeout(() => {
+                    if (!isDrawingLasso) {
+                        lassoOverlay.style.display = "none";
+                        lassoPath.style.display = "none";
+                        lassoPath.setAttribute("points", "");
+                        lassoPoints = [];
+                    }
+                }, 1000);
+            }
+            break;
+    }
+});
+
+function updateRectShape() {
+    if (!rectStartPoint) return;
+    const currentX = scene.pointerX;
+    const currentY = scene.pointerY;
+
+    const x = Math.min(rectStartPoint.x, currentX);
+    const y = Math.min(rectStartPoint.y, currentY);
+    const width = Math.abs(rectStartPoint.x - currentX);
+    const height = Math.abs(rectStartPoint.y - currentY);
+
+    rectShape.setAttribute("x", x);
+    rectShape.setAttribute("y", y);
+    rectShape.setAttribute("width", width);
+    rectShape.setAttribute("height", height);
+}
+
+function updateLassoPath() {
+    if (lassoPoints.length < 2) return;
+    const pointsStr = lassoPoints.map(p => `${p[0]},${p[1]}`).join(" ");
+    lassoPath.setAttribute("points", pointsStr);
+}
 
 // --- Helpers: Grid ---
 const gridGround = BABYLON.MeshBuilder.CreateGround("gridGround", { width: 10000, height: 10000 }, scene);
