@@ -8,7 +8,8 @@ import {
     createOutlineItem,
     createClassItem,
     loadPointCloud,
-    frameCameraOnMesh
+    frameCameraOnMesh,
+    setLODParameters
 } from "./functions.js";
 
 // --- UI Elements ---
@@ -109,34 +110,58 @@ document.addEventListener('click', closeAllDropdowns);
 
 function switchColorMode(mode) {
     currentColorMode = mode;
-    const pcs = scene.getMeshByName("pcs_mesh"); // PCS mesh name is "pcs" + "_mesh" by default or check creation
-    // In our functions.js, we name it "pcs" and it returns pcs.mesh
-    // Actually, let's find it in sceneObjects
-    const pcMesh = sceneObjects.currentPointCloud;
-    if (!pcMesh || !pcMesh._pcs) return;
+    const root = sceneObjects.currentPointCloud;
+    if (!root) return;
 
-    const pcsSystem = pcMesh._pcs;
+    const classColors = [
+        [1, 0, 0],    // Red
+        [0.1, 0.8, 0.2],  // Green
+        [0.2, 0.4, 1],    // Blue
+        [1, 0.9, 0.1],    // Yellow
+        [0.8, 0.2, 1]     // Magenta
+    ];
 
-    pcsSystem.updateParticle = (particle) => {
-        if (mode === "color") {
-            particle.color.copyFrom(particle.originalColor || particle.color);
-        } else {
-            // Mock transformation: Use a color based on a mock classification (e.g. position-based for demo)
-            // In a real app, this would use a 'classification' attribute stored in the particle
-            const classId = particle.classificationId || Math.floor(particle.idx % 5);
-            const classColors = [
-                new BABYLON.Color4(1, 0, 0, 1), // Red
-                new BABYLON.Color4(0, 1, 0, 1), // Green
-                new BABYLON.Color4(0, 0, 1, 1), // Blue
-                new BABYLON.Color4(1, 1, 0, 1), // Yellow
-                new BABYLON.Color4(1, 0, 1, 1)  // Magenta
-            ];
-            particle.color.copyFrom(classColors[classId % classColors.length]);
-        }
-        return particle;
-    };
+    // Se è il nuovo sistema a cluster (TransformNode o gruppi di mesh)
+    if (root.getChildMeshes) {
+        root.getChildMeshes().forEach((mesh, clusterIdx) => {
+            const colors = mesh.getVerticesData(BABYLON.VertexBuffer.ColorKind);
+            if (!colors) return;
 
-    pcsSystem.setParticles();
+            const originalColors = mesh.metadata?.originalColors;
+
+            for (let i = 0; i < colors.length / 4; i++) {
+                if (mode === "color" && originalColors) {
+                    colors[i * 4] = originalColors[i * 4];
+                    colors[i * 4 + 1] = originalColors[i * 4 + 1];
+                    colors[i * 4 + 2] = originalColors[i * 4 + 2];
+                    colors[i * 4 + 3] = originalColors[i * 4 + 3];
+                } else {
+                    // Mock classification: different color pattern per cluster or per point
+                    const classId = Math.floor((i + clusterIdx * 10) % 5);
+                    colors[i * 4] = classColors[classId][0];
+                    colors[i * 4 + 1] = classColors[classId][1];
+                    colors[i * 4 + 2] = classColors[classId][2];
+                    colors[i * 4 + 3] = 1.0;
+                }
+            }
+            mesh.setVerticesData(BABYLON.VertexBuffer.ColorKind, colors);
+        });
+    }
+    // Caso PCS (vecchio sistema, mantenuto per compatibilità)
+    else if (root._pcs) {
+        const pcsSystem = root._pcs;
+        pcsSystem.updateParticle = (particle) => {
+            if (mode === "color") {
+                particle.color.copyFrom(particle.originalColor || particle.color);
+            } else {
+                const classId = Math.floor(particle.idx % 5);
+                const c = classColors[classId];
+                particle.color.set(c[0], c[1], c[2], 1.0);
+            }
+            return particle;
+        };
+        pcsSystem.setParticles();
+    }
 }
 
 function setCameraMode(mode) {
@@ -234,8 +259,8 @@ const sceneObjects = {
 // 1. Import/Export
 const importExportSection = createAccordionSection("IMPORT & EXPORT", "sidebar-right-content");
 const importExportContent = importExportSection.content;
-const importPCButton = createButton("Import PointCloud", "importPC", importExportContent);
-const exportPCButton = createButton("Export PointCloud", "exportPC", importExportContent);
+const loadPCButton = createButton("Load PointCloud", "loadPC", importExportContent);
+const downloadPCButton = createButton("Download PointCloud", "downloadPC", importExportContent);
 
 // 2. Training
 const trainingSection = createAccordionSection("Training", "sidebar-right-content");
@@ -256,6 +281,10 @@ const viewportContent = viewportSection.content;
 
 const gridToggle = createCheckbox("Show Grid", true, viewportContent);
 const pointSizeSlider = createSlider("Point Size", 1, 10, 2, 0.5, viewportContent);
+const maxPointsSlider = createSlider("Max Points (M)", 1, 20, 5, 1, viewportContent); // 1M a 20M
+const maxErrorSlider = createSlider("Max Error (px)", 0.1, 10, 3.0, 0.1, viewportContent); // 0.1 a 10
+const nearClipSlider = createSlider("Near Clip", 0.01, 10, 0.1, 0.01, viewportContent);
+const farClipSlider = createSlider("Far Clip", 100, 50000, 10000, 100, viewportContent);
 
 // --- Resizing Logic ---
 let isResizing = false;
@@ -330,7 +359,7 @@ scene.onPointerObservable.add((pointerInfo) => {
 });
 
 // --- Helpers: Grid ---
-const gridGround = BABYLON.MeshBuilder.CreateGround("gridGround", { width: 100, height: 100 }, scene);
+const gridGround = BABYLON.MeshBuilder.CreateGround("gridGround", { width: 10000, height: 10000 }, scene);
 const gridMaterial = new BABYLON.GridMaterial("gridMaterial", scene);
 gridMaterial.mainColor = BABYLON.Color4.FromHexString(bgColor + "FF");
 gridMaterial.lineColor = BABYLON.Color4.FromHexString(gridLinesColor + "FF");
@@ -384,9 +413,41 @@ gridToggle.addEventListener('change', (e) => {
 // Slider Point Size
 pointSizeSlider.addEventListener('input', (e) => {
     const size = parseFloat(e.target.value);
-    if (sceneObjects.currentPointCloud && sceneObjects.currentPointCloud.material) {
-        sceneObjects.currentPointCloud.material.pointSize = size;
+    const pc = sceneObjects.currentPointCloud;
+    if (pc) {
+        // Handle both simple mesh and clustered TransformNode
+        if (pc.getChildMeshes) {
+            pc.getChildMeshes().forEach(mesh => {
+                if (mesh.material) mesh.material.pointSize = size;
+            });
+        } else if (pc.material) {
+            pc.material.pointSize = size;
+        }
     }
+    // Update LOD loader if active
+    setLODParameters(scene, { pointSize: size });
+});
+
+// Slider Max Points
+maxPointsSlider.addEventListener('input', (e) => {
+    const val = parseFloat(e.target.value);
+    setLODParameters(scene, { maxVisiblePoints: val * 1000000 });
+});
+
+// Slider Max Error
+maxErrorSlider.addEventListener('input', (e) => {
+    const val = parseFloat(e.target.value);
+    setLODParameters(scene, { maxScreenSpaceError: val });
+});
+
+// Slider Near Clip
+nearClipSlider.addEventListener('input', (e) => {
+    camera.minZ = parseFloat(e.target.value);
+});
+
+// Slider Far Clip
+farClipSlider.addEventListener('input', (e) => {
+    camera.maxZ = parseFloat(e.target.value);
 });
 
 // --- Scene Info Bar Logic ---
@@ -406,27 +467,57 @@ const fpsCounterDisplay = document.getElementById('fps-counter');
 //     }
 // });
 
-importPCButton.addEventListener("click", () => {
-    const filepath = "static/viewer/data/c78Europ_segm.ply";
-    loadPointCloud(filepath, scene).then(pc => {
+loadPCButton.addEventListener("click", async () => {
+    const metadataUrl = "static/viewer/data/clusters/hierarchy.json";
+    const clusterFolder = "static/viewer/data/clusters";
+    const currentPointSize = parseFloat(pointSizeSlider.value);
+    const loadingOverlay = document.getElementById("loading-overlay");
+
+    // Mostra Overlay
+    if (loadingOverlay) loadingOverlay.classList.add("visible");
+
+    try {
+        // Call loadPointCloud with LOD enabled (default)
+        const pc = await loadPointCloud(clusterFolder, scene);
+
         if (pc) {
             sceneObjects.currentPointCloud = pc;
 
-            // Update point count
-            const vertexData = pc.getVerticesData(BABYLON.VertexBuffer.PositionKind);
-            if (vertexData) {
-                const count = vertexData.length / 3;
-                pointCountDisplay.textContent = count.toLocaleString();
+            // Apply point size if the loader exposes a way to do it globally
+            // For the LOD loader, we might need a specific method, but we can try iterating if meshes are already there
+            // Note: The LOD loader applies point size dynamically as nodes load.
+            // We can force an initial update if necessary or rely on the loader's default.
+            // However, let's keep the legacy logic for safety if it returns a simple TransformNode with children immediately.
+            if (pc.getChildMeshes && pc.getChildMeshes().length > 0) {
+                pc.getChildMeshes().forEach(mesh => {
+                    if (mesh.material) mesh.material.pointSize = currentPointSize;
+                });
             }
 
-            // Apply current slider size to the new load
-            if (pc.material) pc.material.pointSize = parseFloat(pointSizeSlider.value);
+            // Se abbiamo accesso al loader LOD (salvato in scene.lodLoader), aggiorniamo la dimensione
+            if (scene.lodLoader) {
+                scene.lodLoader.setPointSize(currentPointSize);
+            }
+
+            // Applica la modalità colore corrente (Color o Classification)
+            // Nota: Con LOD dinamico, questo dovrà essere riapplicato ogni volta che nuovi nodi vengono caricati.
+            // Per ora lo applichiamo ai nodi iniziali.
+            switchColorMode(currentColorMode);
+
+            // Centra la camera sulla nuvola
+            // IMPORTANTE: senza questo, il LOD potrebbe pensare che la nuvola sia fuori vista se la camera è lontana (0,0,0)
             frameCameraOnMesh(camera, pc);
         }
-    });
+    } catch (e) {
+        console.error("Failed to load point cloud:", e);
+        alert("Error loading point cloud. See console for details.");
+    } finally {
+        // Nascondi Overlay
+        if (loadingOverlay) loadingOverlay.classList.remove("visible");
+    }
 });
 
-exportPCButton.addEventListener("click", () => {
+downloadPCButton.addEventListener("click", () => {
     console.log("Exporting point cloud...");
     alert("Export functionality is under development.");
 });
@@ -443,7 +534,26 @@ window.addEventListener("resize", () => {
     updateOrthoCamera();
 });
 
+// --- Global Context Menu Prevention ---
+window.addEventListener('contextmenu', (e) => {
+    // Prevent default browser context menu globally
+    // Custom context menus (like in classes) will still work because they call e.preventDefault() themselves
+    e.preventDefault();
+}, false);
+
 // --- Initialize UI Menus ---
 initViewMenu();
 initColorMenu();
 initToolbar();
+
+// --- Tool Actions ---
+const frameToPCDButton = document.getElementById("tool-4");
+if (frameToPCDButton) {
+    frameToPCDButton.addEventListener("click", () => {
+        if (sceneObjects.currentPointCloud) {
+            frameCameraOnMesh(camera, sceneObjects.currentPointCloud);
+        } else {
+            console.warn("No point cloud loaded to frame.");
+        }
+    });
+}

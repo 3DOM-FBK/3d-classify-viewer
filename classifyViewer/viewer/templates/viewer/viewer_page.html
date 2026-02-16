@@ -31,6 +31,12 @@
 
         <!-- Central Viewport -->
         <main id="central-viewport">
+            <!-- Loading Overlay -->
+            <div id="loading-overlay">
+                <div class="spinner"></div>
+                <div class="loading-text">Loading Point Cloud...</div>
+            </div>
+
             <canvas id="renderCanvas"></canvas>
             <div id="top-left-controls" class="top-left-controls-container">
                 <div id="view-menu" class="menu-item-container"></div>
@@ -47,6 +53,10 @@
                 <div class="info-item">
                     <span class="info-label">POINTS:</span>
                     <span id="point-count" class="info-value">0</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">VISIBLE:</span>
+                    <span id="visible-point-count" class="info-value">0</span>
                 </div>
                 <div class="info-item">
                     <span class="info-label">FPS:</span>
