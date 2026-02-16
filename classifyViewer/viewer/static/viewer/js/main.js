@@ -9,7 +9,8 @@ import {
     createClassItem,
     loadPointCloud,
     frameCameraOnMesh,
-    setLODParameters
+    showDownloadModal,
+    showLoadModal
 } from "./functions.js";
 
 // --- UI Elements ---
@@ -38,7 +39,7 @@ function initViewMenu() {
         { name: "Perspective", action: () => setCameraMode(BABYLON.Camera.PERSPECTIVE_CAMERA) },
         { name: "Orthographic", action: () => setCameraMode(BABYLON.Camera.ORTHOGRAPHIC_CAMERA) },
         { name: "Top View", action: () => setCameraView(0, -Math.PI / 2) },
-        { name: "Bottom View", action: () => setCameraView(0, Math.PI / 2) },
+        { name: "Right View", action: () => setCameraView(0, Math.PI / 2) },
         { name: "Front View", action: () => setCameraView(Math.PI / 2, Math.PI / 2) },
         { name: "Left View", action: () => setCameraView(Math.PI, Math.PI / 2) }
     ];
@@ -270,16 +271,12 @@ createPropertyRow("max depth", "None", trainingContent);
 createPropertyRow("nr jobs", "12", trainingContent);
 const startTrainingButton = createButton("Start Training", "startTraining", trainingContent);
 
-// 3. Subsampling
-const subsamplingSection = createAccordionSection("Subsampling", "sidebar-right-content");
-const subsamplingContent = subsamplingSection.content;
-const subsampleButton = createButton("Apply Subsampling", "subsample", subsamplingContent);
-
-// 4. Viewport Settings
+// 3. Viewport Settings
 const viewportSection = createAccordionSection("Viewport Settings", "sidebar-right-content");
 const viewportContent = viewportSection.content;
 
 const gridToggle = createCheckbox("Show Grid", true, viewportContent);
+const lightModeToggle = createCheckbox("Light Background", false, viewportContent);
 const pointSizeSlider = createSlider("Point Size", 1, 10, 2, 0.5, viewportContent);
 const maxPointsSlider = createSlider("Max Points (M)", 1, 20, 5, 1, viewportContent); // 1M a 20M
 const maxErrorSlider = createSlider("Max Error (px)", 0.1, 10, 3.0, 0.1, viewportContent); // 0.1 a 10
@@ -351,11 +348,24 @@ camera.panningSensibility = 250;
 const light = new BABYLON.HemisphericLight("light", new BABYLON.Vector3(0, 1, 0), scene);
 light.intensity = 0.7;
 
-// Update ortho camera on zoom
+// Update ortho camera on zoom and adaptive panning
 scene.onPointerObservable.add((pointerInfo) => {
     if (pointerInfo.type === BABYLON.PointerEventTypes.POINTERWHEEL) {
         updateOrthoCamera();
     }
+});
+
+// Implementation of adaptive panning: Panning speed proportional to distance (radius)
+scene.onBeforeRenderObservable.add(() => {
+    // panningSensibility is inverse: higher value = slower panning
+    // We want visually consistent panning, so sensibility should be inversely proportional to radius
+    // Base value (e.g., 2000) divided by radius ensures speed increases with distance
+    const baseSensibility = 2000;
+    camera.panningSensibility = baseSensibility / camera.radius;
+
+    // Safety limits to prevent extreme values
+    if (camera.panningSensibility < 50) camera.panningSensibility = 50;
+    if (camera.panningSensibility > 10000) camera.panningSensibility = 10000;
 });
 
 // --- Helpers: Grid ---
@@ -407,6 +417,32 @@ scene.registerBeforeRender(() => {
 gridToggle.addEventListener('change', (e) => {
     if (sceneObjects.grid) {
         sceneObjects.grid.isVisible = e.target.checked;
+    }
+});
+
+// Toggle Light Mode
+lightModeToggle.addEventListener('change', (e) => {
+    const isLight = e.target.checked;
+    const style = getComputedStyle(document.documentElement);
+
+    if (isLight) {
+        const lightBg = style.getPropertyValue('--bg-light').trim() || "#f5f5f7";
+        const lightGrid = style.getPropertyValue('--grid-lines-light').trim() || "#d1d1d6";
+
+        scene.clearColor = BABYLON.Color4.FromHexString(lightBg + "FF");
+        if (gridMaterial) {
+            gridMaterial.mainColor = BABYLON.Color4.FromHexString(lightBg + "FF");
+            gridMaterial.lineColor = BABYLON.Color4.FromHexString(lightGrid + "FF");
+        }
+    } else {
+        const darkBg = style.getPropertyValue('--bg-dark').trim() || "#121214";
+        const darkGrid = style.getPropertyValue('--grid-lines').trim() || "#8d8d99";
+
+        scene.clearColor = BABYLON.Color4.FromHexString(darkBg + "FF");
+        if (gridMaterial) {
+            gridMaterial.mainColor = BABYLON.Color4.FromHexString(darkBg + "FF");
+            gridMaterial.lineColor = BABYLON.Color4.FromHexString(darkGrid + "FF");
+        }
     }
 });
 
@@ -467,58 +503,12 @@ const fpsCounterDisplay = document.getElementById('fps-counter');
 //     }
 // });
 
-loadPCButton.addEventListener("click", async () => {
-    const metadataUrl = "static/viewer/data/clusters/hierarchy.json";
-    const clusterFolder = "static/viewer/data/clusters";
-    const currentPointSize = parseFloat(pointSizeSlider.value);
-    const loadingOverlay = document.getElementById("loading-overlay");
-    // Mostra Overlay
-    if (loadingOverlay) loadingOverlay.classList.add("visible");
-
-    try {
-        // Call loadPointCloud with LOD enabled (default)
-        const pc = await loadPointCloud(clusterFolder, scene);
-
-        if (pc) {
-            sceneObjects.currentPointCloud = pc;
-
-            // Apply point size if the loader exposes a way to do it globally
-            // For the LOD loader, we might need a specific method, but we can try iterating if meshes are already there
-            // Note: The LOD loader applies point size dynamically as nodes load.
-            // We can force an initial update if necessary or rely on the loader's default.
-            // However, let's keep the legacy logic for safety if it returns a simple TransformNode with children immediately.
-            if (pc.getChildMeshes && pc.getChildMeshes().length > 0) {
-                pc.getChildMeshes().forEach(mesh => {
-                    if (mesh.material) mesh.material.pointSize = currentPointSize;
-                });
-            }
-
-            // Se abbiamo accesso al loader LOD (salvato in scene.lodLoader), aggiorniamo la dimensione
-            if (scene.lodLoader) {
-                scene.lodLoader.setPointSize(currentPointSize);
-            }
-
-            // Applica la modalità colore corrente (Color o Classification)
-            // Nota: Con LOD dinamico, questo dovrà essere riapplicato ogni volta che nuovi nodi vengono caricati.
-            // Per ora lo applichiamo ai nodi iniziali.
-            switchColorMode(currentColorMode);
-
-            // Centra la camera sulla nuvola
-            // IMPORTANTE: senza questo, il LOD potrebbe pensare che la nuvola sia fuori vista se la camera è lontana (0,0,0)
-            frameCameraOnMesh(camera, pc);
-        }
-    } catch (e) {
-        console.error("Failed to load point cloud:", e);
-        alert("Error loading point cloud. See console for details.");
-    } finally {
-        // Nascondi Overlay
-        if (loadingOverlay) loadingOverlay.classList.remove("visible");
-    }
+loadPCButton.addEventListener("click", () => {
+    showLoadModal();
 });
 
 downloadPCButton.addEventListener("click", () => {
-    console.log("Exporting point cloud...");
-    alert("Export functionality is under development.");
+    showDownloadModal();
 });
 
 engine.runRenderLoop(() => {

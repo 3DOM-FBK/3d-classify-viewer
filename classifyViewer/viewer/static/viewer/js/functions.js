@@ -98,7 +98,9 @@ export function setLODParameters(scene, params) {
 // Re-export for compatibility
 export {
     loadPotree2PointCloud,
-    getPotree2Loader
+    getPotree2Loader,
+    showDownloadModal,
+    showLoadModal
 };
 
 // BUTTONS
@@ -689,6 +691,28 @@ export function createCheckbox(label, initialState, parent) {
     return checkbox;
 }
 
+export function createSimpleCheckbox(label, initialState, parent) {
+    const item = document.createElement('label');
+    item.classList.add('checkbox-item');
+
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = initialState;
+
+    const checkmark = document.createElement('span');
+    checkmark.classList.add('checkmark');
+
+    const span = document.createElement('span');
+    span.textContent = label;
+
+    item.appendChild(checkbox);
+    item.appendChild(checkmark);
+    item.appendChild(span);
+    parent.appendChild(item);
+
+    return checkbox;
+}
+
 export function createSlider(label, min, max, initial, step, parent) {
     const row = document.createElement('div');
     row.classList.add('property-row', 'property-row-vertical');
@@ -868,4 +892,216 @@ export function showContextMenu(x, y, options) {
         };
         document.addEventListener('mousedown', closeMenu);
     }, 10);
+}
+
+export function createModal(title, contentCallback, footerCallback) {
+    const overlay = document.createElement('div');
+    overlay.classList.add('modal-overlay');
+
+    const container = document.createElement('div');
+    container.classList.add('modal-container');
+
+    // Header
+    const header = document.createElement('div');
+    header.classList.add('modal-header');
+
+    const titleEl = document.createElement('span');
+    titleEl.classList.add('modal-title');
+    titleEl.textContent = title;
+
+    const closeBtn = document.createElement('button');
+    closeBtn.classList.add('modal-close');
+    closeBtn.innerHTML = '&times;';
+    closeBtn.onclick = () => {
+        overlay.classList.remove('active');
+        setTimeout(() => overlay.remove(), 300);
+    };
+
+    header.appendChild(titleEl);
+    header.appendChild(closeBtn);
+
+    // Body
+    const body = document.createElement('div');
+    body.classList.add('modal-body');
+    if (contentCallback) contentCallback(body);
+
+    // Footer
+    const footer = document.createElement('div');
+    footer.classList.add('modal-footer');
+    if (footerCallback) footerCallback(footer, overlay);
+
+    container.appendChild(header);
+    container.appendChild(body);
+    container.appendChild(footer);
+    overlay.appendChild(container);
+    document.body.appendChild(overlay);
+
+    // Show with animation
+    setTimeout(() => overlay.classList.add('active'), 10);
+
+    return overlay;
+}
+
+function showDownloadModal() {
+    createModal(
+        "Download Configuration",
+        (body) => {
+            const group = document.createElement('div');
+            group.classList.add('checkbox-group');
+
+            createSimpleCheckbox("PointCloud Training", true, group);
+            createSimpleCheckbox("PointCloud Evaluation", false, group);
+            createSimpleCheckbox("PointCloud Testing", false, group);
+
+            body.appendChild(group);
+        },
+        (footer, overlay) => {
+            const cancelBtn = document.createElement('button');
+            cancelBtn.classList.add('btn');
+            cancelBtn.style.backgroundColor = 'transparent';
+            cancelBtn.style.border = '1px solid var(--border-color)';
+            cancelBtn.textContent = "Cancel";
+            cancelBtn.onclick = () => {
+                overlay.classList.remove('active');
+                setTimeout(() => overlay.remove(), 300);
+            };
+
+            const downloadBtn = document.createElement('button');
+            downloadBtn.classList.add('btn');
+            downloadBtn.textContent = "Download";
+            downloadBtn.onclick = () => {
+                console.log("Download triggered (to be implemented)");
+                // Future: collect checkbox states and trigger download logic
+                overlay.classList.remove('active');
+                setTimeout(() => overlay.remove(), 300);
+            };
+
+            footer.appendChild(cancelBtn);
+            footer.appendChild(downloadBtn);
+        }
+    );
+}
+
+function showLoadModal() {
+    createModal(
+        "Load Point Cloud",
+        (body) => {
+            // Section 1: File Selection
+            const fileSection = document.createElement('div');
+            fileSection.classList.add('modal-section');
+
+            const fileTitle = document.createElement('div');
+            fileTitle.classList.add('modal-section-title');
+            fileTitle.textContent = "Data Source";
+            fileSection.appendChild(fileTitle);
+
+            const fileContainer = document.createElement('div');
+            fileContainer.classList.add('file-input-container');
+
+            const fileCustom = document.createElement('div');
+            fileCustom.classList.add('file-input-custom');
+            fileCustom.innerHTML = `
+                <b>Click to select file</b>
+                <span>Supports .ply, .las, .laz</span>
+            `;
+
+            const fileInput = document.createElement('input');
+            fileInput.type = 'file';
+            fileInput.classList.add('file-input-hidden');
+            fileInput.accept = ".ply,.las,.laz";
+
+            fileInput.onchange = (e) => {
+                const fileName = e.target.files[0]?.name;
+                if (fileName) {
+                    fileCustom.innerHTML = `<b>Selected:</b> <span>${fileName}</span>`;
+                }
+            };
+
+            fileContainer.appendChild(fileCustom);
+            fileContainer.appendChild(fileInput);
+            fileSection.appendChild(fileContainer);
+            body.appendChild(fileSection);
+
+            // Spacer
+            const spacer = document.createElement('div');
+            spacer.style.height = '10px';
+            body.appendChild(spacer);
+
+            // Section 2: Subsampling
+            const subSection = document.createElement('div');
+            subSection.classList.add('modal-section');
+
+            const subTitle = document.createElement('div');
+            subTitle.classList.add('modal-section-title');
+            subTitle.textContent = "Processing";
+            subSection.appendChild(subTitle);
+
+            const subContainer = document.createElement('div');
+            const subToggle = createSimpleCheckbox("Enable Subsampling", false, subContainer);
+
+            const subSettings = document.createElement('div');
+            subSettings.classList.add('expandable-content');
+
+            // Add settings to subSettings
+            // Voxel Size Slider
+            const voxelRow = document.createElement('div');
+            voxelRow.classList.add('property-row');
+            voxelRow.style.padding = "0 4px";
+            voxelRow.innerHTML = `<span class="property-label">Voxel Size (m):</span>`;
+            const voxelInput = document.createElement('input');
+            voxelInput.type = "number";
+            voxelInput.classList.add('property-input');
+            voxelInput.value = "0.05";
+            voxelInput.step = "0.01";
+            voxelInput.min = "0.01";
+            voxelRow.appendChild(voxelInput);
+            subSettings.appendChild(voxelRow);
+
+            // Method Select
+            const methodRow = document.createElement('div');
+            methodRow.classList.add('property-row');
+            methodRow.style.padding = "0 4px";
+            methodRow.innerHTML = `<span class="property-label">Strategy:</span>`;
+            const methodSelect = document.createElement('select');
+            methodSelect.classList.add('property-input');
+            methodSelect.style.width = "100px";
+            methodSelect.innerHTML = `
+                <option value="voxel">Voxel Grid</option>
+                <option value="random">Random</option>
+            `;
+            methodRow.appendChild(methodSelect);
+            subSettings.appendChild(methodRow);
+
+            subToggle.onchange = (e) => {
+                subSettings.classList.toggle('visible', e.target.checked);
+            };
+
+            subSection.appendChild(subContainer);
+            subSection.appendChild(subSettings);
+            body.appendChild(subSection);
+        },
+        (footer, overlay) => {
+            const cancelBtn = document.createElement('button');
+            cancelBtn.classList.add('btn');
+            cancelBtn.style.backgroundColor = 'transparent';
+            cancelBtn.style.border = '1px solid var(--border-color)';
+            cancelBtn.textContent = "Cancel";
+            cancelBtn.onclick = () => {
+                overlay.classList.remove('active');
+                setTimeout(() => overlay.remove(), 300);
+            };
+
+            const uploadBtn = document.createElement('button');
+            uploadBtn.classList.add('btn');
+            uploadBtn.textContent = "Upload & Process";
+            uploadBtn.onclick = () => {
+                console.log("Upload triggered (to be implemented)");
+                overlay.classList.remove('active');
+                setTimeout(() => overlay.remove(), 300);
+            };
+
+            footer.appendChild(cancelBtn);
+            footer.appendChild(uploadBtn);
+        }
+    );
 }
