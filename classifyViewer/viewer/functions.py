@@ -6,10 +6,10 @@ from tqdm import tqdm
 import open3d as o3d
 from dataclasses import dataclass
 from typing import List, Tuple
-from .RF_training import main as training
-from .RF_classify import main as classification
-from .mesh2pc import main as mesh2pc
-from .ply2las import main as ply2las
+from .utils_functions.RF_training import main as training
+from .utils_functions.RF_classify import main as classification
+from .utils_functions.mesh2pc import main as mesh2pc
+from .utils_functions.ply2las import main as ply2las
 import sys
 import time
 
