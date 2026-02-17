@@ -9,6 +9,7 @@ from typing import List, Tuple
 from .RF_training import main as training
 from .RF_classify import main as classification
 from .mesh2pc import main as mesh2pc
+from .ply2las import main as ply2las
 import sys
 import time
 
@@ -60,6 +61,10 @@ def subsampling_point_cloud(file_path, voxel_size=0.002):
 def mesh_to_point_cloud(mesh_path, num_points=5000000, sampling_method="uniform"):
     print("\n[FUNCTION] ---- MESH TO POINT CLOUD -----\n")
     mesh2pc(mesh_path=mesh_path, num_points=num_points, sampling_method=sampling_method)
+
+def ply_to_las(ply_path, out_path=None):
+    print("\n[FUNCTION] ---- PLY TO LAS -----\n")
+    ply2las(ply_path = ply_path, out_path=out_path)
 
 def launch_training_RF(data):
     print("\n[FUNCTION] ---- TRAINING RANDOM FOREST -----\n")

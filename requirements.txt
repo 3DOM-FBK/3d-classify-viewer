@@ -11,3 +11,4 @@ torch
 pygltflib
 pathlib
 rtree
+laspy

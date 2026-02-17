@@ -155,12 +155,12 @@ testGButton.addEventListener("click", async () => {
     //         })
 
     // SUBSAMPLING PARAMETERS
-    const file_path = "/app/classifyViewer/viewer/static/viewer/data/c78_pc.ply";
-    const voxel_size = 0.05; // 5cm
-    const body = JSON.stringify({
-        file_path: file_path,
-        voxel_size: voxel_size
-    });
+    // const file_path = "/app/classifyViewer/viewer/static/viewer/data/c78_pc.ply";
+    // const voxel_size = 0.05; // 5cm
+    // const body = JSON.stringify({
+    //     file_path: file_path,
+    //     voxel_size: voxel_size
+    // });
 
     // MESH TO POINT CLOUD PARAMETERS
     // const file_path = "/app/classifyViewer/viewer/static/viewer/data/c78.glb";
@@ -171,9 +171,16 @@ testGButton.addEventListener("click", async () => {
     //     num_points: num_points,
     //     sampling_method: sampling_method
     // });
+    // PLY TO LAS PARAMETERS
+    const file_path = "/app/classifyViewer/viewer/static/viewer/data/c78_pc.ply";
+    const out_path = "/app/classifyViewer/viewer/static/viewer/data/c78_pc.las";
+    const body = JSON.stringify({
+        file_path: file_path,
+        out_path: out_path
+    });
     
     // Send request to launch function
-    const response = await send_request("subsample_pc/", "POST", body);
+    const response = await send_request("ply2las/", "POST", body);
     
     if (response.ok) {  
         console.log("Function completed successfully.");

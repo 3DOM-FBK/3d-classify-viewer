@@ -8,6 +8,8 @@ import time
 import io
 from pygltflib import GLTF2
 from pathlib import Path
+import laspy
+from laspy import ExtraBytesParams
 
 def extract_textures_from_glb(glb_path):
     """Estrae le texture embeded dal GLB come lista di PIL.Image"""
@@ -111,16 +113,63 @@ def main(mesh_path, num_points=5000000, sampling_method="uniform"):
     pcd_final.points = o3d.utility.Vector3dVector(points_final)
     pcd_final.colors = o3d.utility.Vector3dVector(colors_final)
 
+    # === Calcolo normali ===
+    print("[Computing normals]")
+    pcd_final.estimate_normals(
+        search_param=o3d.geometry.KDTreeSearchParamHybrid(
+            radius=0.02,
+            max_nn=30
+        )
+    )
+    pcd_final.orient_normals_consistent_tangent_plane(30)
+
+    normals = np.asarray(pcd_final.normals)
+
     # Save
-    out_file = mesh_path.replace(".glb","_pc.ply")
-    o3d.io.write_point_cloud(out_file, pcd_final)
+    # print("[Saving PLY point cloud]")
+    # out_file = mesh_path.replace(".glb","_pc.ply")
+    # o3d.io.write_point_cloud(out_file, pcd_final)
+
+    print("[Saving LAS point cloud]")
+    # Crea header LAS
+    header = laspy.LasHeader(point_format=3, version="1.2")
+    # Extra dimensions per normali
+    header.add_extra_dim(ExtraBytesParams(name="normal_x", type=np.float32))
+    header.add_extra_dim(ExtraBytesParams(name="normal_y", type=np.float32))
+    header.add_extra_dim(ExtraBytesParams(name="normal_z", type=np.float32))
+    las = laspy.LasData(header)
+
+    # Coordinate
+    las.x = points_final[:, 0]
+    las.y = points_final[:, 1]
+    las.z = points_final[:, 2]
+
+    # Colori (LAS usa uint16 [0–65535])
+    colors_uint16 = (colors_final * 65535).astype(np.uint16)
+    las.red   = colors_uint16[:, 0]
+    las.green = colors_uint16[:, 1]
+    las.blue  = colors_uint16[:, 2]
+
+    # Normali
+    las.normal_x = normals[:, 0].astype(np.float32)
+    las.normal_y = normals[:, 1].astype(np.float32)
+    las.normal_z = normals[:, 2].astype(np.float32)
+
+    # Scrittura file
+    out_file = mesh_path.replace(".glb", "_pc.las")
+    las.write(out_file)
+
 
     end_time = time.time()
     tot_sec = round(end_time - start_time, 2)
     minutes = int(tot_sec // 60)
     seconds = int(tot_sec % 60)
     print(f"Point cloud saved as: {out_file}, with {len(points_final)} points")
-    print(f"Processing time: {minutes} min {seconds} sec")
+    if minutes > 0:
+        print(f'Processing time: {minutes} min {seconds} sec')
+    else:
+        print(f'Processing time: {seconds} sec')
+    
 
 
 if __name__ == "__main__":

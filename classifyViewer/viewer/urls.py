@@ -1,6 +1,6 @@
 from django.urls import path
 from . import views
-from .request_functions import load_points, save_file, launch_RF_training, launch_RF_classify, subsample_pc, mesh2pc
+from .request_functions import load_points, save_file, launch_RF_training, launch_RF_classify, subsample_pc, mesh2pc, ply2las
 
 urlpatterns = [
     # path('', views.home, name='home'),
@@ -14,4 +14,5 @@ urlpatterns = [
     path("launch_RF_classify/", launch_RF_classify),
     path("subsample_pc/", subsample_pc),
     path("mesh2pc/", mesh2pc),
+    path("ply2las/", ply2las),
 ]
