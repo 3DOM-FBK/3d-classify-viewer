@@ -10,6 +10,7 @@ from .utils_functions.RF_training import main as training
 from .utils_functions.RF_classify import main as classification
 from .utils_functions.mesh2pc import main as mesh2pc
 from .utils_functions.ply2las import main as ply2las
+from .utils_functions.subsample_pc import main as subsampling_pc
 import sys
 import time
 
@@ -43,18 +44,8 @@ def export_point_cloud(filepath, points, header=None):
 
 def subsampling_point_cloud(file_path, voxel_size=0.002):
     print("\n[FUNCTION] ---- SUBSAMPLING POINT CLOUD -----\n")
-    print(f"Loading file for downsampling: {file_path}")
-    pcd = o3d.io.read_point_cloud(file_path)
-    print(f"Original Points N: {len(pcd.points)}")
-
-    pcd_down = pcd.voxel_down_sample(voxel_size=voxel_size)
-    print(
-        f"Points N after the voxel_down_sample ({voxel_size*100:.1f} cm): {len(pcd_down.points)}"
-    )
-
-    output_filepath = file_path.replace(".ply", f"_{int(voxel_size*100)}cm.ply")
-    o3d.io.write_point_cloud(output_filepath, pcd_down)
-    print(f"Subsampled point cloud saved to: {output_filepath}")
+    
+    output_filepath = subsampling_pc(file_path=file_path, voxel_size=voxel_size)
 
     return output_filepath
 
