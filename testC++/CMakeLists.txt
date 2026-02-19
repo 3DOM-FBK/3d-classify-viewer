@@ -42,3 +42,12 @@ set_target_properties(mesh2pc PROPERTIES
     INSTALL_RPATH_USE_LINK_PATH TRUE
 )
 
+# ---- ply2las ----
+add_executable(ply2las ply2las.cpp)
+target_link_libraries(ply2las Open3D::Open3D)
+target_compile_options(ply2las PRIVATE -O3 -march=native)
+set_target_properties(ply2las PROPERTIES
+    BUILD_WITH_INSTALL_RPATH TRUE
+    INSTALL_RPATH "${open3d_lib_dir}"
+    INSTALL_RPATH_USE_LINK_PATH TRUE
+)

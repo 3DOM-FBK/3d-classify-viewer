@@ -36,6 +36,7 @@ RUN mkdir -p /app/build && \
         .. && \
     make -j$(nproc) && \
     cp subsample_pc /usr/local/bin/subsample_pc && \
+    cp ply2las /usr/local/bin/ply2las && \
     cp mesh2pc /usr/local/bin/mesh2pc
 
 WORKDIR /app
