@@ -29,7 +29,8 @@ def serve_range_file(request, filepath):
     )
 
     # Normalize and validate path
-    full_path = os.path.normpath(os.path.join(BASE_DATA_DIR, filepath))
+    # We lstrip('/') to ensure os.path.join doesn't treat it as an absolute path
+    full_path = os.path.normpath(os.path.join(BASE_DATA_DIR, filepath.lstrip('/')))
 
     # Prevent directory traversal
     if not full_path.startswith(os.path.normpath(BASE_DATA_DIR)):

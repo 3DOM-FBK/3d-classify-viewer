@@ -1,4 +1,4 @@
-import { scene } from "./main.js";
+import { scene, sceneObjects } from "./main.js";
 
 import {
     loadPotree2PointCloud,
@@ -1238,14 +1238,151 @@ function showLoadModal() {
             const uploadBtn = document.createElement('button');
             uploadBtn.classList.add('btn');
             uploadBtn.textContent = "Upload & Process";
-            uploadBtn.onclick = () => {
-                console.log("Upload triggered (to be implemented)");
-                overlay.classList.remove('active');
-                setTimeout(() => overlay.remove(), 300);
+            uploadBtn.onclick = async () => {
+                console.log("🚀 Starting point cloud test import...");
+
+                // Show a simple loading feedback (optional, but good)
+                uploadBtn.textContent = "Loading...";
+                uploadBtn.disabled = true;
+
+                try {
+                    // Cleanup previous point cloud if it exists
+                    if (sceneObjects.currentPointCloud) {
+                        console.log("♻️ Disposing previous point cloud...");
+                        // If it's a Potree2 node, it has a dispose method
+                        if (typeof sceneObjects.currentPointCloud.dispose === 'function') {
+                            sceneObjects.currentPointCloud.dispose();
+                        }
+                        sceneObjects.currentPointCloud = null;
+                    }
+
+                    // Load the point cloud from the test directory
+                    const pcPath = "/static/viewer/data/clusters";
+                    const pc = await loadPointCloud(pcPath, scene);
+
+                    if (pc) {
+                        // Store in global state
+                        sceneObjects.currentPointCloud = pc;
+
+                        // Frame camera on the point cloud
+                        frameCameraOnMesh(scene.activeCamera || scene.cameras[0], pc);
+
+                        console.log("✅ Point cloud loaded successfully from:", pcPath);
+                    }
+                } catch (err) {
+                    console.error("❌ Failed to load test point cloud:", err);
+                    alert("Error loading point cloud: " + err.message);
+                } finally {
+                    overlay.classList.remove('active');
+                    setTimeout(() => overlay.remove(), 300);
+                }
             };
 
             footer.appendChild(cancelBtn);
             footer.appendChild(uploadBtn);
         }
     );
+}
+
+/**
+ * Select points in a 2D area (lasso or rectangle) and highlights them in red.
+ * Projects 3D points to screen space to check if they fall within the selection area.
+ */
+export function selectPoints(scene, pointCloudRoot, type, area) {
+    if (!pointCloudRoot) {
+        console.warn("No point cloud loaded for selection.");
+        return 0;
+    }
+
+    // Check if we have a Potree2Loader for persistent selection across LOD levels
+    const loader = getPotree2Loader(scene);
+    if (loader && loader.applySelection) {
+        return loader.applySelection(type, area);
+    }
+
+    // Fallback logic for simple meshes (non-LOD systems)
+    const meshes = pointCloudRoot.getChildMeshes ? pointCloudRoot.getChildMeshes() : [pointCloudRoot];
+    const camera = scene.activeCamera;
+    const engine = scene.getEngine();
+    const viewport = camera.viewport.toGlobal(engine.getRenderWidth(), engine.getRenderHeight());
+    const transformMatrix = scene.getTransformMatrix();
+
+    let totalSelected = 0;
+    meshes.forEach(mesh => {
+        if (!mesh.isVisible) return;
+        const positions = mesh.getVerticesData(BABYLON.VertexBuffer.PositionKind);
+        const colors = mesh.getVerticesData(BABYLON.VertexBuffer.ColorKind);
+        if (!positions || !colors) return;
+
+        let modified = false;
+        const worldMatrix = mesh.getWorldMatrix();
+
+        for (let i = 0; i < positions.length / 3; i++) {
+            const vector = new BABYLON.Vector3(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
+            const projection = BABYLON.Vector3.Project(vector, worldMatrix, transformMatrix, viewport);
+
+            let isInside = false;
+            if (type === "rect") {
+                isInside = (projection.x >= area.x && projection.x <= area.x + area.width &&
+                    projection.y >= area.y && projection.y <= area.y + area.height);
+            } else if (type === "lasso") {
+                isInside = isPointInPoly(area, [projection.x, projection.y]);
+            }
+
+            if (isInside) {
+                colors[i * 4 + 0] = 1.0;
+                colors[i * 4 + 1] = 0.0;
+                colors[i * 4 + 2] = 0.0;
+                modified = true;
+                totalSelected++;
+            }
+        }
+        if (modified) mesh.setVerticesData(BABYLON.VertexBuffer.ColorKind, colors);
+    });
+
+    console.log(`🎯 Selection: ${totalSelected.toLocaleString()} points highlighted.`);
+    return totalSelected;
+}
+
+/**
+ * Clear all point selections and reset colors to original.
+ * Wrapper around Potree2Loader.clearSelection() for external use.
+ */
+export function clearSelection(scene) {
+    const loader = getPotree2Loader(scene);
+    if (loader && loader.clearSelection) {
+        loader.clearSelection();
+        return;
+    }
+
+    // Fallback for simple meshes (non-LOD systems)
+    const root = scene.potree2Root;
+    if (!root) return;
+    const meshes = root.getChildMeshes ? root.getChildMeshes() : [root];
+    meshes.forEach(mesh => {
+        if (mesh.metadata && mesh.metadata.originalColors) {
+            mesh.setVerticesData(
+                BABYLON.VertexBuffer.ColorKind,
+                new Float32Array(mesh.metadata.originalColors)
+            );
+        }
+    });
+    console.log("🧹 Selection cleared.");
+}
+
+/**
+ * Standard Point-in-Polygon algorithm (Ray Casting)
+ */
+function isPointInPoly(poly, pt) {
+    const x = pt[0], y = pt[1];
+    let inside = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        const xi = poly[i][0], yi = poly[i][1];
+        const xj = poly[j][0], yj = poly[j][1];
+
+        const intersect = ((yi > y) !== (yj > y)) &&
+            (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+        if (intersect) inside = !inside;
+    }
+    return inside;
 }

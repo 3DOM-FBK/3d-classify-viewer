@@ -10,7 +10,9 @@ import {
     loadPointCloud,
     frameCameraOnMesh,
     showDownloadModal,
-    showLoadModal
+    showLoadModal,
+    selectPoints,
+    clearSelection
 } from "./functions.js";
 
 // --- UI Elements ---
@@ -244,7 +246,9 @@ function initToolbar() {
     const tool4Img = `<img src="${iconBase}scissor.png" alt="Scissor">`;
     const tool5Img = `<img src="${iconBase}frame-to-pcd.png" alt="Frame to PCD">`;
 
-    createToolButton("tool-1", tool1Img, "Default mode", rightToolbar);
+    createToolButton("tool-1", tool1Img, "Default mode", rightToolbar, () => {
+        clearSelection(scene);
+    });
     createToolButton("tool-2", tool2Img, "Rectangle selection", rightToolbar);
     createToolButton("tool-3", tool3Img, "Lasso selection", rightToolbar);
     createToolButton("tool-4", tool4Img, "Cut mode", rightToolbar);
@@ -313,7 +317,7 @@ createOutlineItem("Object.001", `${iconBase}modeling.png`, outlineContent);
 createOutlineItem("Object.002", `${iconBase}modeling.png`, outlineContent);
 
 // --- Sidebar Right: State & Objects ---
-const sceneObjects = {
+export const sceneObjects = {
     grid: null,
     currentPointCloud: null
 };
@@ -468,6 +472,18 @@ scene.onPointerObservable.add((pointerInfo) => {
         case BABYLON.PointerEventTypes.POINTERUP:
             if (isDrawingRect) {
                 isDrawingRect = false;
+
+                // Calculate selection rectangle
+                const rect = {
+                    x: Math.min(rectStartPoint.x, scene.pointerX),
+                    y: Math.min(rectStartPoint.y, scene.pointerY),
+                    width: Math.abs(rectStartPoint.x - scene.pointerX),
+                    height: Math.abs(rectStartPoint.y - scene.pointerY)
+                };
+
+                // Perform selection
+                selectPoints(scene, sceneObjects.currentPointCloud, "rect", rect);
+
                 setTimeout(() => {
                     if (!isDrawingRect) {
                         lassoOverlay.style.display = "none";
@@ -476,6 +492,10 @@ scene.onPointerObservable.add((pointerInfo) => {
                 }, 1000);
             } else if (isDrawingLasso) {
                 isDrawingLasso = false;
+
+                // Perform selection
+                selectPoints(scene, sceneObjects.currentPointCloud, "lasso", lassoPoints);
+
                 setTimeout(() => {
                     if (!isDrawingLasso) {
                         lassoOverlay.style.display = "none";

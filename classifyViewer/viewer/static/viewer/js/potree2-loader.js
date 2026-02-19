@@ -88,14 +88,25 @@ export class Potree2Loader {
         this.rootTransform = new BABYLON.TransformNode("Potree2Root", scene);
 
         // Derive the Range request endpoint from the baseUrl
-        // baseUrl = "static/viewer/data/clusters"
-        // We strip the prefix "static/viewer/data/" to get the relative path for the Django endpoint
-        const dataPrefix = "static/viewer/data/";
-        if (baseUrl.startsWith(dataPrefix)) {
-            this.rangeBasePath = baseUrl.substring(dataPrefix.length);
-        } else {
+        // We strip the prefix "static/viewer/data/" (with or without leading slash) 
+        // to get the relative path for the Django endpoint.
+        // Example: "/static/viewer/data/clusters" -> "clusters"
+        const prefixes = ["/static/viewer/data/", "static/viewer/data/"];
+        let foundPrefix = false;
+        for (const prefix of prefixes) {
+            if (baseUrl.startsWith(prefix)) {
+                this.rangeBasePath = baseUrl.substring(prefix.length);
+                foundPrefix = true;
+                break;
+            }
+        }
+
+        if (!foundPrefix) {
             this.rangeBasePath = baseUrl;
         }
+
+        // Clean up leading/trailing slashes in rangeBasePath to avoid double slashes in URL
+        this.rangeBasePath = this.rangeBasePath.replace(/^\/+|\/+$/g, '');
 
         // Parsed attributes info
         this.attributes = [];
@@ -122,6 +133,9 @@ export class Potree2Loader {
             totalPointsRendered: 0,
             loadingNodes: 0
         };
+
+        // Persistent Selection History
+        this.selectionHistory = []; // { type: 'rect'|'lasso', area: ... }
     }
 
     // ========== PUBLIC API ==========
@@ -625,6 +639,16 @@ export class Potree2Loader {
                 colors[4 * j + 2] = 1.0;
                 colors[4 * j + 3] = 1.0;
             }
+
+            // Apply persistent selection history to newly loaded points
+            if (this.selectionHistory.length > 0) {
+                const vector = new BABYLON.Vector3(positions[3 * j], positions[3 * j + 1], positions[3 * j + 2]);
+                if (this._isPointInSelectionHistory(vector, node)) {
+                    colors[4 * j + 0] = 1.0; // Red highlight
+                    colors[4 * j + 1] = 0.0;
+                    colors[4 * j + 2] = 0.0;
+                }
+            }
         }
 
         // Debug bounds for first few nodes
@@ -687,7 +711,139 @@ export class Potree2Loader {
             console.log(`🧹 Cleaned up ${toRemove.length} nodes`);
         }
     }
-}
+
+    /**
+     * Checks if a 3D point (local to node) falls into any historical 2D selection region.
+     */
+    _isPointInSelectionHistory(localVector, node) {
+        // Use the root transform matrix
+        const worldMatrix = this.rootTransform.getWorldMatrix();
+
+        for (const sel of this.selectionHistory) {
+            // Use the camera state stored at the time of selection
+            const projection = BABYLON.Vector3.Project(
+                localVector,
+                worldMatrix,
+                sel.transformMatrix,
+                sel.viewport
+            );
+
+            if (sel.type === "rect") {
+                if (projection.x >= sel.area.x && projection.x <= sel.area.x + sel.area.width &&
+                    projection.y >= sel.area.y && projection.y <= sel.area.y + sel.area.height) {
+                    return true;
+                }
+            } else if (sel.type === "lasso") {
+                if (this._isPointInPoly(sel.area, [projection.x, projection.y])) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    _isPointInPoly(poly, pt) {
+        const x = pt[0], y = pt[1];
+        let inside = false;
+        for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+            const xi = poly[i][0], yi = poly[i][1];
+            const xj = poly[j][0], yj = poly[j][1];
+            const intersect = ((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+            if (intersect) inside = !inside;
+        }
+        return inside;
+    }
+
+    /**
+     * Store a selection region and apply it to all currently loaded nodes.
+     * FIX: was previously nested inside applySelection; moved to class level.
+     * FIX: added missing `return totalSelected`.
+     */
+    applySelection(type, area) {
+        // Capture current camera state
+        if (!this.scene.activeCamera) return 0;
+
+        const camera = this.scene.activeCamera;
+        const engine = this.scene.getEngine();
+        const viewport = camera.viewport.toGlobal(engine.getRenderWidth(), engine.getRenderHeight());
+        const transformMatrix = this.scene.getTransformMatrix().clone();
+
+        this.selectionHistory.push({
+            type,
+            area,
+            viewport,
+            transformMatrix
+        });
+
+        console.log(`📌 Selection added to history. Total regions: ${this.selectionHistory.length}`);
+
+        let totalSelected = 0;
+
+        // Re-use the transform/viewport we just captured for consistency
+        this.loadedNodes.forEach((mesh) => {
+            const colors = mesh.getVerticesData(BABYLON.VertexBuffer.ColorKind);
+            const positions = mesh.getVerticesData(BABYLON.VertexBuffer.PositionKind);
+            if (!colors || !positions) return;
+
+            let modified = false;
+
+            // The mesh IS the node representation. Its world matrix includes rootTransform.
+            const meshWorldMatrix = mesh.getWorldMatrix();
+
+            for (let i = 0; i < positions.length / 3; i++) {
+                const vector = new BABYLON.Vector3(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
+
+                // Project using the captured state (NOT current camera state)
+                const projection = BABYLON.Vector3.Project(
+                    vector,
+                    meshWorldMatrix,
+                    transformMatrix,
+                    viewport
+                );
+
+                let isInside = false;
+                if (type === "rect") {
+                    isInside = (projection.x >= area.x && projection.x <= area.x + area.width &&
+                        projection.y >= area.y && projection.y <= area.y + area.height);
+                } else if (type === "lasso") {
+                    isInside = this._isPointInPoly(area, [projection.x, projection.y]);
+                }
+
+                if (isInside) {
+                    colors[i * 4 + 0] = 1.0;
+                    colors[i * 4 + 1] = 0.0;
+                    colors[i * 4 + 2] = 0.0;
+                    modified = true;
+                    totalSelected++;
+                }
+            }
+            if (modified) {
+                mesh.setVerticesData(BABYLON.VertexBuffer.ColorKind, colors);
+            }
+        });
+
+        // FIX: missing return statement
+        return totalSelected;
+    }
+
+    /**
+     * Clear all selections and reset colors.
+     * FIX: was incorrectly nested inside applySelection(); moved to class level.
+     */
+    clearSelection() {
+        this.selectionHistory = [];
+        this.loadedNodes.forEach((mesh) => {
+            if (mesh.metadata && mesh.metadata.originalColors) {
+                // Copy original colors to a new array to avoid reference issues
+                const originalColors = mesh.metadata.originalColors;
+                mesh.setVerticesData(BABYLON.VertexBuffer.ColorKind, new Float32Array(originalColors));
+            }
+        });
+        console.log("🧹 Selection cleared.");
+    }
+
+} // END class Potree2Loader
+
 
 // =====================================================================
 // PUBLIC HELPER FUNCTIONS
