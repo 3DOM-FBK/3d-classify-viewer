@@ -7,7 +7,7 @@ ENV PYTHONUNBUFFERED=1
 ENV LD_LIBRARY_PATH=/app/open3d-devel-linux-x86_64-cxx11-abi-0.19.0/lib:$LD_LIBRARY_PATH
 
 # Set work directory
-WORKDIR /app
+# WORKDIR /app
 
 # Install system dependencies
 RUN apt-get update && \
