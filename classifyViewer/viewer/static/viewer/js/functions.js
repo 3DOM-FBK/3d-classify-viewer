@@ -1,5 +1,3 @@
-import { scene, sceneObjects } from "./main.js";
-
 import {
     loadPotree2PointCloud,
     getPotree2Loader
@@ -102,6 +100,66 @@ export {
     showDownloadModal,
     showLoadModal
 };
+
+// =====================================================================
+// CLASS REGISTRY
+// =====================================================================
+
+/**
+ * Global registry of classification classes.
+ * Map: classId (int) -> { name (string), color (hex string) }
+ */
+export const classRegistry = new Map();
+let _classIdCounter = 1;
+
+/**
+ * Converts a hex color string (e.g. "#ef4444") to [r, g, b] floats in [0,1].
+ */
+function hexToRgbFloat(hex) {
+    const h = hex.replace('#', '');
+    return [
+        parseInt(h.slice(0, 2), 16) / 255,
+        parseInt(h.slice(2, 4), 16) / 255,
+        parseInt(h.slice(4, 6), 16) / 255
+    ];
+}
+
+/**
+ * Assigns a class (id + color) to the currently selected points.
+ *
+ * Strategy:
+ *  1. If the Potree2Loader exposes getSelectedPointsInfo(), use that for
+ *     accurate per-point index tracking.
+ *  2. Fallback: scan vertex colors for the red selection highlight [1, 0, 0]
+ *     and tag those points.
+ *
+ * Class data is persisted in mesh.metadata:
+ *   - classIds   : Int32Array   — classId per point (0 = unclassified)
+ *   - classColors: Float32Array — RGBA per point, set when classId > 0
+ */
+export function applyClassToSelection(scene, classId, hexColor) {
+    const [r, g, b] = hexToRgbFloat(hexColor);
+    const loader = getPotree2Loader(scene);
+
+    if (!loader) {
+        console.warn("⚠️ Potree2 loader not found. Make sure a point cloud is loaded.");
+        return;
+    }
+
+    if (!loader.loadedNodes || loader.loadedNodes.size === 0) {
+        console.warn("⚠️ No nodes loaded yet.");
+        return;
+    }
+
+    // Delega al loader: ha accesso diretto a loadedNodes e alla classificationMap
+    const total = loader.applyClassToLoadedNodes(classId, r, g, b);
+
+    if (total > 0) {
+        console.log(`✅ Class ${classId} "${classRegistry.get(classId)?.name}" (${hexColor}) assigned to ${total.toLocaleString()} points.`);
+    } else {
+        console.warn("⚠️ No selected (red-highlighted) points found. Select points first, then assign a class.");
+    }
+}
 
 // BUTTONS
 export function createButton(name, id, where = document.body) {
@@ -750,7 +808,16 @@ export function createSlider(label, min, max, initial, step, parent) {
     return slider;
 }
 
-export function createOutlineItem(name, iconSrc, parent) {
+/**
+ * @param {string} name
+ * @param {string} iconSrc
+ * @param {HTMLElement} parent
+ * @param {Function|null} onVisibilityChange  Optional callback(visible: boolean).
+ *   When provided it is called instead of any built-in mesh toggling, giving the
+ *   caller full control (e.g. loader.setSegmentVisible).
+ *   When null the item is inert until setVisibilityCallback() is called later.
+ */
+export function createOutlineItem(name, iconSrc, parent, onVisibilityChange = null) {
     const row = document.createElement('div');
     row.classList.add('outline-item');
 
@@ -782,23 +849,39 @@ export function createOutlineItem(name, iconSrc, parent) {
     visibilityBtn.appendChild(visibilityIcon);
 
     let isVisible = true;
+    let _visibilityCallback = onVisibilityChange;
+
     visibilityBtn.addEventListener('click', () => {
         isVisible = !isVisible;
         visibilityIcon.src = isVisible ? `${iconBase}visibility-on.png` : `${iconBase}visibility-off.png`;
         visibilityBtn.classList.toggle('off', !isVisible);
-        // Logic to hide the real mesh in BabylonJS will be added here
+        if (_visibilityCallback) _visibilityCallback(isVisible);
     });
 
     row.appendChild(mainInfo);
     row.appendChild(visibilityBtn);
     parent.appendChild(row);
 
-    return { nameInput, visibilityBtn };
+    return {
+        nameInput,
+        visibilityBtn,
+        row,
+        /**
+         * Bind or replace the visibility callback.
+         * Also resets the visual state to "visible".
+         */
+        setVisibilityCallback(cb) {
+            _visibilityCallback = cb;
+            isVisible = true;
+            visibilityIcon.src = `${iconBase}visibility-on.png`;
+            visibilityBtn.classList.remove('off');
+        }
+    };
 }
 
 export function createClassItem(name, iconSrc, parent) {
     const row = document.createElement('div');
-    row.classList.add('outline-item', 'class-item'); // Reuse part of the outline style
+    row.classList.add('outline-item', 'class-item');
 
     const mainInfo = document.createElement('div');
     mainInfo.classList.add('outline-main-info');
@@ -818,15 +901,24 @@ export function createClassItem(name, iconSrc, parent) {
 
     row.appendChild(mainInfo);
 
+    // --- Register this class in the global registry ---
+    const classId = _classIdCounter++;
+    const defaultColors = ["#ef4444", "#3b82f6", "#10b981", "#f59e0b", "#8b5cf6", "#ec4899"];
+    let currentColor = defaultColors[Math.floor(Math.random() * defaultColors.length)];
+    classRegistry.set(classId, { name, color: currentColor });
+
+    // Keep registry in sync when name is edited
+    nameInput.addEventListener('change', () => {
+        const entry = classRegistry.get(classId);
+        if (entry) entry.name = nameInput.value;
+    });
+
     // Color Selector
     const colorWrapper = document.createElement('div');
     colorWrapper.classList.add('class-color-wrapper');
 
     const colorDot = document.createElement('div');
     colorDot.classList.add('class-color-dot');
-
-    const defaultColors = ["#ef4444", "#3b82f6", "#10b981", "#f59e0b", "#8b5cf6", "#ec4899"];
-    let currentColor = defaultColors[Math.floor(Math.random() * defaultColors.length)];
     colorDot.style.backgroundColor = currentColor;
 
     colorDot.addEventListener('click', (e) => {
@@ -834,7 +926,15 @@ export function createClassItem(name, iconSrc, parent) {
         showColorPicker(colorDot, currentColor, (newColor) => {
             currentColor = newColor;
             colorDot.style.backgroundColor = newColor;
-            // Future: update classification colors in the scene
+            // Keep registry in sync
+            const entry = classRegistry.get(classId);
+            if (entry) entry.color = newColor;
+
+            // Update points in the scene if loader is available
+            const sceneRef = window.__babylonScene;
+            if (sceneRef && sceneRef.potree2Loader) {
+                sceneRef.potree2Loader.updateClassColor(classId, newColor);
+            }
         });
     });
 
@@ -843,7 +943,7 @@ export function createClassItem(name, iconSrc, parent) {
 
     parent.appendChild(row);
 
-    // Right-click event for context menu
+    // Right-click context menu
     row.addEventListener('contextmenu', (e) => {
         e.preventDefault();
         const iconBase = "static/viewer/icons/";
@@ -852,9 +952,14 @@ export function createClassItem(name, iconSrc, parent) {
                 label: `Assign "${nameInput.value}" to selection`,
                 icon: `${iconBase}cursor.png`,
                 action: () => {
-                    console.log(`Class assignment: ${nameInput.value}`);
-                    // Logic to change the color/ID of selected points will be added here
-                    alert(`Class "${nameInput.value}" assigned to selected points.`);
+                    // Import scene from main.js at call-time to avoid circular deps
+                    const sceneRef = window.__babylonScene;
+                    if (!sceneRef) {
+                        console.warn("⚠️ Scene not available. Make sure window.__babylonScene is set in main.js.");
+                        return;
+                    }
+                    applyClassToSelection(sceneRef, classId, currentColor);
+                    console.log(`✅ Class "${nameInput.value}" (id:${classId}, ${currentColor}) assigned to selection.`);
                 }
             },
             {
@@ -862,6 +967,7 @@ export function createClassItem(name, iconSrc, parent) {
                 icon: `${iconBase}trash.png`,
                 action: () => {
                     if (confirm(`Are you sure you want to delete the class "${nameInput.value}"?`)) {
+                        classRegistry.delete(classId);
                         row.remove();
                     }
                 }
@@ -1246,10 +1352,12 @@ function showLoadModal() {
                 uploadBtn.disabled = true;
 
                 try {
+                    const scene = window.__babylonScene;
+                    const sceneObjects = window.__sceneObjects;
+
                     // Cleanup previous point cloud if it exists
-                    if (sceneObjects.currentPointCloud) {
+                    if (sceneObjects && sceneObjects.currentPointCloud) {
                         console.log("♻️ Disposing previous point cloud...");
-                        // If it's a Potree2 node, it has a dispose method
                         if (typeof sceneObjects.currentPointCloud.dispose === 'function') {
                             sceneObjects.currentPointCloud.dispose();
                         }
@@ -1262,10 +1370,16 @@ function showLoadModal() {
 
                     if (pc) {
                         // Store in global state
-                        sceneObjects.currentPointCloud = pc;
+                        if (sceneObjects) sceneObjects.currentPointCloud = pc;
 
                         // Frame camera on the point cloud
                         frameCameraOnMesh(scene.activeCamera || scene.cameras[0], pc);
+
+                        // Register in Outline panel (label = last segment of the path)
+                        const pcLabel = pcPath.split("/").filter(Boolean).pop() || "Point Cloud";
+                        if (typeof window.__registerPointCloudInOutline === 'function') {
+                            window.__registerPointCloudInOutline(pc, pcLabel);
+                        }
 
                         console.log("✅ Point cloud loaded successfully from:", pcPath);
                     }
@@ -1288,6 +1402,14 @@ function showLoadModal() {
  * Select points in a 2D area (lasso or rectangle) and highlights them in red.
  * Projects 3D points to screen space to check if they fall within the selection area.
  */
+export function deselectPoints(scene, type, area) {
+    const loader = getPotree2Loader(scene);
+    if (loader && loader.removeSelection) {
+        return loader.removeSelection(type, area);
+    }
+    return 0;
+}
+
 export function selectPoints(scene, pointCloudRoot, type, area) {
     if (!pointCloudRoot) {
         console.warn("No point cloud loaded for selection.");

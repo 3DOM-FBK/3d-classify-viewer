@@ -12,7 +12,10 @@ import {
     showDownloadModal,
     showLoadModal,
     selectPoints,
-    clearSelection
+    deselectPoints,
+    clearSelection,
+    applyClassToSelection,
+    classRegistry
 } from "./functions.js";
 
 // --- UI Elements ---
@@ -102,14 +105,14 @@ function initViewMenu() {
 }
 
 // --- Color Menu Logic ---
-let currentColorMode = "color"; // "color" or "classification"
+let currentColorMode = "classification"; // default: Classification View
 
 function initColorMenu() {
     if (!colorMenu) return;
 
     const btn = document.createElement('button');
     btn.classList.add('dropdown-btn');
-    btn.textContent = "Color View";
+    btn.textContent = "Classification View"; // label iniziale coerente col default
     colorMenu.appendChild(btn);
 
     const dropdown = document.createElement('div');
@@ -149,53 +152,70 @@ document.addEventListener('click', closeAllDropdowns);
 
 function switchColorMode(mode) {
     currentColorMode = mode;
-    const root = sceneObjects.currentPointCloud;
-    if (!root) return;
 
-    const classColors = [
-        [1, 0, 0],    // Red
-        [0.1, 0.8, 0.2],  // Green
-        [0.2, 0.4, 1],    // Blue
-        [1, 0.9, 0.1],    // Yellow
-        [0.8, 0.2, 1]     // Magenta
-    ];
+    // Logica condivisa per ogni mesh:
+    // - "color":          originalColors per tutti i punti
+    // - "classification": originalColors per i punti non classificati,
+    //                     colore classe per i punti classificati
+    function applyModeToMesh(mesh) {
+        const colors = mesh.getVerticesData(BABYLON.VertexBuffer.ColorKind);
+        if (!colors) return;
 
-    // Se è il nuovo sistema a cluster (TransformNode o gruppi di mesh)
-    if (root.getChildMeshes) {
-        root.getChildMeshes().forEach((mesh, clusterIdx) => {
-            const colors = mesh.getVerticesData(BABYLON.VertexBuffer.ColorKind);
-            if (!colors) return;
+        const originalColors = mesh.metadata?.originalColors;
+        const classIds = mesh.metadata?.classIds;
+        const classColors = mesh.metadata?.classColors;
+        const numPoints = colors.length / 4;
 
-            const originalColors = mesh.metadata?.originalColors;
+        for (let i = 0; i < numPoints; i++) {
+            const hasClass = classIds && classIds[i] > 0 && classColors;
 
-            for (let i = 0; i < colors.length / 4; i++) {
-                if (mode === "color" && originalColors) {
+            if (mode === "classification" && hasClass) {
+                // Punto classificato → colore della classe
+                colors[i * 4] = classColors[i * 4];
+                colors[i * 4 + 1] = classColors[i * 4 + 1];
+                colors[i * 4 + 2] = classColors[i * 4 + 2];
+                colors[i * 4 + 3] = 1.0;
+            } else {
+                // Color View (qualsiasi punto) oppure Classification View + punto non classificato
+                // → sempre il colore originale della nuvola
+                if (originalColors) {
                     colors[i * 4] = originalColors[i * 4];
                     colors[i * 4 + 1] = originalColors[i * 4 + 1];
                     colors[i * 4 + 2] = originalColors[i * 4 + 2];
                     colors[i * 4 + 3] = originalColors[i * 4 + 3];
-                } else {
-                    // Mock classification: different color pattern per cluster or per point
-                    const classId = Math.floor((i + clusterIdx * 10) % 5);
-                    colors[i * 4] = classColors[classId][0];
-                    colors[i * 4 + 1] = classColors[classId][1];
-                    colors[i * 4 + 2] = classColors[classId][2];
-                    colors[i * 4 + 3] = 1.0;
                 }
             }
-            mesh.setVerticesData(BABYLON.VertexBuffer.ColorKind, colors);
-        });
+        }
+        mesh.setVerticesData(BABYLON.VertexBuffer.ColorKind, colors);
     }
-    // Caso PCS (vecchio sistema, mantenuto per compatibilità)
+
+    // Potree2: il loader gestisce internamente l'aggiornamento dei vertex colors
+    // per tutti i nodi (visibili e futuri) tramite _applyColorModeToMesh
+    const p2loader = scene.potree2Loader;
+    if (p2loader) {
+        p2loader.setColorMode(mode);
+        return;
+    }
+
+    // Fallback: TransformNode con getChildMeshes (sistemi non-Potree2)
+    const root = sceneObjects.currentPointCloud;
+    if (!root) return;
+
+    if (root.getChildMeshes) {
+        root.getChildMeshes().forEach(applyModeToMesh);
+    }
+    // Legacy PCS system
     else if (root._pcs) {
         const pcsSystem = root._pcs;
         pcsSystem.updateParticle = (particle) => {
             if (mode === "color") {
-                particle.color.copyFrom(particle.originalColor || particle.color);
+                if (particle.originalColor) particle.color.copyFrom(particle.originalColor);
             } else {
-                const classId = Math.floor(particle.idx % 5);
-                const c = classColors[classId];
-                particle.color.set(c[0], c[1], c[2], 1.0);
+                if (particle.classColor) {
+                    particle.color.set(particle.classColor[0], particle.classColor[1], particle.classColor[2], 1.0);
+                } else {
+                    particle.color.set(0.45, 0.45, 0.45, 1.0);
+                }
             }
             return particle;
         };
@@ -267,8 +287,9 @@ function initToolbar() {
             btn.classList.add('active');
             activeTool = `tool-${i}`;
 
-            // Disable camera control if selection or cut is active
-            if (activeTool === "tool-2" || activeTool === "tool-3" || activeTool === "tool-4") {
+            // Disable camera control only for drawing tools (2 = rect, 3 = lasso)
+            // tool-4 (Cut) is an instant action, not a drawing mode
+            if (activeTool === "tool-2" || activeTool === "tool-3") {
                 camera.detachControl(canvas);
             } else {
                 camera.attachControl(canvas, true);
@@ -308,13 +329,25 @@ createClassItem("Ground", `${iconBase}cluster.png`, classesContent);
 const outlineSection = createAccordionSection("Outline", "sidebar-left-content");
 const outlineContent = outlineSection.content;
 
-const sceneMeshHeader = document.createElement('div');
-sceneMeshHeader.classList.add('property-row');
-sceneMeshHeader.innerHTML = `<span class="property-label">Scene Mesh:</span>`;
-outlineContent.appendChild(sceneMeshHeader);
+// Single persistent outline item for the main point cloud (segment 0)
+const outlineItem = createOutlineItem("Point Cloud", `${iconBase}modeling.png`, outlineContent, null);
 
-createOutlineItem("Object.001", `${iconBase}modeling.png`, outlineContent);
-createOutlineItem("Object.002", `${iconBase}modeling.png`, outlineContent);
+/**
+ * Called after a point cloud is successfully loaded.
+ * Binds the outline item to segment 0 (main cloud) of the Potree2 loader.
+ * @param {BABYLON.TransformNode} pc  - The loaded point cloud root node (unused now but kept for API compat).
+ * @param {string} [label]            - Display name.
+ */
+export function registerPointCloudInOutline(pc, label = "Point Cloud") {
+    outlineItem.nameInput.value = label;
+    outlineItem.setVisibilityCallback((visible) => {
+        const loader = window.__babylonScene?.potree2Loader;
+        if (loader) loader.setSegmentVisible(0, visible);
+    });
+}
+
+// Expose via window so functions.js can call it without a circular import
+window.__registerPointCloudInOutline = registerPointCloudInOutline;
 
 // --- Sidebar Right: State & Objects ---
 export const sceneObjects = {
@@ -401,6 +434,9 @@ const canvas = document.getElementById("renderCanvas");
 const engine = new BABYLON.Engine(canvas, true);
 
 export const scene = new BABYLON.Scene(engine);
+// Expose scene globally so functions.js can access it without circular imports
+window.__babylonScene = scene;
+window.__sceneObjects = sceneObjects;
 const style = getComputedStyle(document.documentElement);
 const bgColor = style.getPropertyValue('--bg-dark').trim() || "#121214";
 const gridLinesColor = style.getPropertyValue('--grid-lines').trim() || "#8d8d99";
@@ -436,12 +472,21 @@ scene.onBeforeRenderObservable.add(() => {
 });
 
 // --- Tools Logic (Lasso & Rect) using Babylon Observation ---
+// isCtrlDeselect: true quando il disegno è iniziato con CTRL premuto → modalità deselezione
+let isCtrlDeselect = false;
+
 scene.onPointerObservable.add((pointerInfo) => {
     if (activeTool !== "tool-2" && activeTool !== "tool-3") return;
 
     switch (pointerInfo.type) {
         case BABYLON.PointerEventTypes.POINTERDOWN:
             if (pointerInfo.event.button === 0) { // Left click
+                isCtrlDeselect = pointerInfo.event.ctrlKey;
+                // Stile tratteggiato per la deselezione, pieno per la selezione
+                const selStroke = isCtrlDeselect ? "5,3" : "none";
+                lassoPath.setAttribute("stroke-dasharray", selStroke);
+                rectShape.setAttribute("stroke-dasharray", selStroke);
+
                 if (activeTool === "tool-2") {
                     isDrawingRect = true;
                     rectStartPoint = { x: scene.pointerX, y: scene.pointerY };
@@ -473,7 +518,6 @@ scene.onPointerObservable.add((pointerInfo) => {
             if (isDrawingRect) {
                 isDrawingRect = false;
 
-                // Calculate selection rectangle
                 const rect = {
                     x: Math.min(rectStartPoint.x, scene.pointerX),
                     y: Math.min(rectStartPoint.y, scene.pointerY),
@@ -481,8 +525,11 @@ scene.onPointerObservable.add((pointerInfo) => {
                     height: Math.abs(rectStartPoint.y - scene.pointerY)
                 };
 
-                // Perform selection
-                selectPoints(scene, sceneObjects.currentPointCloud, "rect", rect);
+                if (isCtrlDeselect) {
+                    deselectPoints(scene, "rect", rect);
+                } else {
+                    selectPoints(scene, sceneObjects.currentPointCloud, "rect", rect);
+                }
 
                 setTimeout(() => {
                     if (!isDrawingRect) {
@@ -493,8 +540,11 @@ scene.onPointerObservable.add((pointerInfo) => {
             } else if (isDrawingLasso) {
                 isDrawingLasso = false;
 
-                // Perform selection
-                selectPoints(scene, sceneObjects.currentPointCloud, "lasso", lassoPoints);
+                if (isCtrlDeselect) {
+                    deselectPoints(scene, "lasso", lassoPoints);
+                } else {
+                    selectPoints(scene, sceneObjects.currentPointCloud, "lasso", lassoPoints);
+                }
 
                 setTimeout(() => {
                     if (!isDrawingLasso) {
@@ -699,7 +749,13 @@ initColorMenu();
 initToolbar();
 
 // --- Tool Actions ---
-const frameToPCDButton = document.getElementById("tool-4");
+
+// tool-4: Frame to PCD (era tool-4, ma nel toolbar è già mappato come tool-4 con scissor)
+// NOTA: tool-4 è "Cut mode" (scissor), tool-5 è "Frame to PCD"
+// Qui gestiamo entrambi:
+
+// tool-5: Frame to PCD
+const frameToPCDButton = document.getElementById("tool-5");
 if (frameToPCDButton) {
     frameToPCDButton.addEventListener("click", () => {
         if (sceneObjects.currentPointCloud) {
@@ -707,5 +763,49 @@ if (frameToPCDButton) {
         } else {
             console.warn("No point cloud loaded to frame.");
         }
+    });
+}
+
+// --- Outline: cut segment counter ---
+let cutSegmentCounter = 1;
+
+// tool-4: Cut Mode — promuove la selezione corrente in un nuovo segmento
+const cutModeButton = document.getElementById("tool-4");
+if (cutModeButton) {
+    cutModeButton.addEventListener("click", () => {
+        const loader = scene.potree2Loader;
+        if (!loader) {
+            console.warn("No point cloud loaded.");
+            return;
+        }
+        if (!loader.selectionHistory || loader.selectionHistory.length === 0) {
+            console.warn("No active selection. Use rectangle or lasso selection first.");
+            return;
+        }
+
+        const result = loader.cutSelection();
+        if (!result) {
+            console.warn("Cut returned no points.");
+            return;
+        }
+
+        // Crea un nuovo elemento nell'Outline per questo segmento
+        const label = `Segment ${cutSegmentCounter++}`;
+        const segId = result.segmentId;
+
+        createOutlineItem(label, `${iconBase}modeling.png`, outlineContent,
+            (visible) => {
+                const ldr = scene.potree2Loader;
+                if (ldr) ldr.setSegmentVisible(segId, visible);
+            }
+        );
+
+        console.log(`✂️ Cut segment "${label}" (id:${segId}) created with ${result.count.toLocaleString()} points.`);
+
+        // Torna al tool-1 (default) dopo il taglio
+        document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
+        document.getElementById("tool-1").classList.add("active");
+        activeTool = "tool-1";
+        camera.attachControl(canvas, true);
     });
 }
