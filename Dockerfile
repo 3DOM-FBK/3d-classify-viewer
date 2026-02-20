@@ -7,7 +7,7 @@ ENV PYTHONUNBUFFERED=1
 ENV LD_LIBRARY_PATH=/app/open3d-devel-linux-x86_64-cxx11-abi-0.19.0/lib:$LD_LIBRARY_PATH
 
 # Set work directory
-# WORKDIR /app
+WORKDIR /app
 
 # Install system dependencies
 RUN apt-get update && \
@@ -28,7 +28,7 @@ COPY requirements.txt /app/
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the project
-COPY . /app/
+# COPY . /app/
 
 # Download and extract Open3D
 RUN wget https://github.com/isl-org/Open3D/releases/download/v0.19.0/open3d-devel-linux-x86_64-cxx11-abi-0.19.0.tar.xz && \
@@ -42,17 +42,17 @@ RUN mkdir -p /app/tinygltf && \
     wget -q https://raw.githubusercontent.com/nothings/stb/master/stb_image.h -O /app/tinygltf/stb_image.h && \
     wget -q https://raw.githubusercontent.com/nothings/stb/master/stb_image_write.h -O /app/tinygltf/stb_image_write.h
 
-# Build custom tools
-RUN mkdir -p /app/build && \
-    cd /app/build && \
-    cmake \
-    -DOpen3D_DIR=/app/open3d-devel-linux-x86_64-cxx11-abi-0.19.0/lib/cmake/Open3D \
-    -DCMAKE_C_COMPILER=clang \
-    -DCMAKE_CXX_COMPILER=clang++ \
-    -DCMAKE_BUILD_TYPE=Release \
-    .. && \
-    make -j$(nproc) && \
-    cp subsample_pc ply2las mesh2pc /usr/local/bin/
+# # Build custom tools
+# RUN mkdir -p /app/build && \
+#     cd /app/build && \
+#     cmake \
+#     -DOpen3D_DIR=/app/open3d-devel-linux-x86_64-cxx11-abi-0.19.0/lib/cmake/Open3D \
+#     -DCMAKE_C_COMPILER=clang \
+#     -DCMAKE_CXX_COMPILER=clang++ \
+#     -DCMAKE_BUILD_TYPE=Release \
+#     .. && \
+#     make -j$(nproc) && \
+#     cp subsample_pc ply2las mesh2pc /usr/local/bin/
 
 # Expose port (Django)
 EXPOSE 8000
