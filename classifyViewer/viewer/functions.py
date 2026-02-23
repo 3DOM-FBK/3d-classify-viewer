@@ -13,6 +13,7 @@ from .utils_functions.ply2las import main as ply2las
 from .utils_functions.subsample_pc import main as subsampling_pc
 import sys
 import time
+import subprocess
 
 def export_point_cloud(filepath, points, header=None):
     """
@@ -41,21 +42,54 @@ def export_point_cloud(filepath, points, header=None):
             # Converte la riga in stringa separata da spazi
             line = ' '.join(map(str, points[i]))
             f.write(line + '\n')
+def launch_subprocess(command):
+
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True
+    )
+
+    stdout_lines = []
+    for line in process.stdout:
+        print(line, end="")      # print live
+        stdout_lines.append(line)
+
+    process.wait()
+
+    if process.returncode != 0:
+        raise RuntimeError(
+            f"C++ process failed (code {process.returncode})\nSTDERR:\n{process.stderr.read()}"
+        )
+
+    output_file_path = stdout_lines[-1].strip()
+    return output_file_path
 
 def subsampling_point_cloud(file_path, voxel_size=0.002):
     print("\n[FUNCTION] ---- SUBSAMPLING POINT CLOUD -----\n")
     
-    output_filepath = subsampling_pc(file_path=file_path, voxel_size=voxel_size)
+    # TODO modify the path
+    command = ["/webapp/opt/subsample_pc", file_path, str(voxel_size)]
+    output_filepath = launch_subprocess(command)
+    
+    # output_filepath = subsampling_pc(file_path=file_path, voxel_size=voxel_size)
 
     return output_filepath
 
-def mesh_to_point_cloud(mesh_path, num_points=5000000, sampling_method="uniform"):
+def mesh_to_point_cloud(mesh_path, num_points=5000000):
     print("\n[FUNCTION] ---- MESH TO POINT CLOUD -----\n")
-    mesh2pc(mesh_path=mesh_path, num_points=num_points, sampling_method=sampling_method)
+    # TODO modify the path
+    command = ["/webapp/opt/mesh2pc", mesh_path, str(num_points)]
+    output_filepath = launch_subprocess(command)
+    # mesh2pc(mesh_path=mesh_path, num_points=num_points, sampling_method=sampling_method)
 
 def ply_to_las(ply_path, out_path=None):
     print("\n[FUNCTION] ---- PLY TO LAS -----\n")
-    ply2las(ply_path = ply_path, out_path=out_path)
+    # TODO modify the path
+    command = ["/webapp/opt/ply2las", ply_path, out_path]
+    output_filepath = launch_subprocess(command)
+    # ply2las(ply_path = ply_path, out_path=out_path)
 
 def launch_training_RF(data):
     print("\n[FUNCTION] ---- TRAINING RANDOM FOREST -----\n")

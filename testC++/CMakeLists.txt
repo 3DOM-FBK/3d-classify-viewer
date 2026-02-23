@@ -30,11 +30,18 @@ set_target_properties(subsample_pc PROPERTIES
 
 # ---- mesh2pc ----
 add_executable(mesh2pc mesh2pc.cpp)
-target_link_libraries(mesh2pc
-    Open3D::Open3D
-    CGAL::CGAL
-    OpenMP::OpenMP_CXX
+target_include_directories(mesh2pc
+    PRIVATE
+        ${TINYGLTF_INCLUDE_DIR}
 )
+
+target_link_libraries(mesh2pc
+    PRIVATE
+        Open3D::Open3D
+        CGAL::CGAL
+        OpenMP::OpenMP_CXX
+)
+
 target_compile_options(mesh2pc PRIVATE -O3 -march=native)
 set_target_properties(mesh2pc PROPERTIES
     BUILD_WITH_INSTALL_RPATH TRUE

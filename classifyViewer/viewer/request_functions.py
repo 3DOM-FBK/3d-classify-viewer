@@ -54,7 +54,7 @@ def subsample_pc(request):
             data = json.loads(request.body)
 
             file_path = data['file_path']
-            voxel_size = data['voxel_size']
+            voxel_size = data['voxel_size'] 
 
             output_file_path = subsampling_point_cloud(file_path, voxel_size)
             print("\n")
@@ -76,9 +76,9 @@ def mesh2pc(request):
 
             file_path = data['file_path']
             num_points = data['num_points']
-            sampling_method = data['sampling_method']
+            # sampling_method = data['sampling_method']
 
-            mesh_to_point_cloud(file_path, num_points=num_points, sampling_method=sampling_method)
+            mesh_to_point_cloud(file_path, num_points=num_points)
             print("\n")
 
             return JsonResponse({"status": 'success', "message": "Mesh to Point Cloud completed."})

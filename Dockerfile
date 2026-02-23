@@ -43,16 +43,17 @@ RUN mkdir -p /app/tinygltf && \
     wget -q https://raw.githubusercontent.com/nothings/stb/master/stb_image_write.h -O /app/tinygltf/stb_image_write.h
 
 # # Build custom tools
+# Build already done so we can skip this step.  
 # RUN mkdir -p /app/build && \
 #     cd /app/build && \
 #     cmake \
 #     -DOpen3D_DIR=/app/open3d-devel-linux-x86_64-cxx11-abi-0.19.0/lib/cmake/Open3D \
+#     -DTINYGLTF_INCLUDE_DIR=/app/tinygltf \
 #     -DCMAKE_C_COMPILER=clang \
 #     -DCMAKE_CXX_COMPILER=clang++ \
 #     -DCMAKE_BUILD_TYPE=Release \
 #     .. && \
-#     make -j$(nproc) && \
-#     cp subsample_pc ply2las mesh2pc /usr/local/bin/
+#     make -j$(nproc)
 
 # Expose port (Django)
 EXPOSE 8000
