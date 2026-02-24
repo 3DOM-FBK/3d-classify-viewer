@@ -21,6 +21,7 @@ template<typename T>
 void write_val(std::ofstream& f, T val) {
     f.write(reinterpret_cast<const char*>(&val), sizeof(T));
 }
+
 void write_str(std::ofstream& f, const char* s, int len) {
     std::vector<char> buf(len, 0);
     int slen = (int)strlen(s);
@@ -28,10 +29,24 @@ void write_str(std::ofstream& f, const char* s, int len) {
     f.write(buf.data(), len);
 }
 
+// Per le normali: tipo 9 = float
 void write_extra_bytes_record(std::ofstream& f, const char* name, const char* description) {
     write_val<uint8_t>(f, 0);
     write_val<uint8_t>(f, 0);
-    write_val<uint8_t>(f, 9);
+    write_val<uint8_t>(f, 9);   // float
+    write_val<uint8_t>(f, 0);
+    write_str(f, name, 32);
+    for (int i = 0; i < 4;  i++) write_val<uint8_t>(f, 0);
+    for (int i = 0; i < 72; i++) write_val<uint8_t>(f, 0);
+    for (int i = 0; i < 48; i++) write_val<uint8_t>(f, 0);
+    write_str(f, description, 32);
+}
+
+// Per POINT_ID: tipo 6 = uint32
+void write_extra_bytes_record_uint32(std::ofstream& f, const char* name, const char* description) {
+    write_val<uint8_t>(f, 0);
+    write_val<uint8_t>(f, 0);
+    write_val<uint8_t>(f, 6);   // uint32
     write_val<uint8_t>(f, 0);
     write_str(f, name, 32);
     for (int i = 0; i < 4;  i++) write_val<uint8_t>(f, 0);
@@ -61,13 +76,22 @@ void write_las(const std::string& out_file,
     }
 
     double scale_xyz = 0.0001;
-    uint32_t extra_bytes_payload = has_normals ? 3 * 192 : 0;
-    uint16_t header_size = 227;
-    uint32_t vlr_count = has_normals ? 1 : 0;
-    uint32_t vlr_total = has_normals ? (54 + extra_bytes_payload) : 0;
-    uint32_t offset_to_data = header_size + vlr_total;
-    uint16_t point_data_length = has_normals ? 46 : 34;
 
+    // Extra bytes: normals (se presenti) + POINT_ID (sempre)
+    uint32_t extra_bytes_payload = 0;
+    if (has_normals) extra_bytes_payload += 3 * 192; // normal_x, normal_y, normal_z
+    extra_bytes_payload += 192;                      // POINT_ID
+
+    uint16_t header_size = 227;
+    uint32_t vlr_count   = 1;                        // sempre 1 VLR
+    uint32_t vlr_total   = 54 + extra_bytes_payload; // 54 = header VLR fisso
+    uint32_t offset_to_data = header_size + vlr_total;
+
+    uint16_t point_data_length = 34;                 // base format 3
+    if (has_normals) point_data_length += 12;        // 3x float normals
+    point_data_length += 4;                          // uint32 POINT_ID
+
+    // --- LAS Header ---
     write_str(f, "LASF", 4);
     write_val<uint16_t>(f, 0);
     write_val<uint16_t>(f, 0);
@@ -99,17 +123,21 @@ void write_las(const std::string& out_file,
     write_val<double>(f, max_y); write_val<double>(f, min_y);
     write_val<double>(f, max_z); write_val<double>(f, min_z);
 
+    // --- VLR unico: normals (se presenti) + POINT_ID ---
+    write_val<uint16_t>(f, 0);
+    write_str(f, "LASF_Spec", 16);
+    write_val<uint16_t>(f, 4);
+    write_val<uint16_t>(f, (uint16_t)extra_bytes_payload);
+    write_str(f, "Extra Bytes Record", 32);
+
     if (has_normals) {
-        write_val<uint16_t>(f, 0);
-        write_str(f, "LASF_Spec", 16);
-        write_val<uint16_t>(f, 4);
-        write_val<uint16_t>(f, (uint16_t)extra_bytes_payload);
-        write_str(f, "Normal vectors", 32);
         write_extra_bytes_record(f, "normal_x", "Normal X");
         write_extra_bytes_record(f, "normal_y", "Normal Y");
         write_extra_bytes_record(f, "normal_z", "Normal Z");
     }
+    write_extra_bytes_record_uint32(f, "POINT_ID", "Point ID");
 
+    // --- Point records ---
     for (uint32_t i = 0; i < n; ++i) {
         int32_t ix = (int32_t)std::round(points[i][0] / scale_xyz);
         int32_t iy = (int32_t)std::round(points[i][1] / scale_xyz);
@@ -117,13 +145,13 @@ void write_las(const std::string& out_file,
         write_val<int32_t>(f, ix);
         write_val<int32_t>(f, iy);
         write_val<int32_t>(f, iz);
-        write_val<uint16_t>(f, 0);
-        write_val<uint8_t>(f, 0);
-        write_val<uint8_t>(f, 0);
-        write_val<uint8_t>(f, 0);
-        write_val<uint8_t>(f, 0);
-        write_val<uint16_t>(f, 0);
-        write_val<double>(f, 0.0);
+        write_val<uint16_t>(f, 0);  // intensity
+        write_val<uint8_t>(f, 0);   // return bits
+        write_val<uint8_t>(f, 0);   // classification
+        write_val<uint8_t>(f, 0);   // scan angle
+        write_val<uint8_t>(f, 0);   // user data
+        write_val<uint16_t>(f, 0);  // point source ID
+        write_val<double>(f, 0.0);  // GPS time
         if (has_colors) {
             write_val<uint16_t>(f, (uint16_t)(std::clamp(colors[i][0], 0.0, 1.0) * 65535));
             write_val<uint16_t>(f, (uint16_t)(std::clamp(colors[i][1], 0.0, 1.0) * 65535));
@@ -138,10 +166,10 @@ void write_las(const std::string& out_file,
             write_val<float>(f, (float)normals[i][1]);
             write_val<float>(f, (float)normals[i][2]);
         }
+        write_val<uint32_t>(f, i);  // POINT_ID
     }
 
     f.close();
-    // std::cout << "LAS written: " << out_file << std::endl;
 }
 
 int main(int argc, char* argv[]) {
@@ -170,22 +198,13 @@ int main(int argc, char* argv[]) {
     bool has_colors  = pcd->HasColors();
     bool has_normals = false;
 
-    // Normali veloci come mesh2pc
-    auto t = now_t();
     std::cout << "Computing normals..." << std::endl;
     pcd->EstimateNormals(open3d::geometry::KDTreeSearchParamHybrid(0.02, 30));
-    pcd->OrientNormalsTowardsCameraLocation(); 
+    pcd->OrientNormalsTowardsCameraLocation();
     has_normals = pcd->HasNormals();
-    // std::cout << "  Normals: " << elapsed(t) << "s" << std::endl;
 
-    // std::cout << " - Points: "  << pcd->points_.size() << std::endl;
-    // std::cout << " - Colors: "  << (has_colors  ? "yes" : "no") << std::endl;
-    // std::cout << " - Normals: " << (has_normals ? "yes" : "no") << std::endl;
-
-    t = now_t();
     write_las(out_path, pcd->points_, pcd->colors_, pcd->normals_,
               has_colors, has_normals);
-    // std::cout << "  Write LAS: " << elapsed(t) << "s" << std::endl;
 
     double total = elapsed(global_start);
     int mn = (int)(total / 60);
