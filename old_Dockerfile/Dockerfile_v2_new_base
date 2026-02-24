@@ -5,7 +5,7 @@ FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV DEBIAN_FRONTEND=noninteractive
-ENV LD_LIBRARY_PATH=/app/open3d-devel-linux-x86_64-cxx11-abi-0.19.0/lib:/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
+ENV LD_LIBRARY_PATH=/app/open3d-devel-linux-x86_64-cxx11-abi-0.19.0/lib:$LD_LIBRARY_PATH
 
 # Set work directory
 WORKDIR /app
@@ -17,13 +17,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     clang libc++-dev libc++abi-dev \
     libpq-dev \
     libx11-dev libgl1-mesa-dev libglu1-mesa-dev freeglut3-dev \
-    cmake wget curl unzip \
+    cmake wget curl \
     libgomp1 libomp-dev \
     libcgal-dev libboost-all-dev \
     software-properties-common \
+    # Python 3.10
     python3.10 python3.10-dev python3-pip python3.10-venv \
+    # Runtime libs
     libgl1 libglib2.0-0 libsm6 libxrender1 libxext6 \
-    libstdc++6 libgcc-s1 liblaszip-dev \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -60,13 +61,6 @@ RUN mkdir -p /app/tinygltf && \
     wget -q https://raw.githubusercontent.com/nothings/stb/master/stb_image.h -O /app/tinygltf/stb_image.h && \
     wget -q https://raw.githubusercontent.com/nothings/stb/master/stb_image_write.h -O /app/tinygltf/stb_image_write.h
 
-# Potree Libraries
-RUN wget https://github.com/potree/PotreeConverter/releases/download/2.1.1/PotreeConverter_2.1.1_x64_linux.zip
-RUN unzip PotreeConverter_2.1.1_x64_linux.zip
-RUN rm PotreeConverter_2.1.1_x64_linux.zip
-
-RUN chmod +x PotreeConverter_linux_x64/PotreeConverter
-
 # # Build custom tools
 # Build already done so we can skip this step.  
 # RUN mkdir -p /app/build && \
@@ -82,3 +76,6 @@ RUN chmod +x PotreeConverter_linux_x64/PotreeConverter
 
 # Expose port (Django)
 EXPOSE 8000
+
+# Default command (modifica 'my_project' con il nome reale)
+# CMD ["gunicorn", "--bind", "0.0.0.0:8000", "my_project.wsgi:application"]

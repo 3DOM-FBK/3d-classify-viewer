@@ -12,3 +12,6 @@ pygltflib
 pathlib
 rtree
 laspy
+cupy-cuda11x
+--extra-index-url https://pypi.anaconda.org/rapidsai-wheels-nightly/simple
+cuml-cu11
