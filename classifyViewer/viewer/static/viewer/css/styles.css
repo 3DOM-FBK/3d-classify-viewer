@@ -1264,3 +1264,133 @@ textarea,
     height: 100%;
     z-index: 1999;
 }
+
+/* Command Guide Overlay */
+.command-guide {
+    position: absolute;
+    bottom: 50px;
+    right: 20px;
+    background-color: rgba(30, 30, 32, 0.7);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 10px;
+    padding: 12px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    z-index: 1005;
+    pointer-events: none;
+    opacity: 0;
+    transform: translateY(10px);
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.command-guide.visible {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.command-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 5px;
+    margin-top: 5px;
+}
+
+.command-key-container {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.command-key {
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    min-width: 24px;
+    text-align: center;
+    box-shadow: 0 2px 0 rgba(0, 0, 0, 0.2);
+}
+
+.mouse-icon {
+    width: 16px;
+    height: 22px;
+    border: 2px solid rgba(255, 255, 255, 0.4);
+    border-radius: 6px;
+    position: relative;
+    overflow: hidden;
+}
+
+.mouse-icon::before {
+    content: "";
+    position: absolute;
+    top: 4px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 2px;
+    height: 4px;
+    background: rgba(255, 255, 255, 0.4);
+    border-radius: 1px;
+    z-index: 2;
+}
+
+.mouse-icon.left::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 50%;
+    height: 45%;
+    background: var(--accent-blue);
+    border-bottom: 1.5px solid rgba(255, 255, 255, 0.2);
+    border-right: 1.5px solid rgba(255, 255, 255, 0.2);
+    z-index: 1;
+}
+
+.mouse-icon.right::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 50%;
+    height: 45%;
+    background: var(--accent-blue);
+    border-bottom: 1.5px solid rgba(255, 255, 255, 0.2);
+    border-left: 1.5px solid rgba(255, 255, 255, 0.2);
+    z-index: 1;
+}
+
+.mouse-icon.wheel::after {
+    content: "";
+    position: absolute;
+    top: 4px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 4px;
+    height: 6px;
+    background: var(--accent-blue);
+    border-radius: 2px;
+    z-index: 3;
+}
+
+
+.command-separator {
+    font-size: 0.8rem;
+    opacity: 0.5;
+    margin: 0 2px;
+    font-weight: 600;
+}
+
+
+.command-label {
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: var(--text-primary);
+    opacity: 0.9;
+}

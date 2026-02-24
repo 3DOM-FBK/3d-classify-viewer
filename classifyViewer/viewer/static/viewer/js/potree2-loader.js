@@ -110,6 +110,10 @@ export class Potree2Loader {
         // sono dentro una regione di selectionHistory.
         this.deselectionHistory = [];
 
+        // Flag: when true, the selection logic is inverted — points OUTSIDE the
+        // selectionHistory regions are highlighted, not those inside.
+        this.selectionInverted = false;
+
         // Persistent Classification History — one entry per "assign class" action.
         // [{ classId, r, g, b, minX, minY, minZ, maxX, maxY, maxZ }]
         // Uses a 3D AABB so future LOD nodes are classified with a spatial test,
@@ -357,10 +361,14 @@ export class Potree2Loader {
         const originalColors = mesh.metadata?.originalColors;
         const classIds = mesh.metadata?.classIds;
         const classColors = mesh.metadata?.classColors;
+        const positions = this.selectionHistory.length > 0
+            ? mesh.getVerticesData(BABYLON.VertexBuffer.PositionKind)
+            : null;
         const numPoints = colors.length / 4;
         let changed = false;
 
         for (let i = 0; i < numPoints; i++) {
+            // 1. Apply base color (classification or original)
             const hasClass = classIds && classIds[i] > 0 && classColors;
             if (this.colorMode === "classification" && hasClass) {
                 colors[i * 4] = classColors[i * 4];
@@ -373,6 +381,20 @@ export class Potree2Loader {
                 colors[i * 4 + 2] = originalColors[i * 4 + 2];
                 colors[i * 4 + 3] = originalColors[i * 4 + 3];
             }
+
+            // 2. Re-apply selection highlight on top, respecting selectionInverted
+            if (positions && this.selectionHistory.length > 0 && !isNaN(positions[i * 3])) {
+                const vector = new BABYLON.Vector3(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
+                const inHistory = this._isPointInSelectionHistory(vector);
+                const shouldHighlight = this.selectionInverted ? !inHistory : inHistory;
+                if (shouldHighlight) {
+                    colors[i * 4] = 1.0;
+                    colors[i * 4 + 1] = 0.0;
+                    colors[i * 4 + 2] = 0.0;
+                    colors[i * 4 + 3] = 1.0;
+                }
+            }
+
             changed = true;
         }
         if (changed) mesh.setVerticesData(BABYLON.VertexBuffer.ColorKind, colors);
@@ -618,15 +640,6 @@ export class Potree2Loader {
                 colors[4 * j + 3] = 1.0;
             }
 
-            // Apply persistent selection highlight to newly loaded points
-            if (this.selectionHistory.length > 0) {
-                const vector = new BABYLON.Vector3(positions[3 * j], positions[3 * j + 1], positions[3 * j + 2]);
-                if (this._isPointInSelectionHistory(vector)) {
-                    colors[4 * j + 0] = 1.0;
-                    colors[4 * j + 1] = 0.0;
-                    colors[4 * j + 2] = 0.0;
-                }
-            }
         }
 
         // Salva le posizioni originali in modo da poterle nascondere (assegnando NaN)
@@ -635,9 +648,24 @@ export class Potree2Loader {
         const originalPositions = new Float32Array(positions);
 
         // Salva originalColors QUI — dopo il decode RGB ma PRIMA di applicare
-        // i colori di classificazione. Così originalColors contiene sempre e solo
-        // i colori reali della nuvola di punti, non quelli di selezione o classe.
+        // selezione o classificazione. Così originalColors contiene SEMPRE e SOLO
+        // i colori reali della nuvola di punti.
         const originalColors = new Float32Array(colors);
+
+        // Apply persistent selection highlight AFTER saving originalColors
+        if (this.selectionHistory.length > 0) {
+            for (let j = 0; j < numPoints; j++) {
+                const vector = new BABYLON.Vector3(positions[3 * j], positions[3 * j + 1], positions[3 * j + 2]);
+                const inHistory = this._isPointInSelectionHistory(vector);
+                // If inverted: highlight points OUTSIDE the selection regions
+                const shouldHighlight = this.selectionInverted ? !inHistory : inHistory;
+                if (shouldHighlight) {
+                    colors[4 * j + 0] = 1.0;
+                    colors[4 * j + 1] = 0.0;
+                    colors[4 * j + 2] = 0.0;
+                }
+            }
+        }
 
         // Debug bounds for first few nodes
         if (this.stats.loadedNodes < 5) {
@@ -1047,6 +1075,7 @@ export class Potree2Loader {
         const transformMatrix = this.scene.getTransformMatrix().clone();
 
         this.selectionHistory.push({ type, area, viewport, transformMatrix });
+        this.selectionInverted = false; // new selection resets invert state
         console.log(`📌 Selection added to history. Total regions: ${this.selectionHistory.length}`);
 
         let totalSelected = 0;
@@ -1354,12 +1383,64 @@ export class Potree2Loader {
     clearSelection() {
         this.selectionHistory = [];
         this.deselectionHistory = [];
+        this.selectionInverted = false;
         this.loadedNodes.forEach((mesh) => {
             if (mesh.metadata && mesh.metadata.originalColors) {
                 mesh.setVerticesData(BABYLON.VertexBuffer.ColorKind, new Float32Array(mesh.metadata.originalColors));
             }
         });
         console.log("🧹 Selection cleared.");
+    }
+
+    /**
+     * Invert the current selection.
+     * Points inside selectionHistory regions become unselected,
+     * points outside become selected (red).
+     * Sets a flag so newly loaded LOD nodes are colored correctly too.
+     */
+    invertSelection() {
+        if (this.selectionHistory.length === 0) {
+            console.warn("⚠️ No active selection to invert.");
+            return;
+        }
+
+        this.selectionInverted = !this.selectionInverted;
+
+        let totalNowSelected = 0;
+
+        this.loadedNodes.forEach((mesh) => {
+            if (!mesh || !mesh.isVisible) return;
+
+            const colors = mesh.getVerticesData(BABYLON.VertexBuffer.ColorKind);
+            const positions = mesh.getVerticesData(BABYLON.VertexBuffer.PositionKind);
+            const originalColors = mesh.metadata?.originalColors;
+            if (!colors || !positions || !originalColors) return;
+
+            const numPoints = colors.length / 4;
+            for (let i = 0; i < numPoints; i++) {
+                if (isNaN(positions[i * 3])) continue; // skip NaN-masked hidden points
+
+                const isRed = (colors[i * 4] > 0.9 && colors[i * 4 + 1] < 0.1 && colors[i * 4 + 2] < 0.1);
+
+                if (isRed) {
+                    // Was selected → restore original color
+                    colors[i * 4] = originalColors[i * 4];
+                    colors[i * 4 + 1] = originalColors[i * 4 + 1];
+                    colors[i * 4 + 2] = originalColors[i * 4 + 2];
+                    colors[i * 4 + 3] = originalColors[i * 4 + 3];
+                } else {
+                    // Was not selected → mark red
+                    colors[i * 4] = 1.0;
+                    colors[i * 4 + 1] = 0.0;
+                    colors[i * 4 + 2] = 0.0;
+                    colors[i * 4 + 3] = 1.0;
+                    totalNowSelected++;
+                }
+            }
+            mesh.setVerticesData(BABYLON.VertexBuffer.ColorKind, colors);
+        });
+
+        console.log(`🔄 Selection inverted (inverted=${this.selectionInverted}). ${totalNowSelected.toLocaleString()} points now selected.`);
     }
 
     /**

@@ -14,6 +14,7 @@ import {
     selectPoints,
     deselectPoints,
     clearSelection,
+    invertSelection,
     applyClassToSelection,
     classRegistry
 } from "./functions.js";
@@ -278,21 +279,42 @@ function initToolbar() {
     document.getElementById("tool-1").classList.add("active");
 
     // Tool switching logic
-    [1, 2, 3, 4, 5].forEach(i => {
+    [1, 2, 3, 4].forEach(i => {
         const btn = document.getElementById(`tool-${i}`);
         btn.addEventListener('click', () => {
-            // Remove active from all
-            document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
+            // Remove active from all stateful tools
+            document.querySelectorAll('.tool-btn').forEach(b => {
+                if (b.id !== "tool-5") b.classList.remove('active');
+            });
             // Add to current
             btn.classList.add('active');
             activeTool = `tool-${i}`;
 
             // Disable camera control only for drawing tools (2 = rect, 3 = lasso)
-            // tool-4 (Cut) is an instant action, not a drawing mode
             if (activeTool === "tool-2" || activeTool === "tool-3") {
                 camera.detachControl(canvas);
             } else {
                 camera.attachControl(canvas, true);
+            }
+
+            // Manage command guide visibility and content
+            const guide = document.getElementById('command-guide');
+            const navGroup = document.getElementById('guide-nav');
+            const selectionGroup = document.getElementById('guide-selection');
+
+            if (guide && navGroup && selectionGroup) {
+                if (activeTool === "tool-1") {
+                    guide.classList.add('visible');
+                    navGroup.style.display = "block";
+                    selectionGroup.style.display = "none";
+                } else if (activeTool === "tool-2" || activeTool === "tool-3") {
+                    guide.classList.add('visible');
+                    navGroup.style.display = "none";
+                    selectionGroup.style.display = "block";
+                } else {
+                    // tool-4 (Cut), tool-5 (Frame)
+                    guide.classList.remove('visible');
+                }
             }
 
             console.log("Active tool changed to:", activeTool);
@@ -300,6 +322,10 @@ function initToolbar() {
     });
 
     console.log("Toolbar buttons created.");
+
+    // Initialize guide for tool-1
+    const guide = document.getElementById('command-guide');
+    if (guide) guide.classList.add('visible');
 }
 
 // --- Sidebar Left: Accordion Sections ---
@@ -743,6 +769,33 @@ window.addEventListener('contextmenu', (e) => {
     e.preventDefault();
 }, false);
 
+// --- Keyboard Shortcuts ---
+// Active only when a selection tool (rect or lasso) is active:
+// I → Invert Selection
+// Escape → Deselect All
+//
+// capture: true ensures we intercept before BabylonJS can consume the event.
+function handleSelectionKeydown(e) {
+    // Ignore shortcuts when typing inside inputs/textareas
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+    // Only active when a selection tool is active
+    if (activeTool !== "tool-2" && activeTool !== "tool-3") return;
+
+    if (e.key === 'i' || e.key === 'I') {
+        e.preventDefault();
+        e.stopPropagation();
+        invertSelection(scene);
+    } else if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        clearSelection(scene);
+        console.log("🧹 Deselect All (Escape)");
+    }
+}
+
+window.addEventListener('keydown', handleSelectionKeydown, { capture: true });
+
 // --- Initialize UI Menus ---
 initViewMenu();
 initColorMenu();
@@ -754,12 +807,21 @@ initToolbar();
 // NOTA: tool-4 è "Cut mode" (scissor), tool-5 è "Frame to PCD"
 // Qui gestiamo entrambi:
 
-// tool-5: Frame to PCD
+// tool-5: Frame to PCD (Instant Action)
 const frameToPCDButton = document.getElementById("tool-5");
 if (frameToPCDButton) {
     frameToPCDButton.addEventListener("click", () => {
         if (sceneObjects.currentPointCloud) {
+            // Visual feedback: brief flash or highlight is handled by CSS if needed, 
+            // but we don't set it as "activeTool".
             frameCameraOnMesh(camera, sceneObjects.currentPointCloud);
+
+            // Ensure we don't stay "stuck" on this button visually
+            frameToPCDButton.classList.remove('active');
+            // Re-activate the previous tool visually
+            const prevBtn = document.getElementById(activeTool);
+            if (prevBtn) prevBtn.classList.add('active');
+
         } else {
             console.warn("No point cloud loaded to frame.");
         }
@@ -807,6 +869,8 @@ if (cutModeButton) {
         document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
         document.getElementById("tool-1").classList.add("active");
         activeTool = "tool-1";
+        const guide = document.getElementById('command-guide');
+        if (guide) guide.classList.remove('visible');
         camera.attachControl(canvas, true);
     });
 }

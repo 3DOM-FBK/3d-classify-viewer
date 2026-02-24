@@ -1544,6 +1544,52 @@ export function clearSelection(scene) {
 }
 
 /**
+ * Invert the current point selection.
+ * Points that were selected (red) become unselected (original color),
+ * and unselected points become selected (red).
+ * Works on all currently loaded nodes via Potree2Loader.
+ */
+export function invertSelection(scene) {
+    const loader = getPotree2Loader(scene);
+
+    if (loader && loader.invertSelection) {
+        loader.invertSelection();
+        return;
+    }
+
+    // Fallback for simple meshes (non-LOD systems)
+    const root = scene.potree2Root;
+    if (!root) return;
+    const meshes = root.getChildMeshes ? root.getChildMeshes() : [root];
+    meshes.forEach(mesh => {
+        const colors = mesh.getVerticesData(BABYLON.VertexBuffer.ColorKind);
+        const originalColors = mesh.metadata?.originalColors;
+        if (!colors || !originalColors) return;
+        const numPoints = colors.length / 4;
+        for (let i = 0; i < numPoints; i++) {
+            const isSelected = (
+                colors[i * 4 + 0] > 0.9 &&
+                colors[i * 4 + 1] < 0.1 &&
+                colors[i * 4 + 2] < 0.1
+            );
+            if (isSelected) {
+                colors[i * 4 + 0] = originalColors[i * 4 + 0];
+                colors[i * 4 + 1] = originalColors[i * 4 + 1];
+                colors[i * 4 + 2] = originalColors[i * 4 + 2];
+                colors[i * 4 + 3] = originalColors[i * 4 + 3];
+            } else {
+                colors[i * 4 + 0] = 1.0;
+                colors[i * 4 + 1] = 0.0;
+                colors[i * 4 + 2] = 0.0;
+                colors[i * 4 + 3] = 1.0;
+            }
+        }
+        mesh.setVerticesData(BABYLON.VertexBuffer.ColorKind, colors);
+    });
+    console.log("🔄 Selection inverted (fallback).");
+}
+
+/**
  * Standard Point-in-Polygon algorithm (Ray Casting)
  */
 function isPointInPoly(poly, pt) {
