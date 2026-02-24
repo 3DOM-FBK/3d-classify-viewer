@@ -330,7 +330,7 @@ const outlineSection = createAccordionSection("Outline", "sidebar-left-content")
 const outlineContent = outlineSection.content;
 
 // Single persistent outline item for the main point cloud (segment 0)
-const outlineItem = createOutlineItem("Point Cloud", `${iconBase}modeling.png`, outlineContent, null);
+const outlineItem = createOutlineItem("Point Cloud", `${iconBase}modeling.png`, outlineContent, 0, null);
 
 /**
  * Called after a point cloud is successfully loaded.
@@ -793,11 +793,12 @@ if (cutModeButton) {
         const label = `Segment ${cutSegmentCounter++}`;
         const segId = result.segmentId;
 
-        createOutlineItem(label, `${iconBase}modeling.png`, outlineContent,
+        const item = createOutlineItem(label, `${iconBase}modeling.png`, outlineContent, segId,
             (visible) => {
                 const ldr = scene.potree2Loader;
                 if (ldr) ldr.setSegmentVisible(segId, visible);
-            }
+            },
+            false // <--- start hidden
         );
 
         console.log(`✂️ Cut segment "${label}" (id:${segId}) created with ${result.count.toLocaleString()} points.`);

@@ -817,7 +817,7 @@ export function createSlider(label, min, max, initial, step, parent) {
  *   caller full control (e.g. loader.setSegmentVisible).
  *   When null the item is inert until setVisibilityCallback() is called later.
  */
-export function createOutlineItem(name, iconSrc, parent, onVisibilityChange = null) {
+export function createOutlineItem(name, iconSrc, parent, segmentId, onVisibilityChange = null, initialVisible = true) {
     const row = document.createElement('div');
     row.classList.add('outline-item');
 
@@ -848,8 +848,11 @@ export function createOutlineItem(name, iconSrc, parent, onVisibilityChange = nu
 
     visibilityBtn.appendChild(visibilityIcon);
 
-    let isVisible = true;
+    let isVisible = initialVisible;
     let _visibilityCallback = onVisibilityChange;
+
+    visibilityIcon.src = isVisible ? `${iconBase}visibility-on.png` : `${iconBase}visibility-off.png`;
+    visibilityBtn.classList.toggle('off', !isVisible);
 
     visibilityBtn.addEventListener('click', () => {
         isVisible = !isVisible;
@@ -861,6 +864,54 @@ export function createOutlineItem(name, iconSrc, parent, onVisibilityChange = nu
     row.appendChild(mainInfo);
     row.appendChild(visibilityBtn);
     parent.appendChild(row);
+
+    // Right-click context menu (Same logic as createClassItem)
+    row.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        const iconBase = "static/viewer/icons/";
+        const options = [
+            {
+                label: `Assign selection to "${nameInput.value}"`,
+                icon: `${iconBase}cursor.png`,
+                action: () => {
+                    const scene = window.__babylonScene;
+                    if (scene && scene.potree2Loader) {
+                        const count = scene.potree2Loader.assignSelectionToSegment(segmentId);
+                        if (count > 0) console.log(`✅ Assigned ${count} points to ${nameInput.value}`);
+                    }
+                }
+            },
+            {
+                label: `Remove selection from "${nameInput.value}"`,
+                icon: `${iconBase}trash.png`,
+                action: () => {
+                    const scene = window.__babylonScene;
+                    if (scene && scene.potree2Loader) {
+                        const count = scene.potree2Loader.removeSelectionFromSegment(segmentId);
+                        if (count > 0) console.log(`✅ Removed ${count} points from ${nameInput.value}`);
+                    }
+                }
+            }
+        ];
+
+        if (segmentId !== 0) {
+            options.push({
+                label: `Delete segment "${nameInput.value}"`,
+                icon: `${iconBase}trash.png`,
+                action: () => {
+                    if (confirm(`Are you sure you want to delete segment "${nameInput.value}"?`)) {
+                        const scene = window.__babylonScene;
+                        if (scene && scene.potree2Loader) {
+                            scene.potree2Loader.deleteSegment(segmentId);
+                            row.remove();
+                        }
+                    }
+                }
+            });
+        }
+
+        showContextMenu(e.clientX, e.clientY, options);
+    });
 
     return {
         nameInput,

@@ -128,6 +128,7 @@ export class Potree2Loader {
         // entry: { segmentId, visible, selections, deselections, minX..maxZ }
         this.cutHistory = [];
         this._segmentIdCounter = 1;
+        this.mainCloudVisible = true;
     }
 
     // ========== PUBLIC API ==========
@@ -628,6 +629,11 @@ export class Potree2Loader {
             }
         }
 
+        // Salva le posizioni originali in modo da poterle nascondere (assegnando NaN)
+        // e rimettere a posto in un secondo momento, superando di forza qualsiasi
+        // bug / limitazione dei materiali point cloud di BabylonJS sull'Alpha compositing.
+        const originalPositions = new Float32Array(positions);
+
         // Salva originalColors QUI — dopo il decode RGB ma PRIMA di applicare
         // i colori di classificazione. Così originalColors contiene sempre e solo
         // i colori reali della nuvola di punti, non quelli di selezione o classe.
@@ -668,14 +674,24 @@ export class Potree2Loader {
 
         // Apply existing cut segments
         const segmentIds = new Int32Array(numPoints); // 0 = main cloud
-        if (this.cutHistory.length > 0) {
-            const worldMatrix = this.rootTransform.getWorldMatrix();
+        if (this.cutHistory.length > 0 || !this.mainCloudVisible) {
             for (let j = 0; j < numPoints; j++) {
                 const vector = new BABYLON.Vector3(positions[3 * j], positions[3 * j + 1], positions[3 * j + 2]);
                 const seg = this._getPointSegment(vector);
                 if (seg !== null) {
                     segmentIds[j] = seg.segmentId;
-                    if (!seg.visible) colors[4 * j + 3] = 0.0;
+                    if (!seg.visible) {
+                        positions[3 * j] = NaN;
+                        positions[3 * j + 1] = NaN;
+                        positions[3 * j + 2] = NaN;
+                    }
+                } else {
+                    segmentIds[j] = 0;
+                    if (!this.mainCloudVisible) {
+                        positions[3 * j] = NaN;
+                        positions[3 * j + 1] = NaN;
+                        positions[3 * j + 2] = NaN;
+                    }
                 }
             }
         }
@@ -685,7 +701,8 @@ export class Potree2Loader {
         const vertexData = new BABYLON.VertexData();
         vertexData.positions = positions;
         vertexData.colors = colors;
-        vertexData.applyToMesh(mesh);
+        // updatable=true is REQUIRED to update visibility and colors dynamically
+        vertexData.applyToMesh(mesh, true);
 
         const mat = new BABYLON.StandardMaterial(`mat_p2_${node.name}`, this.scene);
         mat.pointsCloud = true;
@@ -693,7 +710,12 @@ export class Potree2Loader {
         mat.disableLighting = true;
         mat.emissiveColor = new BABYLON.Color3(1, 1, 1);
         mat.useVertexAlpha = true; // needed for alpha=0 to hide cut segment points
+        // Use ALPHA TEST to discard invisible points efficiently and avoid depth sorting issues
+        mat.transparencyMode = BABYLON.Material.MATERIAL_ALPHATEST;
+        mat.alphaCutOff = 0.1;
+
         mesh.material = mat;
+        mesh.hasAlpha = true;
 
         mesh.parent = this.rootTransform;
         mesh.isVisible = false;
@@ -701,6 +723,7 @@ export class Potree2Loader {
 
         mesh.metadata = {
             nodeInfo: { name: node.name, level: node.level, numPoints: node.numPoints },
+            originalPositions,
             originalColors,
             classIds,
             classColors,
@@ -785,8 +808,15 @@ export class Potree2Loader {
         const x = localVector.x, y = localVector.y, z = localVector.z;
         let finalCls = null;
 
+        // Determine point's segment once per vector
+        const pointSeg = this._getPointSegment(localVector);
+        const pointSegId = pointSeg ? pointSeg.segmentId : 0;
+
         // Iteriamo dalla più vecchia alla più recente (le ultime sovrascrivono)
         for (const entry of this.classificationHistory) {
+            // New visibility constraint: skip classification if point was hidden when this class was assigned
+            if (entry.visibleSegmentIds && !entry.visibleSegmentIds.includes(pointSegId)) continue;
+
             // 1. Fast AABB pruning
             if (x < entry.minX || x > entry.maxX ||
                 y < entry.minY || y > entry.maxY ||
@@ -898,6 +928,9 @@ export class Potree2Loader {
             let classified = 0;
 
             for (let i = 0; i < numPoints; i++) {
+                // Skip invisible points (NaN-masked)
+                if (isNaN(positions[i * 3])) continue;
+
                 const vector = new BABYLON.Vector3(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
 
                 // Proiezione 2D con camera state frozen per ogni regione di selezione
@@ -976,9 +1009,16 @@ export class Potree2Loader {
         // 2. Salva la logica di classificazione (regioni + camera + AABB) per i futuri nodi LOD.
         //    Includiamo le selezioni e deselezioni ATTUALI nell'entry della history.
         if (anyClassified) {
+            const visibleSegmentIds = [];
+            if (this.mainCloudVisible) visibleSegmentIds.push(0);
+            this.cutHistory.forEach(c => {
+                if (c.visible) visibleSegmentIds.push(c.segmentId);
+            });
+
             const margin = 0.05;
             this.classificationHistory.push({
                 classId, r, g, b,
+                visibleSegmentIds,
                 minX: minX - margin, minY: minY - margin, minZ: minZ - margin,
                 maxX: maxX + margin, maxY: maxY + margin, maxZ: maxZ + margin,
                 // Copiamo le history correnti. cloniamo accuratamente le matrici BABYLON.
@@ -1163,10 +1203,18 @@ export class Potree2Loader {
                     if (px < minX) minX = px; if (px > maxX) maxX = px;
                     if (py < minY) minY = py; if (py > maxY) maxY = py;
                     if (pz < minZ) minZ = pz; if (pz > maxZ) maxZ = pz;
+                    // Sposta fisicamente il punto modificandone la posizione a NaN
+                    positions[i * 3] = NaN;
+                    positions[i * 3 + 1] = NaN;
+                    positions[i * 3 + 2] = NaN;
                     anyAssigned = true;
                 }
             }
             total += assigned;
+
+            if (anyAssigned) {
+                mesh.setVerticesData(BABYLON.VertexBuffer.PositionKind, positions);
+            }
 
             // Restore colors (remove red highlight), keep classification colors
             if (mesh.metadata.originalColors) {
@@ -1180,7 +1228,6 @@ export class Potree2Loader {
                                 finalColors[i * 4] = cClrs[i * 4];
                                 finalColors[i * 4 + 1] = cClrs[i * 4 + 1];
                                 finalColors[i * 4 + 2] = cClrs[i * 4 + 2];
-                                finalColors[i * 4 + 3] = 1.0;
                             }
                         }
                     }
@@ -1193,7 +1240,7 @@ export class Potree2Loader {
             const margin = 0.05;
             this.cutHistory.push({
                 segmentId,
-                visible: true,
+                visible: false, // Hidden by default upon cut
                 minX: minX - margin, minY: minY - margin, minZ: minZ - margin,
                 maxX: maxX + margin, maxY: maxY + margin, maxZ: maxZ + margin,
                 selections: this.selectionHistory.map(s => ({ ...s, transformMatrix: s.transformMatrix.clone() })),
@@ -1213,42 +1260,43 @@ export class Potree2Loader {
      * segmentId 0 = the main (uncut) cloud.
      */
     setSegmentVisible(segmentId, visible) {
-        const entry = this.cutHistory.find(c => c.segmentId === segmentId);
-        if (entry) entry.visible = visible;
+        if (segmentId === 0) {
+            this.mainCloudVisible = visible;
+        }
+        // Sync visibility to all history entries for this segment
+        this.cutHistory.forEach(entry => {
+            if (entry.segmentId === segmentId) entry.visible = visible;
+        });
 
         this.loadedNodes.forEach((mesh) => {
             const segmentIds = mesh.metadata?.segmentIds;
-            const colors = mesh.getVerticesData(BABYLON.VertexBuffer.ColorKind);
-            if (!colors) return;
+            const originalPositions = mesh.metadata?.originalPositions;
+            if (!segmentIds || !originalPositions) return;
 
-            const numPoints = colors.length / 4;
+            const positions = mesh.getVerticesData(BABYLON.VertexBuffer.PositionKind);
+            if (!positions) return;
+
+            const numPoints = positions.length / 3;
             let modified = false;
 
             for (let i = 0; i < numPoints; i++) {
                 // For segmentId 0: target points that are NOT assigned to any cut segment
-                const pointSeg = segmentIds ? segmentIds[i] : 0;
+                const pointSeg = segmentIds[i] || 0;
                 if (pointSeg !== segmentId) continue;
 
                 if (visible) {
-                    const hasClass = mesh.metadata.classIds?.[i] > 0 && mesh.metadata.classColors;
-                    if (hasClass && this.colorMode === "classification") {
-                        colors[i * 4] = mesh.metadata.classColors[i * 4];
-                        colors[i * 4 + 1] = mesh.metadata.classColors[i * 4 + 1];
-                        colors[i * 4 + 2] = mesh.metadata.classColors[i * 4 + 2];
-                        colors[i * 4 + 3] = 1.0;
-                    } else if (mesh.metadata.originalColors) {
-                        colors[i * 4] = mesh.metadata.originalColors[i * 4];
-                        colors[i * 4 + 1] = mesh.metadata.originalColors[i * 4 + 1];
-                        colors[i * 4 + 2] = mesh.metadata.originalColors[i * 4 + 2];
-                        colors[i * 4 + 3] = mesh.metadata.originalColors[i * 4 + 3];
-                    }
+                    positions[i * 3] = originalPositions[i * 3];
+                    positions[i * 3 + 1] = originalPositions[i * 3 + 1];
+                    positions[i * 3 + 2] = originalPositions[i * 3 + 2];
                 } else {
-                    colors[i * 4 + 3] = 0.0;
+                    positions[i * 3] = NaN;
+                    positions[i * 3 + 1] = NaN;
+                    positions[i * 3 + 2] = NaN;
                 }
                 modified = true;
             }
 
-            if (modified) mesh.setVerticesData(BABYLON.VertexBuffer.ColorKind, colors);
+            if (modified) mesh.setVerticesData(BABYLON.VertexBuffer.PositionKind, positions);
         });
 
         console.log(`👁️ Segment ${segmentId} → ${visible ? "visible" : "hidden"}`);
@@ -1410,6 +1458,222 @@ export class Potree2Loader {
         console.log("🗑️ All classifications cleared.");
     }
 
+    /**
+     * Assign currently selected points to an existing segment.
+     * segmentId 0 = return to main cloud.
+     */
+    assignSelectionToSegment(segmentId) {
+        if (this.selectionHistory.length === 0) return 0;
+
+        const worldMatrix = this.rootTransform.getWorldMatrix();
+        let totalAssigned = 0;
+        let isVisible = (segmentId === 0) ? this.mainCloudVisible : true;
+
+        if (segmentId > 0) {
+            const entry = this.cutHistory.find(c => c.segmentId === segmentId);
+            if (entry) isVisible = entry.visible;
+        }
+
+        let minX = Infinity, minY = Infinity, minZ = Infinity;
+        let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+        let anyPoints = false;
+
+        this.loadedNodes.forEach(mesh => {
+            const positions = mesh.getVerticesData(BABYLON.VertexBuffer.PositionKind);
+            const originalPositions = mesh.metadata.originalPositions;
+            const segmentIds = mesh.metadata.segmentIds;
+            if (!positions || !originalPositions || !segmentIds) return;
+
+            let modified = false;
+
+            for (let i = 0; i < segmentIds.length; i++) {
+                const vector = new BABYLON.Vector3(originalPositions[i * 3], originalPositions[i * 3 + 1], originalPositions[i * 3 + 2]);
+                let isInside = false;
+                for (const sel of this.selectionHistory) {
+                    const p = BABYLON.Vector3.Project(vector, worldMatrix, sel.transformMatrix, sel.viewport);
+                    if (sel.type === "rect") {
+                        isInside = (p.x >= sel.area.x && p.x <= sel.area.x + sel.area.width &&
+                            p.y >= sel.area.y && p.y <= sel.area.y + sel.area.height);
+                    } else if (sel.type === "lasso") {
+                        isInside = this._isPointInPoly(sel.area, [p.x, p.y]);
+                    }
+                    if (isInside) break;
+                }
+
+                if (isInside && this.deselectionHistory.length > 0) {
+                    for (const dsel of this.deselectionHistory) {
+                        const dp = BABYLON.Vector3.Project(vector, worldMatrix, dsel.transformMatrix, dsel.viewport);
+                        let deselected = false;
+                        if (dsel.type === "rect") {
+                            deselected = (dp.x >= dsel.area.x && dp.x <= dsel.area.x + dsel.area.width &&
+                                dp.y >= dsel.area.y && dp.y <= dsel.area.y + dsel.area.height);
+                        } else if (dsel.type === "lasso") {
+                            deselected = this._isPointInPoly(dsel.area, [dp.x, dp.y]);
+                        }
+                        if (deselected) { isInside = false; break; }
+                    }
+                }
+
+                if (isInside) {
+                    segmentIds[i] = segmentId;
+                    totalAssigned++;
+                    modified = true;
+                    anyPoints = true;
+                    const px = originalPositions[i * 3], py = originalPositions[i * 3 + 1], pz = originalPositions[i * 3 + 2];
+                    if (px < minX) minX = px; if (px > maxX) maxX = px;
+                    if (py < minY) minY = py; if (py > maxY) maxY = py;
+                    if (pz < minZ) minZ = pz; if (pz > maxZ) maxZ = pz;
+
+                    if (isVisible) {
+                        positions[i * 3] = px; positions[i * 3 + 1] = py; positions[i * 3 + 2] = pz;
+                    } else {
+                        positions[i * 3] = NaN; positions[i * 3 + 1] = NaN; positions[i * 3 + 2] = NaN;
+                    }
+                }
+            }
+            if (modified) {
+                mesh.setVerticesData(BABYLON.VertexBuffer.PositionKind, positions);
+                this._resetSelectionColors(mesh);
+            }
+        });
+
+        if (anyPoints) {
+            const margin = 0.05;
+            this.cutHistory.push({
+                segmentId,
+                visible: isVisible,
+                minX: minX - margin, minY: minY - margin, minZ: minZ - margin,
+                maxX: maxX + margin, maxY: maxY + margin, maxZ: maxZ + margin,
+                selections: this.selectionHistory.map(s => ({ ...s, transformMatrix: s.transformMatrix.clone() })),
+                deselections: this.deselectionHistory.map(d => ({ ...d, transformMatrix: d.transformMatrix.clone() }))
+            });
+        }
+
+        this.selectionHistory = [];
+        this.deselectionHistory = [];
+        return totalAssigned;
+    }
+
+    /**
+     * Remove selection from a specific segment (moves it back to main cloud 0).
+     */
+    removeSelectionFromSegment(segmentId) {
+        if (this.selectionHistory.length === 0) return 0;
+
+        const worldMatrix = this.rootTransform.getWorldMatrix();
+        let totalRemoved = 0;
+
+        this.loadedNodes.forEach(mesh => {
+            const positions = mesh.getVerticesData(BABYLON.VertexBuffer.PositionKind);
+            const originalPositions = mesh.metadata.originalPositions;
+            const segmentIds = mesh.metadata.segmentIds;
+            if (!positions || !originalPositions || !segmentIds) return;
+
+            let modified = false;
+            for (let i = 0; i < segmentIds.length; i++) {
+                if (segmentIds[i] !== segmentId) continue;
+
+                const vector = new BABYLON.Vector3(originalPositions[i * 3], originalPositions[i * 3 + 1], originalPositions[i * 3 + 2]);
+                let isInside = false;
+                for (const sel of this.selectionHistory) {
+                    const p = BABYLON.Vector3.Project(vector, worldMatrix, sel.transformMatrix, sel.viewport);
+                    if (sel.type === "rect") {
+                        isInside = (p.x >= sel.area.x && p.x <= sel.area.x + sel.area.width &&
+                            p.y >= sel.area.y && p.y <= sel.area.y + sel.area.height);
+                    } else if (sel.type === "lasso") {
+                        isInside = this._isPointInPoly(sel.area, [p.x, p.y]);
+                    }
+                    if (isInside) break;
+                }
+
+                if (isInside) {
+                    segmentIds[i] = 0;
+                    totalRemoved++;
+                    modified = true;
+                    if (this.mainCloudVisible) {
+                        positions[i * 3] = originalPositions[i * 3];
+                        positions[i * 3 + 1] = originalPositions[i * 3 + 1];
+                        positions[i * 3 + 2] = originalPositions[i * 3 + 2];
+                    } else {
+                        positions[i * 3] = NaN; positions[i * 3 + 1] = NaN; positions[i * 3 + 2] = NaN;
+                    }
+                }
+            }
+            if (modified) {
+                mesh.setVerticesData(BABYLON.VertexBuffer.PositionKind, positions);
+                this._resetSelectionColors(mesh);
+            }
+        });
+
+        // Update history: add these regions as deselection to all entries of this segmentId
+        this.cutHistory.forEach(entry => {
+            if (entry.segmentId === segmentId) {
+                this.selectionHistory.forEach(s => entry.deselections.push({ ...s, transformMatrix: s.transformMatrix.clone() }));
+            }
+        });
+
+        this.selectionHistory = [];
+        this.deselectionHistory = [];
+        return totalRemoved;
+    }
+
+    /**
+     * Delete a segment and move all its points back to the main cloud (segment 0).
+     */
+    deleteSegment(segmentId) {
+        if (segmentId === 0) return;
+
+        this.cutHistory = this.cutHistory.filter(c => c.segmentId !== segmentId);
+
+        this.loadedNodes.forEach(mesh => {
+            const segmentIds = mesh.metadata.segmentIds;
+            const positions = mesh.getVerticesData(BABYLON.VertexBuffer.PositionKind);
+            const originalPositions = mesh.metadata.originalPositions;
+            if (!segmentIds || !positions || !originalPositions) return;
+
+            let modified = false;
+            for (let i = 0; i < segmentIds.length; i++) {
+                if (segmentIds[i] === segmentId) {
+                    segmentIds[i] = 0;
+                    modified = true;
+                    if (this.mainCloudVisible) {
+                        positions[i * 3] = originalPositions[i * 3];
+                        positions[i * 3 + 1] = originalPositions[i * 3 + 1];
+                        positions[i * 3 + 2] = originalPositions[i * 3 + 2];
+                    } else {
+                        positions[i * 3] = NaN; positions[i * 3 + 1] = NaN; positions[i * 3 + 2] = NaN;
+                    }
+                }
+            }
+            if (modified) mesh.setVerticesData(BABYLON.VertexBuffer.PositionKind, positions);
+        });
+    }
+
+    _resetSelectionColors(mesh) {
+        const colors = mesh.getVerticesData(BABYLON.VertexBuffer.ColorKind);
+        if (!colors) return;
+        const orgClrs = mesh.metadata.originalColors;
+        const clsIds = mesh.metadata.classIds;
+        const clsClrs = mesh.metadata.classColors;
+        let mod = false;
+        for (let i = 0; i < colors.length / 4; i++) {
+            if (colors[i * 4] > 0.9 && colors[i * 4 + 1] < 0.1 && colors[i * 4 + 2] < 0.1) {
+                if (this.colorMode === "classification" && clsIds && clsIds[i] > 0) {
+                    colors[i * 4] = clsClrs[i * 4];
+                    colors[i * 4 + 1] = clsClrs[i * 4 + 1];
+                    colors[i * 4 + 2] = clsClrs[i * 4 + 2];
+                } else if (orgClrs) {
+                    colors[i * 4] = orgClrs[i * 4];
+                    colors[i * 4 + 1] = orgClrs[i * 4 + 1];
+                    colors[i * 4 + 2] = orgClrs[i * 4 + 2];
+                }
+                colors[i * 4 + 3] = 1.0;
+                mod = true;
+            }
+        }
+        if (mod) mesh.setVerticesData(BABYLON.VertexBuffer.ColorKind, colors);
+    }
+
 } // END class Potree2Loader
 
 
@@ -1460,6 +1724,10 @@ export async function loadPotree2PointCloud(basePath, scene, options = {}) {
     }
 
     scene.potree2Loader = loader;
+
+    if (window.__registerPointCloudInOutline) {
+        window.__registerPointCloudInOutline(loader.rootTransform, "Potree 2.0 Cloud");
+    }
 
     console.log(`✅ Potree2Loader ready: ${loader.loadedNodes.size} nodes loaded, ${loader.activeNodes.size} visible`);
     return loader.getRoot();
