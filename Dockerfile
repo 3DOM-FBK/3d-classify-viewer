@@ -41,9 +41,22 @@ RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.10 1
 # Aggiorna pip
 RUN python3 -m pip install --upgrade pip
 
-# Install Python dependencies
+# Install Python dependencies (senza torch)
 COPY requirements.txt /app/
 RUN pip install --no-cache-dir --ignore-installed -r requirements.txt
+
+# GPU dependencies coerenti con CUDA 11.8
+RUN pip install --no-cache-dir \
+    torch==2.3.0+cu118 torchvision==0.18.0+cu118 \
+    --index-url https://download.pytorch.org/whl/cu118
+
+# cupy da PyPI standard
+RUN pip install --no-cache-dir cupy-cuda11x
+
+# cuml da rapidsai
+RUN pip install --no-cache-dir \
+    --extra-index-url https://pypi.anaconda.org/rapidsai-wheels-nightly/simple \
+    cuml-cu11
 
 # Copy the project
 # COPY . /app/

@@ -35,8 +35,9 @@ def launch_RF_training(request):
 def launch_RF_classify(request):
     if request.method == 'POST':
         try:
-            print("\n[REQUEST FUNCTION] Launch RF classify") 
-            launch_classify_RF()
+            print("\n[REQUEST FUNCTION] Launch RF classify", request.body[:200]) 
+            data = json.loads(request.body)
+            launch_classify_RF(data)
             print("\n")
             return JsonResponse({"status": 'success', "message": "RF classify launched successfully."})
 

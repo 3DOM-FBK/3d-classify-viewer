@@ -143,46 +143,80 @@ testGButton.addEventListener("click", async () => {
     
     console.log("Sending request for testing the function...");
 
-    // TRAINING RF PARAMETERS
-    // const nr_estimators = "50-100-150-200";
-    // const max_depth = "None";
-    // const n_jobs = 12;
+    const which_function = "launch_RF_classify/";
+    let body = null;
+    let file_path = "";
+    let use_gpu = false;
 
-    // const body = JSON.stringify({
-    //             nr_estimators: nr_estimators,
-    //             max_depth: max_depth,
-    //             n_jobs: n_jobs
-    //         })
+    switch (which_function) {
+        case "launch_RF_training/": {
+            // TRAINING RF PARAMETERS
+            const n_jobs = 12;
+            const nr_estimators = 200;
+            const max_depth = 15;
+            const min_samples_split = 20;
+            const max_features = "sqrt";
+            use_gpu = true;
+            
+            body = JSON.stringify({
+                n_jobs: n_jobs,
+                nr_estimators: nr_estimators,
+                max_depth: max_depth,
+                min_samples_split: min_samples_split,
+                max_features: max_features,
+                use_gpu: use_gpu
+            });
+            break;
+        }
+        case "launch_RF_classify/":{
+            use_gpu = true;
+            body = JSON.stringify({
+                use_gpu: use_gpu
+            });
+            break;
+        }
+        case "subsample_pc/": {
+            // SUBSAMPLING PARAMETERS
+            // TODO change the path to the correct one
+            file_path = "/webapp/classifyViewer/viewer/static/viewer/data/c78_pc.ply";
+            const voxel_size = 0.05; // 5cm
 
-    // SUBSAMPLING PARAMETERS
-    // TODO change the path to the correct one
-    // const file_path = "/webapp/classifyViewer/viewer/static/viewer/data/c78_pc.ply";
-    // const voxel_size = 0.05; // 5cm
-    // const body = JSON.stringify({
-    //     file_path: file_path,
-    //     voxel_size: voxel_size
-    // });
+            body = JSON.stringify({
+                file_path: file_path,
+                voxel_size: voxel_size
+            });
+            break;
+        }
+        case "mesh2pc/": {
+            // MESH TO POINT CLOUD PARAMETERS
+            file_path = "/webapp/classifyViewer/viewer/static/viewer/data/c78.glb";
+            num_points = 5000000; // 5 millions points
+            // const sampling_method = "uniform"; // or "poisson"
 
-    // // MESH TO POINT CLOUD PARAMETERS
-    // const file_path = "/webapp/classifyViewer/viewer/static/viewer/data/c78.glb";
-    // const num_points = 5000000; // 5 millions points
-    // // const sampling_method = "uniform"; // or "poisson"
-    // const body = JSON.stringify({
-    //     file_path: file_path,
-    //     num_points: num_points,
-    //     //sampling_method: sampling_method // not used for C++
-    // });
+            body = JSON.stringify({
+                file_path: file_path,
+                num_points: num_points,
+                //sampling_method: sampling_method // not used for C++
+            });
+            break;
+        }
+        case "ply2las/": {
+            // PLY TO LAS PARAMETERS
+            file_path = "/webapp/classifyViewer/viewer/static/viewer/data/c78_pc.ply";
+            const out_path = "/webapp/classifyViewer/viewer/static/viewer/data/c78_pc.las";
 
-    // // PLY TO LAS PARAMETERS
-    const file_path = "/webapp/classifyViewer/viewer/static/viewer/data/c78_pc.ply";
-    const out_path = "/webapp/classifyViewer/viewer/static/viewer/data/c78_pc.las";
-    const body = JSON.stringify({
-        file_path: file_path,
-        out_path: out_path
-    });
-    
+            body = JSON.stringify({
+                file_path: file_path,
+                out_path: out_path
+            });
+            break;
+        }
+        default:
+            console.error("Unknown function:", which_function); 
+    }
+        
     // Send request to launch function
-    const response = await send_request("ply2las/", "POST", body);
+    const response = await send_request(which_function, "POST", body);
     
     if (response.ok) {  
         console.log("Function completed successfully.");

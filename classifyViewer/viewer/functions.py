@@ -94,32 +94,36 @@ def ply_to_las(ply_path, out_path=None):
 def launch_training_RF(data):
     print("\n[FUNCTION] ---- TRAINING RANDOM FOREST -----\n")
     
-    folder_path = "/app/classifyViewer/viewer/static/viewer/data/"
+    folder_path = "/webapp/classifyViewer/viewer/static/viewer/data/"
 
     # TODO: MODIFY THIS FOLDER PATH WITH THE REAL PATH OF THE DATASET FOLDER IN YOUR PROJECT
     features_filepath = folder_path + "RF/training_using_gaussian/dataset/feature_index_gs.txt"
     training_filepath = folder_path + "RF/training_using_gaussian/dataset/training.txt"
-    eval_filepath = folder_path + "RF/training_using_gaussian/dataset/validation.txt"
+    val_filepath = folder_path + "RF/training_using_gaussian/dataset/validation.txt"
     n_jobs = data['n_jobs']
     n_estimators = data['nr_estimators']
     max_depth = data['max_depth']
+    min_samples_split = data['min_samples_split']
+    max_features = data['max_features']
+    use_gpu = data['use_gpu']
     output_training_name = folder_path + "RF/training_using_gaussian/output/test_predicted"
     model_savepath = folder_path + "RF/training_using_gaussian/output/model_avt_gaussian.pkl"
-    
-    training(features_filepath, training_filepath, eval_filepath, n_jobs, n_estimators, max_depth, output_training_name, model_savepath)
 
-def launch_classify_RF():
-    print("[FUNCTION] ---- CLASSIFYING RANDOM FOREST -----")
+    training(features_filepath, training_filepath, val_filepath, n_jobs, n_estimators, max_depth, min_samples_split, max_features, use_gpu, output_training_name, model_savepath)
+
+def launch_classify_RF(data):
+    print("\n[FUNCTION] ---- CLASSIFYING RANDOM FOREST -----\n")
     
-    folder_path = "/app/classifyViewer/viewer/static/viewer/data/"
+    folder_path = "/webapp/classifyViewer/viewer/static/viewer/data/"
 
     # TODO: MODIFY THIS FOLDER PATH WITH THE REAL PATH OF THE DATASET FOLDER IN YOUR PROJECT
     features_filepath = folder_path + "RF/training_using_gaussian/dataset/feature_index_gs.txt"
     model_savepath = folder_path + "RF/training_using_gaussian/output/model_avt_gaussian.pkl"
     test_filepath = folder_path + "RF/training_using_gaussian/dataset/test_avt.txt"
     output_classify_name = folder_path + "RF/training_using_gaussian/output/avt_gs_predicted"
+    use_gpu = data['use_gpu']
     
-    classification(features_filepath, model_savepath, test_filepath, output_classify_name)    
+    classification(features_filepath, model_savepath, test_filepath, output_classify_name, use_gpu)    
 
 
 # ---------------------------------------------------------------

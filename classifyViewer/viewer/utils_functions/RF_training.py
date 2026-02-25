@@ -1,12 +1,21 @@
 import time
 import pickle
 import argparse
-import itertools
 import os
 import sys
 import numpy as np
+try:
+    import cupy as cp
+    from cuml.ensemble import RandomForestClassifier as cuRF
+    GPU_AVAILABLE = True
+except Exception:
+    cp = None
+    cuRF = None
+    GPU_AVAILABLE = False
+
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import precision_score, recall_score, accuracy_score, f1_score, confusion_matrix, jaccard_score
+import itertools
 from tqdm import tqdm 
 
 ''' Todo:
@@ -56,31 +65,72 @@ def read_data(filepath):
         for line_index, line in enumerate(tqdm(lines, desc="Loading points")):
             tokens = line.strip().split(' ')
             if line_index == 0:
-                # Store the header (first line) for later use
-                header = tokens
-                continue  # Skip processing the header line
-            if 'nan' not in tokens and not tokens[0].startswith('//') and len(tokens) > class_index:   
+                # Treat first line as header only if it contains non-numeric tokens (actual column names)
+                try:
+                    [float(t) for t in tokens]
+                    # All tokens are numeric — no header present, process as data
+                except ValueError:
+                    # At least one token is non-numeric — this is a header line
+                    header = tokens
+                    continue
+            if 'nan' not in tokens and not tokens[0].startswith('//') and len(tokens) > class_index:
                 X.append([float(t) for t_index, t in enumerate(tokens) if t_index != class_index])
                 Y.append(int(float(tokens[class_index])))
-    return np.asarray(X, dtype=np.float32), np.asarray(Y, dtype=np.float32), header
+    return np.asarray(X, dtype=np.float64), np.asarray(Y, dtype=np.float64), header
 
 
-def train_model(X_train, Y_train, n_estimators, max_depth, n_jobs):
+def train_model(X_train, Y_train, n_jobs, use_gpu=False,
+                n_estimators=200, max_depth=15, min_samples_split=20, max_features='sqrt'):
     ''' Train the Random Forest model with the specified parameters and return it.
 
+        Default parameters follow the RF200 configuration:
+            - 200 trees (n_estimators)
+            - maximum tree depth of d_max = 15
+            - minimum samples to split a node of n_min = 20
+            - number of features per split = sqrt(n_features)
+
         Attributes:
-            X_train         :   numpy array with training features
-            Y_train         :   numpy array with training classes
-            n_estimators    :   number of trees in the forest
-            max_depth       :   maximum depth of each tree
-            n_jobs          :   number of threads used to train the model
+            X_train             :   numpy array with training features
+            Y_train             :   numpy array with training classes
+            n_jobs              :   number of threads used to train the model (CPU only)
+            use_gpu             :   whether to use GPU-accelerated training via cuML
+            n_estimators        :   number of trees in the forest (default: 200)
+            max_depth           :   maximum depth of each tree (default: 15)
+            min_samples_split   :   minimum samples required to split a node (default: 20)
+            max_features        :   number of features per split (default: 'sqrt')
         
         Return:
             model           :   trained model
     '''
-    model = RandomForestClassifier(n_estimators=n_estimators, max_depth=max_depth, random_state=0, oob_score=True, n_jobs=n_jobs)
-    model.fit(X_train[:, feat_to_use], Y_train)         # Use only the specified features. 
-    return model
+    # If GPU requested and cuML is available, use cuML's RandomForest (requires RAPIDS stack)
+    if use_gpu and GPU_AVAILABLE:
+        print(f"GPU is AVAILABLE, so use cuml for training.")
+        Xg = cp.asarray(X_train[:, feat_to_use])
+        yg = cp.asarray(Y_train)
+        # cuML requires an explicit integer for max_depth — None is not supported
+        model = cuRF(
+            n_estimators=n_estimators,
+            max_depth=max_depth,
+            min_samples_split=min_samples_split,
+            max_features=max_features,
+            random_state=0
+        )
+        model.fit(Xg, yg)
+        return model
+    else :
+        print(f"GPU is not AVAILABLE, so use scikit-learn for training.")
+        # Fallback to scikit-learn on CPU
+        model = RandomForestClassifier(
+            n_estimators=n_estimators,
+            max_depth=max_depth,
+            min_samples_split=min_samples_split,
+            max_features=max_features,
+            random_state=0,
+            oob_score=True,
+            n_jobs=n_jobs
+        )
+        model.fit(X_train[:, feat_to_use], Y_train)         # Use only the specified features.
+        return model
 
 
 def write_classification(X_test, Y_test_pred, filename, header):
@@ -95,7 +145,6 @@ def write_classification(X_test, Y_test_pred, filename, header):
             out.write('{} {}\n'.format(x_t_as_str, str(Y_test_pred[index])))
 
 
-
 def save_model(model, filename):
     ''' Save the trained machine learning model
 
@@ -106,59 +155,106 @@ def save_model(model, filename):
     with open(filename, 'wb') as out:
         pickle.dump(model, out, pickle.HIGHEST_PROTOCOL)
 
-def main(features_filepath, training_filepath, eval_filepath, n_jobs, n_estimators, max_depth, output_training_name, model_savepath):
     
-    # Parameters to test
-    # n_estimators = [50, 100, 150, 200]
-    # max_depths = [None]
-    n_estimators = [int(x) for x in n_estimators.split('-')]
-    max_depths = int(max_depth) if max_depth != 'None' else [None]
+def main(features_filepath, training_filepath, val_filepath, n_jobs, n_estimators, max_depth, min_samples_split, max_features, use_gpu, output_training_name, model_savepath):
 
-    start = time.time() 
+    # PARAMETERS    
+    n_estimators = n_estimators if n_estimators else 200
+    max_depths = max_depth if max_depth else 15
+    min_samples_split=min_samples_split if hasattr(min_samples_split, 'value') else 20
+    max_features=max_features if hasattr(max_features, 'value') else 'sqrt'
+    
+    total_start = time.time()
+    t0 = time.time()
     print("Loading features data...")
     load_features_and_class(features_filepath)
 
     print("Loading training data...")
     X_train, Y_train, header = read_data(training_filepath)
-    
-    print("\nLoading validation data...")
-    X_test, Y_test, _ = read_data(eval_filepath)
 
+    print("\nLoading validation data...")
+    X_test, Y_test, _ = read_data(val_filepath)
+
+    t1 = time.time()
+    tot_sec = round(t1 - t0, 2)
+    load_min = int(tot_sec // 60)
+    load_sec = int(tot_sec % 60)
+    if load_min > 0:
+        print(f'---> Loading time {load_min} min {load_sec} sec')
+    else:
+        print(f'---> Loading time {load_sec} sec')
     print('\nStatistics:\n- Training samples: {}\n- Testing samples: {}\n- Using features with indices: {}'.format(len(Y_train), len(Y_test), feat_to_use))
 
     # Use the header for feature importance visualization
     if header:
-        # Map the feature indices in feat_to_use to the corresponding header names
         headers = [header[i] for i in feat_to_use]  # Select only the headers corresponding to feat_to_use
     else:
-        headers = ['Feature_{}'.format(i) for i in feat_to_use]  # Fallback if no header is present
+        headers = ['col_{}'.format(i) for i in feat_to_use]  # Fallback: use column indices from feat_to_use
 
     ''' ***************************************** TRAINING ************************************** '''
-
-    print(f'\nTraining the model n_estimators={n_estimators}, max_depth={max_depths} and n_jobs={n_jobs} ...')  
-    start = time.time()                                  
-    for ne, md in list(itertools.product(n_estimators, max_depths)):    # Train the model with different parameters and pick the one having the maximum f1-score on the test-set
-        model = train_model(X_train, Y_train, ne, md, n_jobs)      # Train the model
-        
-        Y_test_pred = model.predict(X_test[:, feat_to_use])             # Test the model, using only the specified features
-        
-     # Compute metrics 
-        Precision_pc = precision_score(Y_test, Y_test_pred, average=None)
-        Precision = precision_score(Y_test, Y_test_pred, average='weighted')
-        Recall_pc = recall_score(Y_test, Y_test_pred, average=None) 
-        Recall = recall_score(Y_test, Y_test_pred, average='weighted') 
-        f1_pc = f1_score(Y_test, Y_test_pred, average=None)
-        f1 = f1_score(Y_test, Y_test_pred, average='weighted')
-        IoU_pc= jaccard_score(Y_test, Y_test_pred, average=None)
-        IoU = jaccard_score(Y_test, Y_test_pred, average='weighted')
-        con_mat = confusion_matrix(Y_test, Y_test_pred)         
-        acc = accuracy_score(Y_test, Y_test_pred)                       # Compute metrics and update best model
+    # Fixed RF200 configuration: 200 trees, max_depth=15, min_samples_split=20, max_features='sqrt'
+    print(f'\nTraining the model n_jobs={n_jobs}, n_estimators={n_estimators}, max_depth={max_depths}, min_samples_split={min_samples_split}, max_features={max_features} ...')  
+    tot_train_sec = 0
+    tot_metrics_sec = 0
     
-                
-    end = time.time()
+    t2 = time.time()
+    
+    model = train_model(X_train, Y_train, n_jobs=n_jobs, use_gpu=use_gpu,
+                        n_estimators=n_estimators,
+                        max_depth=max_depths,
+                        min_samples_split=min_samples_split,
+                        max_features=max_features
+                        )  # Uses RF200 defaults
+
+    t3 = time.time()
+    tot_train_sec = round(t3 - t2, 2)
+    train_min = int(tot_train_sec // 60)
+    train_sec = int(tot_train_sec % 60)
+    if train_min > 0:
+        print(f'---> Training time {train_min} min {train_sec} sec')
+    else:
+        print(f'---> Training time {train_sec} sec')
+    
+    print('\nEvaluating on validation set...')
+    # Predict depending on whether we used cuML (GPU) or scikit-learn (CPU)
+    if use_gpu and GPU_AVAILABLE and cuRF is not None:
+        Y_test_pred = cp.asnumpy(model.predict(cp.asarray(X_test[:, feat_to_use])))
+    else:
+        Y_test_pred = model.predict(X_test[:, feat_to_use])             # Test the model, using only the specified features
+
+    # Compute metrics
+    Precision_pc = precision_score(Y_test, Y_test_pred, average=None)
+    Precision = precision_score(Y_test, Y_test_pred, average='weighted')
+    Recall_pc = recall_score(Y_test, Y_test_pred, average=None)
+    Recall = recall_score(Y_test, Y_test_pred, average='weighted')
+    f1_pc = f1_score(Y_test, Y_test_pred, average=None)
+    f1 = f1_score(Y_test, Y_test_pred, average='weighted')
+    IoU_pc = jaccard_score(Y_test, Y_test_pred, average=None)
+    IoU = jaccard_score(Y_test, Y_test_pred, average='weighted')
+    con_mat = confusion_matrix(Y_test, Y_test_pred)
+    acc = accuracy_score(Y_test, Y_test_pred)
+    t4 = time.time()
+
+    tot_metrics_sec = round(t4 - t3, 2)
+    metr_min = int(tot_metrics_sec // 60)
+    metr_sec = int(tot_metrics_sec % 60)
+    if metr_min > 0:
+        print(f'---> Prediction + metrics time: {metr_min} min {metr_sec} sec')
+    else:
+        print(f'---> Prediction + metrics time {metr_sec} sec')
+    
+
 
     # Sort features by importance in descending order
-    sorted_features = sorted(zip(headers, model.feature_importances_), key=lambda x: x[1], reverse=True)
+    # Try to get feature importances; cuML may expose a similar attribute
+    try:
+        feats = model.feature_importances_
+        # In case cuML returns cupy array
+        if GPU_AVAILABLE and cp is not None and isinstance(feats, cp.ndarray):
+            feats = cp.asnumpy(feats)
+    except Exception:
+        feats = np.zeros(len(headers))
+    sorted_features = sorted(zip(headers, feats), key=lambda x: x[1], reverse=True)
     
     # Print results
     #print('---> Best parameters: ne: {}, md: {}'.format(best_conf['ne'], best_conf['md']))
@@ -166,14 +262,19 @@ def main(features_filepath, training_filepath, eval_filepath, n_jobs, n_estimato
     print('---> Feature importance:')
     for header, importance in sorted_features:
         print(f'{header}: {importance:.4f}')
-    tot_sec = round(end - start, 2)
-    minutes = int(tot_sec // 60)
-    seconds = int(tot_sec % 60)
-    print(f"---> Training time: {minutes} min {seconds} sec")
+
+    tot_sec = round(t4 - total_start, 2)
+    tot_min = int(tot_sec // 60)
+    tot_sec = int(tot_sec % 60)
+    if tot_min > 0:
+        print(f'---> Total time {tot_min} min {tot_sec} sec')
+    else:
+        print(f'---> Total time {tot_sec} sec')
+
     print('Check the complete report in the folder')
     ''' ******************************************************************************************** '''
     #Print report with results
-    report_fname = os.path.dirname(features_filepath) + "/report_RF.txt"
+    report_fname = os.path.dirname(output_training_name) + "/report_RF.txt"
 
     np.set_printoptions(precision=4)
     file = open(report_fname,"w") 
@@ -220,23 +321,38 @@ def main(features_filepath, training_filepath, eval_filepath, n_jobs, n_estimato
     file.write("\n\nFeature importance\n\n")
     for header, importance in sorted_features:
         file.write(f'{header}: {importance:.4f}\n')
-    file.write("\n\nTime for training\n\n")
-    file.write(f'{minutes} min {seconds} sec') 
-    file.close() 
+    file.write("\n\nTiming\n\n")
+
+    if load_min > 0:
+        file.write(f'Loading time:              {load_min} min {load_sec} sec\n')
+    else:
+        file.write(f'Loading time:              {load_sec} sec\n')
+    
+    if train_min > 0:
+        file.write(f'Training time:             {train_min} min {train_sec} sec\n')
+    else:
+        file.write(f'Training time:             {train_sec} sec\n')
+
+    if metr_min > 0:
+        file.write(f'Prediction + Metrics time:              {metr_min} min {metr_sec} sec\n')
+    else:
+        file.write(f'Prediction + Metrics time:              {metr_sec} sec\n')
+
+    if tot_min > 0:
+        file.write(f'Total time:                {tot_min} min {tot_sec} sec\n')
+    else:
+        file.write(f'Total time:                {tot_sec} sec\n')
+
+    file.close()
 
 # Save model and write the best classification of the test set
-    Y_test_pred = model.predict(X_test[:, feat_to_use])
+    if use_gpu and GPU_AVAILABLE and cuRF is not None:
+        Y_test_pred = cp.asnumpy(model.predict(cp.asarray(X_test[:, feat_to_use])))
+    else:
+        Y_test_pred = model.predict(X_test[:, feat_to_use])
     write_classification(X_test, Y_test_pred, output_training_name, header)
     print(f"Model saved on {model_savepath}")
     save_model(model, model_savepath )
-
-     
-    end = time.time()
-    tot_sec = round(end - start, 2)
-    minutes = int(tot_sec // 60)
-    seconds = int(tot_sec % 60)
-
-    print(f'\nTotal training time: {minutes} min {seconds} sec')
 
 if __name__== '__main__':
     main()
