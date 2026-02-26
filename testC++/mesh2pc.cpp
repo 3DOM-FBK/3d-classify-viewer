@@ -140,9 +140,9 @@ void write_las(const std::string& out_file,
     write_val<uint16_t>(f, 4);
     write_val<uint16_t>(f, (uint16_t)extra_bytes_payload);
     write_str(f, "Extra Bytes Record", 32);
-    write_extra_bytes_record(f, "normal_x", "Normal X");
-    write_extra_bytes_record(f, "normal_y", "Normal Y");
-    write_extra_bytes_record(f, "normal_z", "Normal Z");
+    write_extra_bytes_record(f, "NormalX", "Normal X");
+    write_extra_bytes_record(f, "NormalY", "Normal Y");
+    write_extra_bytes_record(f, "NormalZ", "Normal Z");
     write_extra_bytes_record_uint32(f, "POINT_ID", "Point ID");
 
     // --- Point records ---
