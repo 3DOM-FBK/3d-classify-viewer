@@ -81,15 +81,29 @@ def mesh_to_point_cloud(mesh_path, num_points=5000000):
     print("\n[FUNCTION] ---- MESH TO POINT CLOUD -----\n")
     # TODO modify the path
     command = ["/webapp/opt/mesh2pc", mesh_path, str(num_points)]
-    output_filepath = launch_subprocess(command)
+    launch_subprocess(command)
     # mesh2pc(mesh_path=mesh_path, num_points=num_points, sampling_method=sampling_method)
 
 def ply_to_las(ply_path, out_path=None):
     print("\n[FUNCTION] ---- PLY TO LAS -----\n")
     # TODO modify the path
     command = ["/webapp/opt/ply2las", ply_path, out_path]
-    output_filepath = launch_subprocess(command)
+    launch_subprocess(command)
     # ply2las(ply_path = ply_path, out_path=out_path)
+
+def feature_extraction(input_filepath, output_filepath, feature_list, radius_list, sampling=0):
+    print("\n[FUNCTION] ---- FEATURE EXTRACTION -----")
+
+    radius_str = ', '.join(str(x) for x in radius_list)
+    feature_str = ', '.join(feature_list)
+
+    # # TODO modify the path
+    if sampling == 0:
+        command = ["/webapp/opt/feature_extraction_viewer", input_filepath, output_filepath, "--features", feature_str, "--radius", radius_str]
+    else :
+        command = ["/webapp/opt/feature_extraction_viewer", input_filepath, output_filepath, "--features", feature_str, "--radius", radius_str, "--sampling_resolution", sampling]
+    
+    launch_subprocess(command)
 
 def launch_training_RF(data):
     print("\n[FUNCTION] ---- TRAINING RANDOM FOREST -----\n")

@@ -143,7 +143,7 @@ testGButton.addEventListener("click", async () => {
     
     console.log("Sending request for testing the function...");
 
-    const which_function = "launch_RF_classify/";
+    const which_function = "feature_extraction/";
     let body = null;
     let file_path = "";
     let use_gpu = false;
@@ -210,6 +210,25 @@ testGButton.addEventListener("click", async () => {
                 out_path: out_path
             });
             break;
+        }
+        case "feature_extraction/":{
+            // FEATURE EXTRACTION PARAMETERS
+
+            let input_filepath = "/webapp/classifyViewer/viewer/static/viewer/data/c78_pc.las"
+            let output_filepath = "/webapp/classifyViewer/viewer/static/viewer/data/c78_pc_feat.las"
+            let radius_list = [0.4, 1.0, 2.0]
+            let feature_list = ["planarity", "linearity", "height"]
+            let sampling = 0.05; // 5cm
+
+            body = JSON.stringify({
+                input_filepath: input_filepath,
+                output_filepath: output_filepath,
+                radius_list: radius_list,
+                feature_list: feature_list
+                // sampling: sampling // maybe not used
+            });
+            break;
+            
         }
         default:
             console.error("Unknown function:", which_function); 
