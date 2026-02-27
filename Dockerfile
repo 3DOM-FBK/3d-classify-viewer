@@ -63,6 +63,8 @@ RUN pip install --no-cache-dir \
 # cupy da PyPI standard
 RUN pip install --no-cache-dir cupy-cuda11x
 
+ENV CUPY_CACHE_DIR=/tmp/.cupy
+
 # cuml da rapidsai
 RUN pip install --no-cache-dir \
     --extra-index-url https://pypi.anaconda.org/rapidsai-wheels-nightly/simple \

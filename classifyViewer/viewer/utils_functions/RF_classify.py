@@ -14,6 +14,8 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score
 from sklearn.metrics import f1_score
 from tqdm import tqdm 
+import laspy
+import re
 
 feat_to_use = []     # Indices of the features to use. If n is the number of features, from 0 to n-1
 
@@ -88,6 +90,76 @@ def write_classification(X, Y, filename, header):
             x_as_str = " ".join([str(i) for i in x]) # If I want to write all features, not only the first 6 (x,y,z,r,g,b)
             out.write('{} {}\n'.format(x_as_str, str(Y_pred[index])))
 
+def write_classification_las(X, Y, filename, header):
+    
+    X = np.array(X)
+    Y = np.array(Y)
+
+    # Clean header
+    if isinstance(header, str):
+        header = header.strip().lstrip('/').strip().split()
+    
+    # Remoce pred from last part of the header
+    if header[-1].lower() == 'pred':
+        header = header[:-1]
+
+    def sanitize_name(name):
+        return re.sub(r'[^a-zA-Z0-9_]', '_', name)
+
+    STANDARD_FIELDS = {'x', 'y', 'z', 'r', 'red', 'g', 'green', 'b', 'blue', 'intensity'}
+
+    # Clean the bad column names and ensure uniqueness
+    name_map = {}
+    seen = set()
+    for col_name in header:
+        clean = sanitize_name(col_name)
+        original_clean = clean
+        counter = 1
+        while clean.lower() in seen:
+            clean = f"{original_clean}_{counter}"
+            counter += 1
+        seen.add(clean.lower())
+        name_map[col_name] = clean
+
+    las_header = laspy.LasHeader(point_format=7, version="1.4")
+
+    extra_dims = []
+    for col_name in header:
+        clean = name_map[col_name]
+        if clean.lower() not in STANDARD_FIELDS:
+            extra_dims.append(
+                laspy.ExtraBytesParams(name=clean, type=np.float64)
+            )
+    if extra_dims:
+        las_header.add_extra_dims(extra_dims)
+
+    las_header.offsets = np.min(X[:, 0:3], axis=0)
+    las_header.scales  = np.array([0.001, 0.001, 0.001])
+
+    las = laspy.LasData(header=las_header)
+
+    for i, col_name in enumerate(header):
+        clean = name_map[col_name]
+        clean_lower = clean.lower()
+        if clean_lower == 'x':
+            las.x = X[:, i]
+        elif clean_lower == 'y':
+            las.y = X[:, i]
+        elif clean_lower == 'z':
+            las.z = X[:, i]
+        elif clean_lower in ('r', 'red'):
+            las.red = (X[:, i] * 257).astype(np.uint16)
+        elif clean_lower in ('g', 'green'):
+            las.green = (X[:, i] * 257).astype(np.uint16)
+        elif clean_lower in ('b', 'blue'):
+            las.blue = (X[:, i] * 257).astype(np.uint16)
+        elif clean_lower == 'intensity':
+            las.intensity = X[:, i].astype(np.uint16)
+        else:
+            las[clean] = X[:, i]
+
+    las.classification = np.array(Y, dtype=np.uint8).flatten()
+    las.write('{}.las'.format(filename))
 
 def main(features_filepath, model, test_filepath, output_classify_name, use_gpu):
 
@@ -126,7 +198,9 @@ def main(features_filepath, model, test_filepath, output_classify_name, use_gpu)
         print(f'---> Classification time {class_sec} sec')
     
     print('Saving ...')
-    write_classification(X, Y_pred, output_classify_name, header)       # Output classification
+
+    # write_classification(X, Y_pred, output_classify_name, header)       # Output classification
+    write_classification_las(X, Y_pred, output_classify_name, header)
     t3 = time.time()
     tot_sec = round(t3 - t2, 2)
     sav_min = int(tot_sec // 60)

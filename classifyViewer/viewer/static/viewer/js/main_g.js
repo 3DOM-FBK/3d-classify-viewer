@@ -143,7 +143,7 @@ testGButton.addEventListener("click", async () => {
     
     console.log("Sending request for testing the function...");
 
-    const which_function = "feature_extraction/";
+    const which_function = "launch_RF_classify/";
     let body = null;
     let file_path = "";
     let use_gpu = false;
