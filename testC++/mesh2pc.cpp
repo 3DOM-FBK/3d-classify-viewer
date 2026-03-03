@@ -395,9 +395,15 @@ int main(int argc, char* argv[]) {
     pcd_final->EstimateNormals(open3d::geometry::KDTreeSearchParamHybrid(0.02, 30));
     pcd_final->OrientNormalsTowardsCameraLocation();
 
+    // Convert NaN normals to a (0,0,0)
     std::vector<std::array<double,3>> all_normals(all_points.size());
-    for (size_t i = 0; i < all_points.size(); ++i)
-        all_normals[i] = {pcd_final->normals_[i][0], pcd_final->normals_[i][1], pcd_final->normals_[i][2]};
+    for (size_t i = 0; i < all_points.size(); ++i) {
+        auto& n = pcd_final->normals_[i];
+        if (std::isnan(n[0]) || std::isnan(n[1]) || std::isnan(n[2]))
+            all_normals[i] = {0.0, 0.0, 0.0};
+        else
+            all_normals[i] = {n[0], n[1], n[2]};
+    }
 
     std::string out_file = mesh_path.substr(0, mesh_path.rfind(".glb")) + "_pc.las";
     write_las(out_file, all_points, all_colors, all_normals);

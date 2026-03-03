@@ -203,6 +203,12 @@ int main(int argc, char* argv[]) {
     pcd->OrientNormalsTowardsCameraLocation();
     has_normals = pcd->HasNormals();
 
+    // Convert NaN normals to a (0,0,0)
+    for (auto& n : pcd->normals_) {
+        if (std::isnan(n[0]) || std::isnan(n[1]) || std::isnan(n[2]))
+            n = {0.0, 0.0, 0.0};
+    }
+
     write_las(out_path, pcd->points_, pcd->colors_, pcd->normals_,
               has_colors, has_normals);
 
