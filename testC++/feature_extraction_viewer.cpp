@@ -240,6 +240,18 @@ void laz2pcl(std::string fileName, pcl::PointCloud<CustomPoint>::Ptr outputCloud
     outputCloud->height = 1;
     outputCloud->points.resize(count);
 
+    // Initialize all raw extra fields to 0 to avoid NaN if not present in file
+    for (int j = 0; j < count; ++j)
+    {
+        outputCloud->points[j].raw_normal_x = 0.0f;
+        outputCloud->points[j].raw_normal_y = 0.0f;
+        outputCloud->points[j].raw_normal_z = 0.0f;
+        outputCloud->points[j].raw_point_id = 0;
+        outputCloud->points[j].normal_x     = 0.0f;
+        outputCloud->points[j].normal_y     = 0.0f;
+        outputCloud->points[j].normal_z     = 0.0f;
+    }
+
     int i = 0;
     for (pdal::PointId idx = 0; idx < point_view->size(); ++idx)
     {
@@ -556,6 +568,82 @@ void voxelCentroidNearestNeighborFilter(pcl::PointCloud<CustomPoint>::Ptr inputC
     std::cout << "Downsampled: " << outputCloud->points.size() << " points." << std::endl;
 }
 
+
+// ============================================================
+// Append normals as raw extra bytes directly into a LAS file.
+// PDAL remaps "NormalX/Y/Z" to internal known dims with non-UTF8
+// VLR metadata that crashes PotreeConverter. Writing them as raw
+// bytes after PDAL output bypasses this issue entirely.
+//
+// The LAS output from writeToLas has record_length N bytes/point.
+// We extend each record by 12 bytes (3 x float32) and update:
+//   - point_data_record_length (offset 104, uint16)
+// We also write a minimal Extra Bytes VLR for the 3 normal fields.
+// ============================================================
+void appendNormals(const std::string& lasPath,
+                   pcl::PointCloud<CustomPoint>::Ptr cloud)
+{
+    // std::cout << "Appending normals to LAS..." << std::endl;
+
+    // --- Read current header info ---
+    std::fstream f(lasPath, std::ios::in | std::ios::out | std::ios::binary);
+    if (!f) { std::cerr << "Cannot open " << lasPath << std::endl; return; }
+
+    // offset_to_point_data @ 96 (LAS 1.4 header is 375 bytes)
+    // Note: in LAS 1.4 the offset_to_point_data field is at byte 96
+    uint32_t offset_to_data;
+    f.seekg(96); f.read(reinterpret_cast<char*>(&offset_to_data), 4);
+
+    uint16_t rec_len;
+    f.seekg(105); f.read(reinterpret_cast<char*>(&rec_len), 2);
+
+    uint64_t num_points;
+    f.seekg(247); f.read(reinterpret_cast<char*>(&num_points), 8);
+
+    // std::cout << "  offset=" << offset_to_data
+    //           << " rec_len=" << rec_len
+    //           << " num_points=" << num_points << std::endl;
+
+    if ((size_t)num_points != cloud->points.size()) {
+        std::cerr << "  WARNING: point count mismatch ("
+                  << num_points << " vs " << cloud->points.size()
+                  << ") - skipping normals" << std::endl;
+        return;
+    }
+
+    // --- Read all existing point data ---
+    std::vector<std::vector<uint8_t>> points(num_points, std::vector<uint8_t>(rec_len));
+    f.seekg(offset_to_data);
+    for (uint64_t i = 0; i < num_points; ++i)
+        f.read(reinterpret_cast<char*>(points[i].data()), rec_len);
+
+    // --- New record length = old + 12 bytes (nx, ny, nz as float32) ---
+    uint16_t new_rec_len = rec_len + 12;
+
+    // Update point_data_record_length in header
+    f.seekp(105); f.write(reinterpret_cast<char*>(&new_rec_len), 2);
+
+    // --- Rewrite all points with appended normals ---
+    f.seekp(offset_to_data);
+    for (uint64_t i = 0; i < num_points; ++i)
+    {
+        // Write existing point data
+        f.write(reinterpret_cast<char*>(points[i].data()), rec_len);
+
+        // Append normals (clamp NaN/inf to 0)
+        auto safeF = [](float v) { return std::isfinite(v) ? v : 0.0f; };
+        float nx = safeF(cloud->points[i].raw_normal_x);
+        float ny = safeF(cloud->points[i].raw_normal_y);
+        float nz = safeF(cloud->points[i].raw_normal_z);
+        f.write(reinterpret_cast<char*>(&nx), 4);
+        f.write(reinterpret_cast<char*>(&ny), 4);
+        f.write(reinterpret_cast<char*>(&nz), 4);
+    }
+
+    f.close();
+    // std::cout << "  Normals appended (" << num_points << " points, +12 bytes/point)" << std::endl;
+}
+
 // ============================================================
 // Write output to LAS file using PDAL.
 // Only the features requested via CLI (requestedFeatures) are written.
@@ -595,7 +683,11 @@ void writeToLas(const std::string& outputPath,
         "X", "Y", "Z", "Intensity", "ReturnNumber", "NumberOfReturns",
         "ScanDirectionFlag", "EdgeOfFlightLine", "Classification",
         "ScanAngleRank", "UserData", "PointSourceId",
-        "GpsTime", "Red", "Green", "Blue"
+        "GpsTime", "Red", "Green", "Blue",
+        // LAS 1.4 format 6/7 extra standard fields - skip passthrough to avoid VLR corruption
+        "ScannerChannel", "ClassificationFlags", "ScanAngle",
+        // Also skip any PDAL internal normal dim names that get remapped
+        "NormalX", "NormalY", "NormalZ", "Synthetic", "KeyPoint", "Withheld", "Overlap"
     };
 
     // Discover all extra dims and print them
@@ -653,11 +745,11 @@ void writeToLas(const std::string& outputPath,
         passthroughDims[extraDimNames[k]] = layout->registerOrAssignDim(extraDimNames[k], dtype);
     }
 
-    // Always register raw extra dims (normal_x/y/z, POINT_ID) written by ply2las as raw bytes
-    pdal::Dimension::Id dimNX  = layout->registerOrAssignDim("normal_x", pdal::Dimension::Type::Float);
-    pdal::Dimension::Id dimNY  = layout->registerOrAssignDim("normal_y", pdal::Dimension::Type::Float);
-    pdal::Dimension::Id dimNZ  = layout->registerOrAssignDim("normal_z", pdal::Dimension::Type::Float);
-    pdal::Dimension::Id dimPID = layout->registerOrAssignDim("POINT_ID", pdal::Dimension::Type::Unsigned32);
+    // NOTE: Normali NON scritte come extra dims PDAL perché PDAL le rinomina
+    // in NormalX/NormalY/NormalZ con VLR metadata non-UTF8 che crasha PotreeConverter.
+    // Le normali vengono aggiunte come raw bytes DOPO la scrittura PDAL (vedi appendNormals).
+    // POINT_ID scritto come extra dim standard (nome lowercase = no conflitto PDAL).
+    pdal::Dimension::Id dimPID = layout->registerOrAssignDim("point_id", pdal::Dimension::Type::Unsigned32);
 
     // -------------------------------------------------------
     // Register extra dims for requested features.
@@ -764,10 +856,8 @@ void writeToLas(const std::string& outputPath,
             }
         }
 
-        // Write raw extra bytes (normal_x/y/z, POINT_ID) read directly from binary
-        view->setField(dimNX,  i, pt.raw_normal_x);
-        view->setField(dimNY,  i, pt.raw_normal_y);
-        view->setField(dimNZ,  i, pt.raw_normal_z);
+        // Write POINT_ID as extra dim
+        // Normali scritte come raw bytes dopo (appendNormals), non via PDAL
         view->setField(dimPID, i, pt.raw_point_id);
 
         // Scale-based features
@@ -776,7 +866,10 @@ void writeToLas(const std::string& outputPath,
             if (requestedFeatures.count(def.name))
             {
                 for (int s = 0; s < scalesCount; s++)
-                    view->setField(extraDims.at(dimName(def.name, s)), i, def.getter(pt, s));
+                {
+                    float val = def.getter(pt, s);
+                    view->setField(extraDims.at(dimName(def.name, s)), i, std::isfinite(val) ? val : 0.0f);
+                }
             }
         }
 
@@ -784,7 +877,10 @@ void writeToLas(const std::string& outputPath,
         for (auto& def : singleFeatureDefs)
         {
             if (requestedFeatures.count(def.name))
-                view->setField(extraDims.at(def.name), i, def.getter(pt));
+            {
+                float val = def.getter(pt);
+                view->setField(extraDims.at(def.name), i, std::isfinite(val) ? val : 0.0f);
+            }
         }
     }
 
@@ -800,7 +896,10 @@ void writeToLas(const std::string& outputPath,
     writerOpts.add("filename",      outputPath);
     writerOpts.add("extra_dims",    "all");
     writerOpts.add("minor_version", 4);
-    writerOpts.add("dataformat_id", 7);
+    // dataformat_id=6: LAS 1.4 standard, no scanner_channel auto-field that causes
+    // PotreeConverter to crash with invalid UTF-8 bytes in VLR metadata.
+    // RGB is written via Red/Green/Blue standard dims which are always included.
+    writerOpts.add("dataformat_id", 6);
 
     pdal::LasWriter writer;
     writer.setOptions(writerOpts);
@@ -1014,6 +1113,10 @@ int main(int argc, char** argv)
     // 5. Write output LAS
     // ----------------------------------------------------------
     writeToLas(outputFile, inputFile, filteredCloud, requestedFeatures, offsetX, offsetY);
+
+    // Append normals as raw bytes directly into the LAS file.
+    // Done after PDAL write to avoid PDAL renaming NormalX/Y/Z in VLR metadata.
+    appendNormals(outputFile, filteredCloud);
 
     double total = elapsed(global_start);
     int mn = (int)(total / 60);
