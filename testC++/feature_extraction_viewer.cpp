@@ -894,12 +894,12 @@ void writeToLas(const std::string& outputPath,
 
     pdal::Options writerOpts;
     writerOpts.add("filename",      outputPath);
+    // extra_dims "all" is required to write extra byte fields
+    // LAS 1.4 / point format 7 needed for extra dims + RGB support
+    // RGB is written via Red/Green/Blue standard dims which are always included.
     writerOpts.add("extra_dims",    "all");
     writerOpts.add("minor_version", 4);
-    // dataformat_id=6: LAS 1.4 standard, no scanner_channel auto-field that causes
-    // PotreeConverter to crash with invalid UTF-8 bytes in VLR metadata.
-    // RGB is written via Red/Green/Blue standard dims which are always included.
-    writerOpts.add("dataformat_id", 6);
+    writerOpts.add("dataformat_id", 7);
 
     pdal::LasWriter writer;
     writer.setOptions(writerOpts);
