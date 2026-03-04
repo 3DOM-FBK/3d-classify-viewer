@@ -246,7 +246,7 @@ textarea,
     background: none;
     border: none;
     color: var(--text-primary);
-    padding: 10px 12px;
+    padding: 8px 12px;
     text-align: left;
     font-size: 0.8rem;
     cursor: pointer;
@@ -260,6 +260,20 @@ textarea,
 .dropdown-option:hover {
     background-color: var(--accent-blue);
     color: white;
+}
+
+.dropdown-separator {
+    height: 1px;
+    background-color: var(--border-color);
+    margin: 4px 4px;
+}
+
+/* Scrollable area per gli attributi custom della nuvola */
+.dropdown-attr-scroll {
+    max-height: 220px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
 }
 
 /* Toolbar Laterale Destra */

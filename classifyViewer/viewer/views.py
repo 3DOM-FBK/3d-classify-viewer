@@ -1,7 +1,10 @@
 from django.shortcuts import render
-from django.http import HttpResponse, StreamingHttpResponse, Http404
+from django.http import HttpResponse, StreamingHttpResponse, Http404, JsonResponse
+from django.views.decorators.csrf import csrf_exempt
 import os
 import re
+import json
+import datetime
 
 # Create your views here.
 
@@ -10,6 +13,56 @@ def home(request):
 
 def test_babylon(request):
     return render(request, "viewer/viewer_page.html")
+
+@csrf_exempt
+def start_training(request):
+    """
+    Endpoint for receiving training data in binary format.
+    Expects FormData with:
+    - 'labels': JSON string mapping segmentId -> segmentName
+    - 'buffer': Binary file (one byte per point total)
+    """
+    if request.method == 'POST':
+        try:
+            label_map_json = request.POST.get('labels')
+            buffer_file = request.FILES.get('buffer')
+
+            if not label_map_json:
+                return JsonResponse({"error": "Missing 'labels' metadata"}, status=400)
+            if not buffer_file:
+                return JsonResponse({"error": "Missing 'buffer' binary data"}, status=400)
+
+            # Define output directory
+            base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            training_dir = os.path.join(base_dir, 'training_data')
+            os.makedirs(training_dir, exist_ok=True)
+
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            bin_filename = f"labels_{timestamp}.bin"
+            json_filename = f"meta_{timestamp}.json"
+
+            # Save binary buffer
+            bin_path = os.path.join(training_dir, bin_filename)
+            with open(bin_path, 'wb') as f:
+                for chunk in buffer_file.chunks():
+                    f.write(chunk)
+
+            # Save metadata JSON
+            json_path = os.path.join(training_dir, json_filename)
+            with open(json_path, 'w', encoding='utf-8') as f:
+                f.write(label_map_json)
+
+            return JsonResponse({
+                "message": "Binary data saved successfully",
+                "filename": bin_filename,
+                "labels_filename": json_filename,
+                "size_bytes": os.path.getsize(bin_path)
+            }, status=200)
+
+        except Exception as e:
+            return JsonResponse({"error": str(e)}, status=500)
+
+    return JsonResponse({"error": "Method not allowed. Use POST."}, status=405)
 
 
 def serve_range_file(request, filepath):

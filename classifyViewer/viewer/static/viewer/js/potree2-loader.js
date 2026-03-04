@@ -351,9 +351,9 @@ export class Potree2Loader {
     }
 
     /**
-     * Applica la colorMode corrente ai vertex colors di un singolo mesh.
-     * Chiamato da setColorMode() e da update() quando un nodo diventa visibile.
-     */
+ * Applica la colorMode corrente ai vertex colors di un singolo mesh.
+ * Chiamato da setColorMode() e da update() quando un nodo diventa visibile.
+ */
     _applyColorModeToMesh(mesh) {
         const colors = mesh.getVerticesData(BABYLON.VertexBuffer.ColorKind);
         if (!colors) return;
@@ -367,22 +367,35 @@ export class Potree2Loader {
         const numPoints = colors.length / 4;
         let changed = false;
 
+        // Check for attribute mode (e.g. "attr:intensity")
+        const isAttrMode = this.colorMode.startsWith('attr:');
+        const attrName = isAttrMode ? this.colorMode.slice(5) : null;
+        const attrColors = isAttrMode ? mesh.metadata?.attributeColors?.[attrName] : null;
+
         for (let i = 0; i < numPoints; i++) {
-            // 1. Apply base color (classification or original)
-            const hasClass = classIds && classIds[i] > 0 && classColors;
-            if (this.colorMode === "classification" && hasClass) {
-                colors[i * 4] = classColors[i * 4];
-                colors[i * 4 + 1] = classColors[i * 4 + 1];
-                colors[i * 4 + 2] = classColors[i * 4 + 2];
+            // 1. Apply base color
+            if (isAttrMode && attrColors) {
+                // Attribute visualization
+                colors[i * 4] = attrColors[i * 4];
+                colors[i * 4 + 1] = attrColors[i * 4 + 1];
+                colors[i * 4 + 2] = attrColors[i * 4 + 2];
                 colors[i * 4 + 3] = 1.0;
-            } else if (originalColors) {
-                colors[i * 4] = originalColors[i * 4];
-                colors[i * 4 + 1] = originalColors[i * 4 + 1];
-                colors[i * 4 + 2] = originalColors[i * 4 + 2];
-                colors[i * 4 + 3] = originalColors[i * 4 + 3];
+            } else {
+                const hasClass = classIds && classIds[i] > 0 && classColors;
+                if (this.colorMode === "classification" && hasClass) {
+                    colors[i * 4] = classColors[i * 4];
+                    colors[i * 4 + 1] = classColors[i * 4 + 1];
+                    colors[i * 4 + 2] = classColors[i * 4 + 2];
+                    colors[i * 4 + 3] = 1.0;
+                } else if (originalColors) {
+                    colors[i * 4] = originalColors[i * 4];
+                    colors[i * 4 + 1] = originalColors[i * 4 + 1];
+                    colors[i * 4 + 2] = originalColors[i * 4 + 2];
+                    colors[i * 4 + 3] = originalColors[i * 4 + 3];
+                }
             }
 
-            // 2. Re-apply selection highlight on top, respecting selectionInverted
+            // 2. Re-apply selection highlight on top (always overrides)
             if (positions && this.selectionHistory.length > 0 && !isNaN(positions[i * 3])) {
                 const vector = new BABYLON.Vector3(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
                 const inHistory = this._isPointInSelectionHistory(vector);
@@ -570,6 +583,148 @@ export class Potree2Loader {
         );
     }
 
+    // ========== ATTRIBUTE COLORIZATION UTILITIES ==========
+
+    /**
+     * Legge un valore scalare dall'ArrayBuffer in base al tipo dell'attributo.
+     */
+    _readAttrScalar(view, byteOffset, attr) {
+        const t = attr.type;
+        if (t === 'int8') return view.getInt8(byteOffset);
+        if (t === 'uint8') return view.getUint8(byteOffset);
+        if (t === 'int16') return view.getInt16(byteOffset, true);
+        if (t === 'uint16') return view.getUint16(byteOffset, true);
+        if (t === 'int32') return view.getInt32(byteOffset, true);
+        if (t === 'uint32') return view.getUint32(byteOffset, true);
+        if (t === 'float') return view.getFloat32(byteOffset, true);
+        if (t === 'double') return view.getFloat64(byteOffset, true);
+        // int64/uint64: fallback to int32 (only low 4 bytes)
+        return view.getInt32(byteOffset, true);
+    }
+
+    /**
+     * Colormap Viridis (clampa a [0,1]). Usata per attributi continui (es. intensity).
+     */
+    _colormapViridis(t) {
+        t = Math.max(0, Math.min(1, t));
+        // 5-stop Viridis approximation
+        const stops = [
+            [0.267, 0.005, 0.329],
+            [0.283, 0.141, 0.458],
+            [0.163, 0.471, 0.558],
+            [0.134, 0.659, 0.518],
+            [0.478, 0.821, 0.318],
+            [0.993, 0.906, 0.144]
+        ];
+        const scaled = t * (stops.length - 1);
+        const lo = Math.floor(scaled);
+        const hi = Math.min(lo + 1, stops.length - 1);
+        const f = scaled - lo;
+        return [
+            stops[lo][0] + (stops[hi][0] - stops[lo][0]) * f,
+            stops[lo][1] + (stops[hi][1] - stops[lo][1]) * f,
+            stops[lo][2] + (stops[hi][2] - stops[lo][2]) * f
+        ];
+    }
+
+    /**
+     * Palette ciclica discreta per attributi interi (es. classification, return_number).
+     * Restituisce [r, g, b] in [0,1].
+     */
+    _colormapDiscrete(intValue) {
+        const palette = [
+            [0.22, 0.62, 0.85],  // blu
+            [0.95, 0.45, 0.10],  // arancione
+            [0.17, 0.72, 0.44],  // verde
+            [0.80, 0.22, 0.33],  // rosso
+            [0.58, 0.40, 0.74],  // viola
+            [0.99, 0.75, 0.18],  // giallo
+            [0.40, 0.76, 0.65],  // turchese
+            [0.88, 0.53, 0.79],  // rosa
+            [0.60, 0.60, 0.60],  // grigio
+            [0.99, 0.55, 0.38],  // salmone
+        ];
+        const idx = Math.abs(intValue) % palette.length;
+        return palette[idx];
+    }
+
+    /**
+     * Costruisce una mappa name -> Float32Array(numPoints*4) per tutti
+     * gli attributi scalari visualizzabili (esclude position, rgb, point_id).
+     */
+    _buildAttributeColors(view, numPoints, buffer) {
+        // Liste di attributi standard da ignorare (normalizzati senza spazi/underscore)
+        const SKIP_NORMALIZED = new Set([
+            'position', 'rgb', 'pointid', 'point_id',
+            'intensity', 'returnnumber', 'numberofreturns',
+            'classificationflags', 'classification', 'userdata',
+            'scanangle', 'pointsourceid', 'gpstime', 'gps-time'
+        ]);
+        const result = {};
+
+        for (const attr of this.attributes) {
+            const lname = attr.name.toLowerCase();
+            const normalized = lname.replace(/[\s_-]/g, '');
+
+            if (SKIP_NORMALIZED.has(normalized)) continue;
+            if (attr.numElements !== 1) continue; // solo scalari
+            if (attr.elementSize > 8) continue;   // sanity
+
+            const isDiscrete = (['int8', 'uint8', 'int16', 'uint16', 'int32', 'uint32'].includes(attr.type)
+                && attr.name !== 'intensity');
+
+            const vmin = Array.isArray(attr.min) ? attr.min[0] : (attr.min ?? 0);
+            const vmax = Array.isArray(attr.max) ? attr.max[0] : (attr.max ?? 1);
+            const range = vmax - vmin || 1;
+
+            const rgba = new Float32Array(numPoints * 4);
+
+            for (let j = 0; j < numPoints; j++) {
+                const pointOffset = j * this.bytesPerPoint;
+                const absOffset = pointOffset + attr.byteOffset;
+                if (absOffset + attr.elementSize > buffer.byteLength) break;
+
+                const val = this._readAttrScalar(view, absOffset, attr);
+                let r, g, b;
+
+                if (isDiscrete) {
+                    [r, g, b] = this._colormapDiscrete(val);
+                } else {
+                    const t = (val - vmin) / range;
+                    [r, g, b] = this._colormapViridis(t);
+                }
+
+                rgba[j * 4] = r;
+                rgba[j * 4 + 1] = g;
+                rgba[j * 4 + 2] = b;
+                rgba[j * 4 + 3] = 1.0;
+            }
+
+            result[attr.name] = rgba;
+        }
+
+        return result;
+    }
+
+    /**
+     * Restituisce la lista degli attributi visualizzabili come colori.
+     * Chiamato da main.js dopo il load per popolare il color menu.
+     */
+    getAttributeList() {
+        const SKIP_NORMALIZED = new Set([
+            'position', 'rgb', 'pointid', 'point_id',
+            'intensity', 'returnnumber', 'numberofreturns',
+            'classificationflags', 'classification', 'userdata',
+            'scanangle', 'pointsourceid', 'gpstime', 'gps-time'
+        ]);
+        return this.attributes
+            .filter(a => {
+                const normalized = a.name.toLowerCase().replace(/[\s_-]/g, '');
+                return !SKIP_NORMALIZED.has(normalized) && a.numElements === 1;
+            })
+            .map(a => a.name);
+    }
+
     // ========== MESH CREATION ==========
 
     _createMeshFromBuffer(node, buffer) {
@@ -584,10 +739,14 @@ export class Potree2Loader {
 
         let posAttr = null;
         let rgbAttr = null;
+        let pointIdAttr = null;
 
         for (const attr of this.attributes) {
             if (attr.name === "position") posAttr = attr;
             if (attr.name === "rgb") rgbAttr = attr;
+            if (attr.name.toLowerCase() === "point_id" || attr.name.toLowerCase() === "pointid") {
+                pointIdAttr = attr;
+            }
         }
 
         if (!posAttr) {
@@ -597,6 +756,9 @@ export class Potree2Loader {
 
         let minX = Infinity, minY = Infinity, minZ = Infinity;
         let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+
+        const pointIds = new Int32Array(numPoints);
+        pointIds.fill(-1);
 
         for (let j = 0; j < numPoints; j++) {
             const pointOffset = j * this.bytesPerPoint;
@@ -640,7 +802,15 @@ export class Potree2Loader {
                 colors[4 * j + 3] = 1.0;
             }
 
+            // Decode POINT_ID
+            if (pointIdAttr && pointOffset + pointIdAttr.byteOffset + 4 <= buffer.byteLength) {
+                // Read as Int32/Uint32 (it usually comes as 4 bytes). Using getInt32.
+                pointIds[j] = view.getInt32(pointOffset + pointIdAttr.byteOffset, true);
+            }
         }
+
+        // Build per-attribute color arrays (stored in metadata, used by color menu)
+        const attributeColors = this._buildAttributeColors(view, numPoints, buffer);
 
         // Salva le posizioni originali in modo da poterle nascondere (assegnando NaN)
         // e rimettere a posto in un secondo momento, superando di forza qualsiasi
@@ -756,6 +926,8 @@ export class Potree2Loader {
             classIds,
             classColors,
             segmentIds,
+            pointIds,
+            attributeColors,
             potree2Node: true
         };
 
@@ -1636,6 +1808,192 @@ export class Potree2Loader {
     }
 
     /**
+     * Build and return an array of { point_id, element } for all points 
+     * Build and return an array of { point_id, element } for all points
+     * in the entire cloud that belong to a mapped segment.
+     * Traverse the octree to find all points across all levels of detail.
+     */
+    async exportAllTrainingData(segmentNameMap) {
+        const totalPoints = this.metadata.points;
+        const buffer = new Uint8Array(totalPoints * 2); // Interleaved: [segId, classId, segId, classId, ...]
+        const seenIds = new Set();
+        let totalProcessed = 0;
+        let skippedNoId = 0;
+        let duplicates = 0;
+
+        // Identify which segments the user actually cares about (including segment 0)
+        const requestedIds = Object.keys(segmentNameMap).map(id => parseInt(id, 10));
+        if (requestedIds.length === 0) return null;
+
+        const includeSegmentZero = segmentNameMap[0] !== undefined;
+
+        // Helper: Is this node worth visiting?
+        const shouldVisit = (node) => {
+            if (includeSegmentZero) return true;
+            return this.cutHistory.some(region => {
+                if (!segmentNameMap[region.segmentId]) return false;
+                return (node.boundingBox.min[0] <= region.maxX && node.boundingBox.max[0] >= region.minX &&
+                    node.boundingBox.min[1] <= region.maxY && node.boundingBox.max[1] >= region.minY &&
+                    node.boundingBox.min[2] <= region.maxZ && node.boundingBox.max[2] >= region.minZ);
+            });
+        };
+
+        const traverse = async (node) => {
+            if (!shouldVisit(node)) return;
+
+            // Proxy node? Expand hierarchy
+            if (node.nodeType === 2) {
+                this._ensureHierarchyLoaded(node);
+            }
+
+            // Is this node already loaded in the scene?
+            const mesh = this.loadedNodes.get(node.name);
+            if (mesh && mesh.metadata && mesh.metadata.pointIds && mesh.metadata.segmentIds) {
+                const segmentIds = mesh.metadata.segmentIds;
+                const classIds = mesh.metadata.classIds || new Int32Array(mesh.metadata.pointIds.length);
+                const pointIds = mesh.metadata.pointIds;
+                for (let i = 0; i < pointIds.length; i++) {
+                    const pid = pointIds[i];
+                    totalProcessed++;
+                    if (pid === -1 || pid >= totalPoints) {
+                        skippedNoId++;
+                        continue;
+                    }
+                    if (seenIds.has(pid)) {
+                        duplicates++;
+                        continue;
+                    }
+
+                    const segId = segmentIds[i] || 0;
+                    if (segmentNameMap[segId]) {
+                        seenIds.add(pid);
+                        buffer[pid * 2] = segId;
+                        buffer[pid * 2 + 1] = classIds[i] || 0;
+                    }
+                }
+            } else if (node.numPoints > 0) {
+                // Fetch and parse points for this node
+                const nodeBuffer = await this._fetchRange("octree.bin", node.byteOffset, node.byteSize);
+                if (nodeBuffer) {
+                    const points = this._parsePointsFromBufferDirect(node, nodeBuffer);
+                    for (const p of points) {
+                        totalProcessed++;
+                        if (p.id === -1 || p.id >= totalPoints) {
+                            skippedNoId++;
+                            continue;
+                        }
+                        if (seenIds.has(p.id)) {
+                            duplicates++;
+                            continue;
+                        }
+
+                        const seg = this._getPointSegment(p.pos);
+                        const finalSegId = seg ? seg.segmentId : 0;
+
+                        if (segmentNameMap[finalSegId]) {
+                            seenIds.add(p.id);
+                            buffer[p.id * 2] = finalSegId;
+
+                            const cls = this._getPointClassification(p.pos);
+                            buffer[p.id * 2 + 1] = cls ? cls.classId : 0;
+                        }
+                    }
+                }
+            }
+
+            // Subdivide (Processed sequentially to avoid ERR_INSUFFICIENT_RESOURCES)
+            for (const child of node.children) {
+                if (child) await traverse(child);
+            }
+        };
+
+        console.log("🚀 Starting global octree traversal (2-Channel Binary Mode)...");
+        await traverse(this.root);
+        console.log(`✅ Global traversal finished.`);
+        console.log(`   - Total points in octree nodes: ${totalProcessed.toLocaleString()}`);
+        console.log(`   - Unique points assigned in buffer: ${seenIds.size.toLocaleString()}`);
+        console.log(`   - Points skipped: ${skippedNoId.toLocaleString()} (no ID), ${duplicates.toLocaleString()} (duplicates)`);
+
+        return {
+            buffer: buffer,
+            segmentMap: segmentNameMap
+        };
+    }
+
+    /**
+     * Lightweight point parser that returns { pos: Vector3, id: number }[]
+     */
+    _parsePointsFromBufferDirect(node, buffer) {
+        const view = new DataView(buffer);
+        const numPoints = node.numPoints;
+        const results = [];
+
+        const scale = this.metadata.scale;
+        const metaOffset = this.metadata.offset;
+        const bbMin = this.metadata.boundingBox.min;
+
+        let posAttr = null;
+        let pointIdAttr = null;
+        for (const attr of this.attributes) {
+            const lowName = attr.name.toLowerCase();
+            if (lowName === "position") posAttr = attr;
+            if (lowName === "point_id" || lowName === "pointid") {
+                pointIdAttr = attr;
+            }
+        }
+        if (!posAttr) return [];
+
+        for (let j = 0; j < numPoints; j++) {
+            const pointOffset = j * this.bytesPerPoint;
+            if (pointOffset + posAttr.byteOffset + 12 > buffer.byteLength) break;
+
+            const rawX = view.getInt32(pointOffset + posAttr.byteOffset + 0, true);
+            const rawY = view.getInt32(pointOffset + posAttr.byteOffset + 4, true);
+            const rawZ = view.getInt32(pointOffset + posAttr.byteOffset + 8, true);
+
+            const x = (rawX * scale[0]) + metaOffset[0] - bbMin[0];
+            const y = (rawY * scale[1]) + metaOffset[1] - bbMin[1];
+            const z = (rawZ * scale[2]) + metaOffset[2] - bbMin[2];
+
+            let pid = -1;
+            if (pointIdAttr && pointOffset + pointIdAttr.byteOffset + 4 <= buffer.byteLength) {
+                pid = view.getInt32(pointOffset + pointIdAttr.byteOffset, true);
+            }
+
+            results.push({ pos: new BABYLON.Vector3(x, y, z), id: pid });
+        }
+        return results;
+    }
+
+    /**
+     * Build and return an array of { point_id, element } for all loaded points
+     * that belong to a mapped segment. (Legacy/LOD-limited version)
+     */
+    exportTrainingData(segmentNameMap) {
+        const result = [];
+        const seenIds = new Set();
+
+        this.loadedNodes.forEach(mesh => {
+            if (!mesh.metadata || !mesh.metadata.segmentIds || !mesh.metadata.pointIds) return;
+            const segmentIds = mesh.metadata.segmentIds;
+            const pointIds = mesh.metadata.pointIds;
+
+            for (let i = 0; i < segmentIds.length; i++) {
+                const segId = segmentIds[i];
+                if (segId > 0 && segmentNameMap[segId]) {
+                    const pid = pointIds[i];
+                    if (pid !== undefined && pid !== -1 && !seenIds.has(pid)) {
+                        seenIds.add(pid);
+                        result.push({ point_id: pid, element: segmentNameMap[segId] });
+                    }
+                }
+            }
+        });
+
+        return result;
+    }
+
+    /**
      * Remove selection from a specific segment (moves it back to main cloud 0).
      */
     removeSelectionFromSegment(segmentId) {
@@ -1805,6 +2163,9 @@ export async function loadPotree2PointCloud(basePath, scene, options = {}) {
     }
 
     scene.potree2Loader = loader;
+
+    // Notify main.js that attribute list is ready, so it can populate the color menu
+    window.dispatchEvent(new CustomEvent('potree2-loaded', { detail: { loader } }));
 
     if (window.__registerPointCloudInOutline) {
         window.__registerPointCloudInOutline(loader.rootTransform, "Potree 2.0 Cloud");

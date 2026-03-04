@@ -820,6 +820,9 @@ export function createSlider(label, min, max, initial, step, parent) {
 export function createOutlineItem(name, iconSrc, parent, segmentId, onVisibilityChange = null, initialVisible = true) {
     const row = document.createElement('div');
     row.classList.add('outline-item');
+    if (segmentId !== undefined && segmentId !== null) {
+        row.dataset.segmentId = segmentId;
+    }
 
     const mainInfo = document.createElement('div');
     mainInfo.classList.add('outline-main-info');

@@ -108,17 +108,21 @@ function initViewMenu() {
 // --- Color Menu Logic ---
 let currentColorMode = "classification"; // default: Classification View
 
+// References kept for dynamic updates after load
+let _colorMenuBtn = null;
+let _colorMenuDropdown = null;
+
 function initColorMenu() {
     if (!colorMenu) return;
 
-    const btn = document.createElement('button');
-    btn.classList.add('dropdown-btn');
-    btn.textContent = "Classification View"; // label iniziale coerente col default
-    colorMenu.appendChild(btn);
+    _colorMenuBtn = document.createElement('button');
+    _colorMenuBtn.classList.add('dropdown-btn');
+    _colorMenuBtn.textContent = "Classification View";
+    colorMenu.appendChild(_colorMenuBtn);
 
-    const dropdown = document.createElement('div');
-    dropdown.classList.add('dropdown-content');
-    colorMenu.appendChild(dropdown);
+    _colorMenuDropdown = document.createElement('div');
+    _colorMenuDropdown.classList.add('dropdown-content');
+    colorMenu.appendChild(_colorMenuDropdown);
 
     const modes = [
         { name: "Color View", value: "color" },
@@ -128,22 +132,60 @@ function initColorMenu() {
     modes.forEach(m => {
         const opt = document.createElement('button');
         opt.classList.add('dropdown-option');
-        opt.innerHTML = `<style="width:16px; height:16px; filter:brightness(0) invert(1);"> ${m.name}`;
-
+        opt.textContent = m.name;
         opt.onclick = () => {
             switchColorMode(m.value);
-            btn.textContent = m.name;
-            dropdown.classList.remove('show');
+            _colorMenuBtn.textContent = m.name;
+            _colorMenuDropdown.classList.remove('show');
         };
-        dropdown.appendChild(opt);
+        _colorMenuDropdown.appendChild(opt);
     });
 
-    btn.onclick = (e) => {
+    _colorMenuBtn.onclick = (e) => {
         e.stopPropagation();
         closeAllDropdowns();
-        dropdown.classList.toggle('show');
+        _colorMenuDropdown.classList.toggle('show');
     };
 }
+
+/**
+ * Called after the point cloud loads to inject attribute entries into the color menu.
+ * @param {string[]} attributeNames - list of visualizable attribute names.
+ */
+function addAttributesToColorMenu(attributeNames) {
+    if (!_colorMenuDropdown || attributeNames.length === 0) return;
+
+    // Avoid duplicates if called more than once
+    if (_colorMenuDropdown.querySelector('.dropdown-separator')) return;
+
+    const sep = document.createElement('div');
+    sep.classList.add('dropdown-separator');
+    _colorMenuDropdown.appendChild(sep);
+
+    // Scrollable container for attribute entries
+    const scrollBox = document.createElement('div');
+    scrollBox.classList.add('dropdown-attr-scroll');
+    _colorMenuDropdown.appendChild(scrollBox);
+
+    attributeNames.forEach(attrName => {
+        const opt = document.createElement('button');
+        opt.classList.add('dropdown-option');
+        opt.textContent = `📊 ${attrName}`;
+        opt.onclick = () => {
+            switchColorMode(`attr:${attrName}`);
+            _colorMenuBtn.textContent = attrName;
+            _colorMenuDropdown.classList.remove('show');
+        };
+        scrollBox.appendChild(opt);
+    });
+}
+
+// Listen for the event fired by loadPotree2PointCloud (after loader is ready)
+window.addEventListener('potree2-loaded', (e) => {
+    const attrs = e.detail.loader.getAttributeList();
+    console.log('📋 Visualizable attributes:', attrs);
+    addAttributesToColorMenu(attrs);
+});
 
 function closeAllDropdowns() {
     document.querySelectorAll('.dropdown-content').forEach(d => d.classList.remove('show'));
@@ -872,5 +914,88 @@ if (cutModeButton) {
         const guide = document.getElementById('command-guide');
         if (guide) guide.classList.remove('visible');
         camera.attachControl(canvas, true);
+    });
+}
+
+// --- Training Logic ---
+if (startTrainingButton) {
+    startTrainingButton.addEventListener("click", async () => {
+        const loader = scene.potree2Loader;
+        if (!loader) {
+            console.warn("No point cloud loaded.");
+            return;
+        }
+
+        startTrainingButton.disabled = true;
+
+        try {
+            // Build segment lookup map: segmentId -> segmentName
+            const segmentMap = {};
+            document.querySelectorAll('.outline-item[data-segment-id]').forEach(item => {
+                const segId = parseInt(item.dataset.segmentId, 10);
+                const nameInput = item.querySelector('.outline-name-input');
+                if (!isNaN(segId) && nameInput) segmentMap[segId] = nameInput.value;
+            });
+
+            // Build class lookup map: classId -> className
+            const classMap = {};
+            document.querySelectorAll('.class-item').forEach((item, index) => {
+                const nameInput = item.querySelector('.outline-name-input');
+                if (nameInput) {
+                    // Match the 0-based counter from functions.js
+                    classMap[index] = nameInput.value;
+                }
+            });
+
+            // Visual feedback
+            startTrainingButton.textContent = "Extracting Points...";
+
+            // Extract training data
+            const exportResult = await loader.exportAllTrainingData(segmentMap);
+
+            if (!exportResult || !exportResult.buffer) {
+                console.warn("No assigned points found to train on.");
+                alert("No points were identified in the selected regions.");
+                startTrainingButton.textContent = "Start Training";
+                startTrainingButton.disabled = false;
+                return;
+            }
+
+            // Visual feedback
+            startTrainingButton.textContent = "Sending Data...";
+
+            // Use FormData to send binary buffer + structured metadata
+            const metadata = {
+                segments: exportResult.segmentMap,
+                classes: classMap
+            };
+
+            const formData = new FormData();
+            formData.append('labels', JSON.stringify(metadata));
+            formData.append('buffer', new Blob([exportResult.buffer], { type: 'application/octet-stream' }));
+
+            console.log(`🚀 Uploading binary buffer (${(exportResult.buffer.byteLength / 1024 / 1024).toFixed(2)} MB)...`);
+
+            const response = await fetch('/api/start-training/', {
+                method: 'POST',
+                body: formData
+            });
+
+            if (!response.ok) {
+                const errData = await response.json();
+                throw new Error(errData.error || "Failed to start training");
+            }
+
+            const data = await response.json();
+            console.log("✅ Training data uploaded successfully:", data);
+            alert(`Training data saved! Binary buffer: ${data.filename}\nLabels: ${data.labels_filename}`);
+
+        } catch (error) {
+            console.error("❌ Error uploading training data:", error);
+            alert(`Error: ${error.message}`);
+        } finally {
+            startTrainingButton.textContent = "Start Training";
+            startTrainingButton.disabled = false;
+        }
     });
 }
