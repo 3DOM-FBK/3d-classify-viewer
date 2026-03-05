@@ -123,7 +123,11 @@ def Potree(input_filepath, output_filepath):
     abs_input = os.path.abspath(os.path.join(settings.BASE_DIR, input_filepath))
     abs_output = os.path.abspath(os.path.join(settings.BASE_DIR, output_filepath))
 
-    command = ["/app/PotreeConverter_linux_x64", "-i", abs_input, "-o", abs_output]
+    # Ensure the output directory exists
+    if not os.path.exists(abs_output):
+        os.makedirs(abs_output, exist_ok=True)
+
+    command = ["/app/PotreeConverter_linux_x64/PotreeConverter", "-i", abs_input, "-o", abs_output]
     
     launch_subprocess(command)
     

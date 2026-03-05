@@ -105,9 +105,9 @@ export class Potree2Loader {
         // Persistent Selection History
         // [{ type, area, viewport, transformMatrix }]
         this.selectionHistory = [];
-        // Regioni di deselezione (CTRL+select) — stessa struttura di selectionHistory.
-        // I punti che cadono qui vengono esclusi dalla classificazione anche se
-        // sono dentro una regione di selectionHistory.
+        // Deselection regions (CTRL+select) — same structure as selectionHistory.
+        // Points that fall here are excluded from classification even if
+        // they are inside a selectionHistory region.
         this.deselectionHistory = [];
 
         // Flag: when true, the selection logic is inverted — points OUTSIDE the
@@ -120,11 +120,11 @@ export class Potree2Loader {
         // independent of camera position/rotation.
         this.classificationHistory = [];
 
-        // Modalità di visualizzazione corrente, sincronizzata con la UI via setColorMode().
-        // "classification" (default): i punti classificati mostrano il colore della classe.
-        // "color": tutti i punti mostrano il colore originale della nuvola.
-        // _createMeshFromBuffer usa questo valore per decidere quali colori scrivere
-        // nei vertex data dei nuovi nodi LOD caricati.
+        // Current display mode, synchronized with the UI via setColorMode().
+        // "classification" (default): classified points show their class color.
+        // "color": all points show the original point cloud color.
+        // _createMeshFromBuffer uses this value to decide which colors to write
+        // into the vertex data of newly loaded LOD nodes.
         this.colorMode = "classification";
 
         // ---- CUT / SEGMENT HISTORY ----
@@ -157,12 +157,12 @@ export class Potree2Loader {
 
         this._parseAttributes();
 
-        console.log("📂 Loading hierarchy.bin...");
+        // console.log("📂 Loading hierarchy.bin...");
         const hierUrl = this._getRangeUrl("hierarchy.bin");
         const hierResponse = await fetch(hierUrl);
         if (!hierResponse.ok) throw new Error(`Failed to load hierarchy.bin: ${hierResponse.status}`);
         this.hierarchyBuffer = await hierResponse.arrayBuffer();
-        console.log(`   hierarchy.bin loaded: ${this.hierarchyBuffer.byteLength.toLocaleString()} bytes`);
+        // console.log(`   hierarchy.bin loaded: ${this.hierarchyBuffer.byteLength.toLocaleString()} bytes`);
 
         const bbMin = this.metadata.boundingBox.min;
         const bbMax = this.metadata.boundingBox.max;
@@ -188,10 +188,10 @@ export class Potree2Loader {
             levelStats[n.level].points += n.numPoints;
             totalNodePoints += n.numPoints;
         }
-        console.log(`✅ Hierarchy parsed: ${allNodes.length} nodes, ${totalNodePoints.toLocaleString()} total points`);
-        for (const [level, data] of Object.entries(levelStats).sort((a, b) => a[0] - b[0])) {
-            console.log(`   Level ${level}: ${data.count} nodes, ${data.points.toLocaleString()} points`);
-        }
+        // console.log(`✅ Hierarchy parsed: ${allNodes.length} nodes, ${totalNodePoints.toLocaleString()} total points`);
+        // for (const [level, data] of Object.entries(levelStats).sort((a, b) => a[0] - b[0])) {
+        // console.log(`   Level ${level}: ${data.count} nodes, ${data.points.toLocaleString()} points`);
+        // }
 
         const pointCountDisplay = document.getElementById('point-count');
         if (pointCountDisplay) pointCountDisplay.textContent = this.metadata.points.toLocaleString();
@@ -226,14 +226,14 @@ export class Potree2Loader {
     }
 
     async _loadInitialNodes() {
-        console.log("🔄 Loading initial nodes (root + levels 0-2)...");
+        // console.log("🔄 Loading initial nodes (root + levels 0-2)...");
         const allNodes = this._collectNodes(this.root);
 
         const initialNodes = allNodes
             .filter(n => n.level <= 2 && n.numPoints > 0 && n.byteSize > 0n)
             .sort((a, b) => a.level - b.level || b.numPoints - a.numPoints);
 
-        console.log(`   Will load ${initialNodes.length} initial nodes via Range requests`);
+        // console.log(`   Will load ${initialNodes.length} initial nodes via Range requests`);
 
         const batchSize = 6;
         for (let i = 0; i < initialNodes.length; i += batchSize) {
@@ -250,7 +250,7 @@ export class Potree2Loader {
         }
 
         this.stats.visibleNodes = this.activeNodes.size;
-        console.log(`✅ Initial load complete: ${this.loadedNodes.size} meshes visible`);
+        // console.log(`✅ Initial load complete: ${this.loadedNodes.size} meshes visible`);
     }
 
     async _loadNode(node) {
@@ -276,9 +276,9 @@ export class Potree2Loader {
             this._createMeshFromBuffer(node, buffer);
             this.stats.loadedNodes++;
 
-            if (this.stats.loadedNodes <= 30 || this.stats.loadedNodes % 50 === 0) {
-                console.log(`   ✅ Node ${node.name} (L${node.level}): ${node.numPoints.toLocaleString()} pts`);
-            }
+            // if (this.stats.loadedNodes <= 30 || this.stats.loadedNodes % 50 === 0) {
+            //     console.log(`   ✅ Node ${node.name} (L${node.level}): ${node.numPoints.toLocaleString()} pts`);
+            // }
         } catch (err) {
             console.error(`❌ Failed to load node ${node.name}:`, err);
         } finally {
@@ -315,9 +315,9 @@ export class Potree2Loader {
 
             if (mesh.isVisible !== shouldShow) mesh.isVisible = shouldShow;
 
-            // Quando un nodo diventa visibile aggiorna i vertex colors
-            // secondo la colorMode corrente. Necessario perché il nodo potrebbe
-            // essere stato caricato o modificato mentre era nascosto.
+            // When a node becomes visible, update its vertex colors
+            // according to the current colorMode. Necessary because the node may
+            // have been loaded or modified while hidden.
             if (shouldShow && wasHidden) {
                 this._applyColorModeToMesh(mesh);
             }
@@ -338,22 +338,22 @@ export class Potree2Loader {
     }
 
     /**
-     * Aggiorna la modalità di visualizzazione del loader.
-     * Chiamato da switchColorMode() in main.js ogni volta che l'utente cambia vista,
-     * così i nuovi nodi LOD caricati usano subito i colori giusti.
+     * Updates the display mode of the loader.
+     * Called by switchColorMode() in main.js every time the user changes the view,
+     * so newly loaded LOD nodes immediately use the correct colors.
      */
     setColorMode(mode) {
         this.colorMode = mode;
-        // Aggiorna immediatamente tutti i nodi visibili
+        // Immediately update all visible nodes
         for (const mesh of this.loadedNodes.values()) {
             if (mesh.isVisible) this._applyColorModeToMesh(mesh);
         }
     }
 
     /**
- * Applica la colorMode corrente ai vertex colors di un singolo mesh.
- * Chiamato da setColorMode() e da update() quando un nodo diventa visibile.
- */
+     * Applies the current colorMode to the vertex colors of a single mesh.
+     * Called by setColorMode() and by update() when a node becomes visible.
+     */
     _applyColorModeToMesh(mesh) {
         const colors = mesh.getVerticesData(BABYLON.VertexBuffer.ColorKind);
         if (!colors) return;
@@ -456,8 +456,8 @@ export class Potree2Loader {
         }
 
         this.bytesPerPoint = byteOffset;
-        console.log("📋 Attributes:", this.attributes.map(a => `${a.name}(${a.type}, ${a.size}B)`).join(", "));
-        console.log("   Bytes per point:", this.bytesPerPoint);
+        // console.log("📋 Attributes:", this.attributes.map(a => `${a.name}(${a.type}, ${a.size}B)`).join(", "));
+        // console.log("   Bytes per point:", this.bytesPerPoint);
     }
 
     // ========== HIERARCHY PARSING ==========
@@ -586,7 +586,7 @@ export class Potree2Loader {
     // ========== ATTRIBUTE COLORIZATION UTILITIES ==========
 
     /**
-     * Legge un valore scalare dall'ArrayBuffer in base al tipo dell'attributo.
+     * Reads a scalar value from the ArrayBuffer based on the attribute type.
      */
     _readAttrScalar(view, byteOffset, attr) {
         const t = attr.type;
@@ -603,7 +603,7 @@ export class Potree2Loader {
     }
 
     /**
-     * Colormap Viridis (clampa a [0,1]). Usata per attributi continui (es. intensity).
+     * Viridis colormap (clamps to [0,1]). Used for continuous attributes (e.g. intensity).
      */
     _colormapViridis(t) {
         t = Math.max(0, Math.min(1, t));
@@ -628,32 +628,32 @@ export class Potree2Loader {
     }
 
     /**
-     * Palette ciclica discreta per attributi interi (es. classification, return_number).
-     * Restituisce [r, g, b] in [0,1].
+     * Discrete cyclic palette for integer attributes (e.g. classification, return_number).
+     * Returns [r, g, b] in [0,1].
      */
     _colormapDiscrete(intValue) {
         const palette = [
-            [0.22, 0.62, 0.85],  // blu
-            [0.95, 0.45, 0.10],  // arancione
-            [0.17, 0.72, 0.44],  // verde
-            [0.80, 0.22, 0.33],  // rosso
-            [0.58, 0.40, 0.74],  // viola
-            [0.99, 0.75, 0.18],  // giallo
-            [0.40, 0.76, 0.65],  // turchese
-            [0.88, 0.53, 0.79],  // rosa
-            [0.60, 0.60, 0.60],  // grigio
-            [0.99, 0.55, 0.38],  // salmone
+            [0.22, 0.62, 0.85],  // blue
+            [0.95, 0.45, 0.10],  // orange
+            [0.17, 0.72, 0.44],  // green
+            [0.80, 0.22, 0.33],  // red
+            [0.58, 0.40, 0.74],  // purple
+            [0.99, 0.75, 0.18],  // yellow
+            [0.40, 0.76, 0.65],  // teal
+            [0.88, 0.53, 0.79],  // pink
+            [0.60, 0.60, 0.60],  // gray
+            [0.99, 0.55, 0.38],  // salmon
         ];
         const idx = Math.abs(intValue) % palette.length;
         return palette[idx];
     }
 
     /**
-     * Costruisce una mappa name -> Float32Array(numPoints*4) per tutti
-     * gli attributi scalari visualizzabili (esclude position, rgb, point_id).
+     * Builds a name -> Float32Array(numPoints*4) map for all
+     * visualizable scalar attributes (excludes position, rgb, point_id).
      */
     _buildAttributeColors(view, numPoints, buffer) {
-        // Liste di attributi standard da ignorare (normalizzati senza spazi/underscore)
+        // List of standard attributes to skip (normalized without spaces/underscores)
         const SKIP_NORMALIZED = new Set([
             'position', 'rgb', 'pointid', 'point_id',
             'intensity', 'returnnumber', 'numberofreturns',
@@ -667,8 +667,8 @@ export class Potree2Loader {
             const normalized = lname.replace(/[\s_-]/g, '');
 
             if (SKIP_NORMALIZED.has(normalized)) continue;
-            if (attr.numElements !== 1) continue; // solo scalari
-            if (attr.elementSize > 8) continue;   // sanity
+            if (attr.numElements !== 1) continue; // scalars only
+            if (attr.elementSize > 8) continue;   // sanity check
 
             const isDiscrete = (['int8', 'uint8', 'int16', 'uint16', 'int32', 'uint32'].includes(attr.type)
                 && attr.name !== 'intensity');
@@ -707,8 +707,8 @@ export class Potree2Loader {
     }
 
     /**
-     * Restituisce la lista degli attributi visualizzabili come colori.
-     * Chiamato da main.js dopo il load per popolare il color menu.
+     * Returns the list of attributes visualizable as colors.
+     * Called by main.js after load to populate the color menu.
      */
     getAttributeList() {
         const SKIP_NORMALIZED = new Set([
@@ -804,7 +804,7 @@ export class Potree2Loader {
 
             // Decode POINT_ID
             if (pointIdAttr && pointOffset + pointIdAttr.byteOffset + 4 <= buffer.byteLength) {
-                // Read as Int32/Uint32 (it usually comes as 4 bytes). Using getInt32.
+                // Read as Int32/Uint32 (usually 4 bytes). Using getInt32.
                 pointIds[j] = view.getInt32(pointOffset + pointIdAttr.byteOffset, true);
             }
         }
@@ -812,14 +812,14 @@ export class Potree2Loader {
         // Build per-attribute color arrays (stored in metadata, used by color menu)
         const attributeColors = this._buildAttributeColors(view, numPoints, buffer);
 
-        // Salva le posizioni originali in modo da poterle nascondere (assegnando NaN)
-        // e rimettere a posto in un secondo momento, superando di forza qualsiasi
-        // bug / limitazione dei materiali point cloud di BabylonJS sull'Alpha compositing.
+        // Save original positions so they can be hidden (by assigning NaN)
+        // and restored later, bypassing any bugs/limitations of BabylonJS point
+        // cloud materials regarding alpha compositing.
         const originalPositions = new Float32Array(positions);
 
-        // Salva originalColors QUI — dopo il decode RGB ma PRIMA di applicare
-        // selezione o classificazione. Così originalColors contiene SEMPRE e SOLO
-        // i colori reali della nuvola di punti.
+        // Save originalColors HERE — after RGB decode but BEFORE applying
+        // selection or classification. This ensures originalColors always contains
+        // only the real point cloud colors.
         const originalColors = new Float32Array(colors);
 
         // Apply persistent selection highlight AFTER saving originalColors
@@ -837,10 +837,10 @@ export class Potree2Loader {
             }
         }
 
-        // Debug bounds for first few nodes
-        if (this.stats.loadedNodes < 5) {
-            console.log(`   📐 Node ${node.name} bounds: X[${minX.toFixed(2)}, ${maxX.toFixed(2)}] Y[${minY.toFixed(2)}, ${maxY.toFixed(2)}] Z[${minZ.toFixed(2)}, ${maxZ.toFixed(2)}]`);
-        }
+        // // Debug bounds for first few nodes
+        // if (this.stats.loadedNodes < 5) {
+        //     console.log(`   📐 Node ${node.name} bounds: X[${minX.toFixed(2)}, ${maxX.toFixed(2)}] Y[${minY.toFixed(2)}, ${maxY.toFixed(2)}] Z[${minZ.toFixed(2)}, ${maxZ.toFixed(2)}]`);
+        // }
 
         // Apply existing classifications using the same 2D-projection approach
         // as selectionHistory — works correctly at every LOD level.
@@ -857,9 +857,9 @@ export class Potree2Loader {
                     classColors[j * 4 + 1] = cls.g;
                     classColors[j * 4 + 2] = cls.b;
                     classColors[j * 4 + 3] = 1.0;
-                    // Dipingi i vertex color solo se la modalità attiva lo richiede.
-                    // In "color" mode i vertex restano gli originalColors — nessun flash
-                    // di colori di classe quando il LOD carica nuovi nodi.
+                    // Paint vertex colors only if the active mode requires it.
+                    // In "color" mode vertices keep their originalColors — no flash
+                    // of class colors when a LOD node loads new detail.
                     if (this.colorMode === "classification") {
                         colors[4 * j + 0] = cls.r;
                         colors[4 * j + 1] = cls.g;
@@ -982,7 +982,7 @@ export class Potree2Loader {
         }
         if (!selected) return false;
 
-        // Escludi se cade in una regione di deselezione
+        // Exclude if the point falls in a deselection region
         for (const dsel of this.deselectionHistory) {
             const projection = BABYLON.Vector3.Project(localVector, worldMatrix, dsel.transformMatrix, dsel.viewport);
             if (dsel.type === "rect") {
@@ -1012,7 +1012,7 @@ export class Potree2Loader {
         const pointSeg = this._getPointSegment(localVector);
         const pointSegId = pointSeg ? pointSeg.segmentId : 0;
 
-        // Iteriamo dalla più vecchia alla più recente (le ultime sovrascrivono)
+        // Iterate from oldest to newest (later entries override earlier ones)
         for (const entry of this.classificationHistory) {
             // New visibility constraint: skip classification if point was hidden when this class was assigned
             if (entry.visibleSegmentIds && !entry.visibleSegmentIds.includes(pointSegId)) continue;
@@ -1105,14 +1105,14 @@ export class Potree2Loader {
             return 0;
         }
 
-        // 1. Classifica i nodi correntemente caricati usando la proiezione 2D
-        //    con il camera state frozen — funziona perché questi nodi erano già
-        //    visibili al momento della selezione e la proiezione è corretta.
-        //    Contemporaneamente costruisce l'AABB 3D dei punti classificati.
+        // 1. Classify currently loaded nodes using the 2D projection with
+        //    the frozen camera state — works because these nodes were already
+        //    visible at selection time and the projection is correct.
+        //    Also builds the 3D AABB of all classified points.
         const worldMatrix = this.rootTransform.getWorldMatrix();
         let total = 0;
 
-        // AABB 3D accumulato su tutti i nodi
+        // 3D AABB accumulated across all nodes
         let minX = Infinity, minY = Infinity, minZ = Infinity;
         let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
         let anyClassified = false;
@@ -1133,7 +1133,7 @@ export class Potree2Loader {
 
                 const vector = new BABYLON.Vector3(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
 
-                // Proiezione 2D con camera state frozen per ogni regione di selezione
+                // 2D projection with frozen camera state for each selection region
                 let isInside = false;
                 for (const sel of this.selectionHistory) {
                     const projection = BABYLON.Vector3.Project(vector, worldMatrix, sel.transformMatrix, sel.viewport);
@@ -1146,7 +1146,7 @@ export class Potree2Loader {
                     if (isInside) break;
                 }
 
-                // Escludi punti deselectati (CTRL+select)
+                // Exclude deselected points (CTRL+select)
                 if (isInside && this.deselectionHistory.length > 0) {
                     for (const dsel of this.deselectionHistory) {
                         const dp = BABYLON.Vector3.Project(vector, worldMatrix, dsel.transformMatrix, dsel.viewport);
@@ -1168,7 +1168,7 @@ export class Potree2Loader {
                     mesh.metadata.classColors[i * 4 + 2] = b;
                     mesh.metadata.classColors[i * 4 + 3] = 1.0;
                     classified++;
-                    // Aggiorna AABB 3D
+                    // Update 3D AABB
                     const px = positions[i * 3], py = positions[i * 3 + 1], pz = positions[i * 3 + 2];
                     if (px < minX) minX = px; if (px > maxX) maxX = px;
                     if (py < minY) minY = py; if (py > maxY) maxY = py;
@@ -1179,9 +1179,9 @@ export class Potree2Loader {
 
             total += classified;
 
-            // Ricostruisce i vertex color corretti per la modalità attiva:
-            // parte dagli originalColors (rimuove il rosso della selezione), poi
-            // sovrascrive i punti classificati se la modalità è "classification".
+            // Rebuild the correct vertex colors for the active mode:
+            // start from originalColors (removes selection red), then
+            // overwrite classified points if mode is "classification".
             const finalColors = mesh.metadata.originalColors
                 ? new Float32Array(mesh.metadata.originalColors)
                 : mesh.getVerticesData(BABYLON.VertexBuffer.ColorKind);
@@ -1206,8 +1206,8 @@ export class Potree2Loader {
             }
         });
 
-        // 2. Salva la logica di classificazione (regioni + camera + AABB) per i futuri nodi LOD.
-        //    Includiamo le selezioni e deselezioni ATTUALI nell'entry della history.
+        // 2. Save the classification logic (regions + camera + AABB) for future LOD nodes.
+        //    Include the current selections and deselections in the history entry.
         if (anyClassified) {
             const visibleSegmentIds = [];
             if (this.mainCloudVisible) visibleSegmentIds.push(0);
@@ -1221,17 +1221,17 @@ export class Potree2Loader {
                 visibleSegmentIds,
                 minX: minX - margin, minY: minY - margin, minZ: minZ - margin,
                 maxX: maxX + margin, maxY: maxY + margin, maxZ: maxZ + margin,
-                // Copiamo le history correnti. cloniamo accuratamente le matrici BABYLON.
+                // Copy current histories. Clone BABYLON matrices accurately.
                 selections: this.selectionHistory.map(s => ({ ...s, transformMatrix: s.transformMatrix.clone() })),
                 deselections: this.deselectionHistory.map(d => ({ ...d, transformMatrix: d.transformMatrix.clone() }))
             });
         }
 
-        // 3. Clear selection state (selezione e deselezione)
+        // 3. Clear selection state (selection and deselection)
         this.selectionHistory = [];
         this.deselectionHistory = [];
 
-        console.log(`✅ Classified ${total.toLocaleString()} points. classificationHistory: ${this.classificationHistory.length} region(s).`);
+        // console.log(`✅ Classified ${total.toLocaleString()} points. classificationHistory: ${this.classificationHistory.length} region(s).`);
         return total;
     }
 
@@ -1248,7 +1248,7 @@ export class Potree2Loader {
 
         this.selectionHistory.push({ type, area, viewport, transformMatrix });
         this.selectionInverted = false; // new selection resets invert state
-        console.log(`📌 Selection added to history. Total regions: ${this.selectionHistory.length}`);
+        // console.log(`📌 Selection added to history. Total regions: ${this.selectionHistory.length}`);
 
         let totalSelected = 0;
 
@@ -1334,7 +1334,7 @@ export class Potree2Loader {
             if (modified) mesh.setVerticesData(BABYLON.VertexBuffer.ColorKind, colors);
         });
 
-        console.log(`🎨 Class ${classId} color updated to ${hexColor}`);
+        // console.log(`🎨 Class ${classId} color updated to ${hexColor}`);
     }
 
     // ========== CUT / SEGMENTS ==========
@@ -1404,7 +1404,7 @@ export class Potree2Loader {
                     if (px < minX) minX = px; if (px > maxX) maxX = px;
                     if (py < minY) minY = py; if (py > maxY) maxY = py;
                     if (pz < minZ) minZ = pz; if (pz > maxZ) maxZ = pz;
-                    // Sposta fisicamente il punto modificandone la posizione a NaN
+                    // Hide the point physically by setting its position to NaN
                     positions[i * 3] = NaN;
                     positions[i * 3 + 1] = NaN;
                     positions[i * 3 + 2] = NaN;
@@ -1452,7 +1452,7 @@ export class Potree2Loader {
         this.selectionHistory = [];
         this.deselectionHistory = [];
 
-        console.log(`✂️ Cut segment ${segmentId}: ${total.toLocaleString()} points assigned.`);
+        // console.log(`✂️ Cut segment ${segmentId}: ${total.toLocaleString()} points assigned.`);
         return anyAssigned ? { segmentId, count: total } : null;
     }
 
@@ -1500,7 +1500,7 @@ export class Potree2Loader {
             if (modified) mesh.setVerticesData(BABYLON.VertexBuffer.PositionKind, positions);
         });
 
-        console.log(`👁️ Segment ${segmentId} → ${visible ? "visible" : "hidden"}`);
+        // console.log(`👁️ Segment ${segmentId} → ${visible ? "visible" : "hidden"}`);
     }
 
     /**
@@ -1561,7 +1561,7 @@ export class Potree2Loader {
                 mesh.setVerticesData(BABYLON.VertexBuffer.ColorKind, new Float32Array(mesh.metadata.originalColors));
             }
         });
-        console.log("🧹 Selection cleared.");
+        // console.log("🧹 Selection cleared.");
     }
 
     /**
@@ -1612,7 +1612,7 @@ export class Potree2Loader {
             mesh.setVerticesData(BABYLON.VertexBuffer.ColorKind, colors);
         });
 
-        console.log(`🔄 Selection inverted (inverted=${this.selectionInverted}). ${totalNowSelected.toLocaleString()} points now selected.`);
+        // console.log(`🔄 Selection inverted (inverted=${this.selectionInverted}). ${totalNowSelected.toLocaleString()} points now selected.`);
     }
 
     /**
@@ -1685,12 +1685,12 @@ export class Potree2Loader {
             if (modified) mesh.setVerticesData(BABYLON.VertexBuffer.ColorKind, colors);
         });
 
-        // Registra la regione di deselezione nella history con il camera state corrente.
-        // NON modifica selectionHistory — le regioni originali restano intatte per
-        // consentire la classificazione dei punti rimanenti.
+        // Register the deselection region in history with the current camera state.
+        // Does NOT modify selectionHistory — original regions remain intact to allow
+        // classification of the remaining points.
         this.deselectionHistory.push({ type, area, viewport, transformMatrix });
 
-        console.log(`🔴 Deselected ${totalDeselected.toLocaleString()} points. deselectionHistory: ${this.deselectionHistory.length} region(s).`);
+        // console.log(`🔴 Deselected ${totalDeselected.toLocaleString()} points. deselectionHistory: ${this.deselectionHistory.length} region(s).`);
         return totalDeselected;
     }
 
@@ -1708,7 +1708,7 @@ export class Potree2Loader {
                 mesh.setVerticesData(BABYLON.VertexBuffer.ColorKind, new Float32Array(mesh.metadata.originalColors));
             }
         });
-        console.log("🗑️ All classifications cleared.");
+        // console.log("🗑️ All classifications cleared.");
     }
 
     /**
@@ -1901,7 +1901,7 @@ export class Potree2Loader {
                 }
             }
 
-            // Subdivide (Processed sequentially to avoid ERR_INSUFFICIENT_RESOURCES)
+            // Subdivide (processed sequentially to avoid ERR_INSUFFICIENT_RESOURCES)
             for (const child of node.children) {
                 if (child) await traverse(child);
             }
@@ -2121,7 +2121,7 @@ export class Potree2Loader {
 // =====================================================================
 
 export async function loadPotree2PointCloud(basePath, scene, options = {}) {
-    console.log("🚀 loadPotree2PointCloud:", basePath);
+    // console.log("🚀 loadPotree2PointCloud:", basePath);
 
     const loader = new Potree2Loader(scene, basePath, options);
     await loader.load();
@@ -2142,7 +2142,7 @@ export async function loadPotree2PointCloud(basePath, scene, options = {}) {
         );
         const radius = localSize.length() * 0.7;
 
-        console.log(`📷 Camera: target=${localCenter}, radius=${radius.toFixed(1)}`);
+        // console.log(`📷 Camera: target=${localCenter}, radius=${radius.toFixed(1)}`);
         camera.setTarget(localCenter);
         camera.radius = radius;
         camera.minZ = 0.1;

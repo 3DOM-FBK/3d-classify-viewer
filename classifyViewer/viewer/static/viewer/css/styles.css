@@ -1462,3 +1462,48 @@ select.property-input option {
     color: var(--text-primary);
     opacity: 0.9;
 }
+
+/* Custom Numeric Input Spin Buttons (Arrows) */
+/* Reset default behavior */
+input[type="number"].property-input {
+    -moz-appearance: textfield;
+    /* Firefox: hide mostly */
+    appearance: textfield;
+    /* Standard */
+}
+
+/* WebKit (Chrome, Edge, Safari) */
+input[type="number"].property-input::-webkit-inner-spin-button,
+input[type="number"].property-input::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    appearance: none;
+    background: transparent;
+    opacity: 1;
+    /* Always show them */
+    width: 20px;
+    height: 100%;
+    position: relative;
+    cursor: pointer;
+    border-left: 1px solid var(--border-color);
+    /* Simple SVG arrows using background-image for a custom look */
+    background-image:
+        linear-gradient(transparent, transparent),
+        url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path fill='%23e1e1e6' d='M8 4l4 4H4z'/><path fill='%23e1e1e6' d='M8 12l-4-4h8z'/></svg>");
+    background-size: 16px 16px;
+    background-position: center center;
+    background-repeat: no-repeat;
+    transition: background-color 0.2s;
+}
+
+input[type="number"].property-input::-webkit-inner-spin-button:hover,
+input[type="number"].property-input::-webkit-outer-spin-button:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+}
+
+input[type="number"].property-input::-webkit-inner-spin-button:active,
+input[type="number"].property-input::-webkit-outer-spin-button:active {
+    background-color: var(--accent-blue);
+    background-image:
+        linear-gradient(transparent, transparent),
+        url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path fill='white' d='M8 4l4 4H4z'/><path fill='white' d='M8 12l-4-4h8z'/></svg>");
+}

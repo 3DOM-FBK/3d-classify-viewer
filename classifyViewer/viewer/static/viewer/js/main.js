@@ -429,8 +429,8 @@ export const sceneObjects = {
 // 1. Import/Export
 const importExportSection = createAccordionSection("IMPORT & EXPORT", "sidebar-right-content");
 const importExportContent = importExportSection.content;
-const loadPCButton = createButton("Load PointCloud", "loadPC", importExportContent);
-const downloadPCButton = createButton("Download PointCloud", "downloadPC", importExportContent);
+const loadPCButton = createButton("Load Data", "loadData", importExportContent);
+const downloadPCButton = createButton("Download Data", "downloadData", importExportContent);
 
 // 2. Features Computation
 const featuresSection = createAccordionSection("FEATURES COMPUTATION", "sidebar-right-content");

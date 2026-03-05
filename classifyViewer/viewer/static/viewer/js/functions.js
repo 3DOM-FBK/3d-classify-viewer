@@ -1289,8 +1289,14 @@ function showDownloadModal() {
 function showLoadModal() {
     let fileInputEl = null;
 
+    let meshPointsRow = null;
+    let meshPointsInput = null;
+
+    let subToggle = null;
+    let voxelInput = null;
+
     createModal(
-        "Load Point Cloud",
+        "Load Data",
         (body) => {
             // Section 1: File Selection
             const fileSection = document.createElement('div');
@@ -1308,19 +1314,23 @@ function showLoadModal() {
             fileCustom.classList.add('file-input-custom');
             fileCustom.innerHTML = `
                 <b>Click to select file</b>
-                <span>Supports .ply, .las, .laz, .glb</span>
+                <span>Supports .ply, .las, .glb</span>
             `;
 
             const fileInput = document.createElement('input');
             fileInput.type = 'file';
             fileInput.classList.add('file-input-hidden');
-            fileInput.accept = ".ply,.las,.laz,.glb";
+            fileInput.accept = ".ply,.las,.glb";
             fileInputEl = fileInput;
 
             fileInput.onchange = (e) => {
                 const fileName = e.target.files[0]?.name;
                 if (fileName) {
                     fileCustom.innerHTML = `<b>Selected:</b> <span>${fileName}</span>`;
+                    const ext = fileName.split('.').pop().toLowerCase();
+                    if (meshPointsRow) {
+                        meshPointsRow.style.display = ext === 'glb' ? "flex" : "none";
+                    }
                 }
             };
 
@@ -1344,7 +1354,7 @@ function showLoadModal() {
             subSection.appendChild(subTitle);
 
             const subContainer = document.createElement('div');
-            const subToggle = createSimpleCheckbox("Enable Subsampling", false, subContainer);
+            subToggle = createSimpleCheckbox("Enable Subsampling", false, subContainer);
 
             const subSettings = document.createElement('div');
             subSettings.classList.add('expandable-content');
@@ -1355,7 +1365,7 @@ function showLoadModal() {
             voxelRow.classList.add('property-row');
             voxelRow.style.padding = "0 4px";
             voxelRow.innerHTML = `<span class="property-label">Voxel Size (m):</span>`;
-            const voxelInput = document.createElement('input');
+            voxelInput = document.createElement('input');
             voxelInput.type = "number";
             voxelInput.classList.add('property-input');
             voxelInput.value = "0.05";
@@ -1364,27 +1374,29 @@ function showLoadModal() {
             voxelRow.appendChild(voxelInput);
             subSettings.appendChild(voxelRow);
 
-            // Method Select
-            const methodRow = document.createElement('div');
-            methodRow.classList.add('property-row');
-            methodRow.style.padding = "0 4px";
-            methodRow.innerHTML = `<span class="property-label">Strategy:</span>`;
-            const methodSelect = document.createElement('select');
-            methodSelect.classList.add('property-input');
-            methodSelect.style.width = "100px";
-            methodSelect.innerHTML = `
-                <option value="voxel">Voxel Grid</option>
-                <option value="random">Random</option>
-            `;
-            methodRow.appendChild(methodSelect);
-            subSettings.appendChild(methodRow);
-
             subToggle.onchange = (e) => {
                 subSettings.classList.toggle('visible', e.target.checked);
             };
 
             subSection.appendChild(subContainer);
             subSection.appendChild(subSettings);
+
+            // New: Mesh Points (for GLB)
+            meshPointsRow = document.createElement('div');
+            meshPointsRow.classList.add('property-row');
+            meshPointsRow.style.padding = "10px 4px 0 4px";
+            meshPointsRow.style.display = "none"; // hidden by default
+            meshPointsRow.innerHTML = `<span class="property-label">GLB Mesh Points:</span>`;
+            meshPointsInput = document.createElement('input');
+            meshPointsInput.type = "number";
+            meshPointsInput.classList.add('property-input');
+            meshPointsInput.value = "5000000";
+            meshPointsInput.step = "100000";
+            meshPointsInput.min = "10000";
+            meshPointsInput.style.width = "100px";
+            meshPointsRow.appendChild(meshPointsInput);
+            subSection.appendChild(meshPointsRow);
+
             body.appendChild(subSection);
         },
         (footer, overlay) => {
@@ -1462,17 +1474,23 @@ function showLoadModal() {
                     else if (extension === 'glb') {
                         uploadBtn.textContent = "Sampling GLB to PC...";
                         console.log("🔄 Step 3: Converting GLB to LAS...");
+
+                        let numPoints = 5000000;
+                        if (meshPointsInput && meshPointsInput.value) {
+                            numPoints = parseInt(meshPointsInput.value, 10);
+                        }
+
                         const meshResponse = await fetch('/mesh2pc/', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
-                            body: JSON.stringify({ file_path: inputPath, num_points: 5000000 })
+                            body: JSON.stringify({ file_path: inputPath, num_points: numPoints })
                         });
                         if (!meshResponse.ok) {
                             const errData = await meshResponse.json().catch(() => ({}));
                             console.error("❌ Mesh sampling error detail:", errData);
                             throw new Error(errData.message || errData.error || "Mesh sampling failed");
                         }
-                        console.log("✅ Mesh sampled to point cloud");
+                        console.log(`✅ Mesh sampled to point cloud (${numPoints} points)`);
                     }
                     else if (extension === 'las' || extension === 'laz') {
                         console.log("⏩ Step 3: Skipping conversion (already LAS/LAZ)");
@@ -1482,15 +1500,22 @@ function showLoadModal() {
                     // STEP 4: Feature Extraction
                     uploadBtn.textContent = "Extracting Features...";
                     console.log("🧠 Step 4: Starting feature extraction...");
+
+                    let samplingParam = 0;
+                    if (subToggle.checked) {
+                        samplingParam = parseFloat(voxelInput.value) || 0;
+                        console.log(`📏 Subsampling enabled with voxel size: ${samplingParam}`);
+                    }
+
                     const featResponse = await fetch('/feature_extraction/', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
                         body: JSON.stringify({
                             input_filepath: lasPath,
                             output_filepath: `viewer/static/viewer/data/features.las`,
-                            feature_list: ["linearity", "planarity", "scattering", "verticality"], // Default features
+                            feature_list: ["anisotropy", "height_above", "height_below", "linearity", "planarity", "verticality", "neighbours", "omnivariance", "sphericity", "surface_variation", "vertical_range"],
                             radius_list: [0.1, 0.2, 0.5], // Default radii
-                            sampling: 0
+                            sampling: samplingParam
                         })
                     });
                     if (!featResponse.ok) {
@@ -1500,7 +1525,28 @@ function showLoadModal() {
                     }
                     console.log("✅ Features extracted");
 
-                    // STEP 5: Final Loading in Babylon
+                    // STEP 5: PotreeConverter
+                    uploadBtn.textContent = "Potree Converter...";
+                    console.log("🧠 Step 5: Starting Potree conversion...");
+
+                    const potreeResponse = await fetch('/potree_converter/', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
+                        body: JSON.stringify({
+                            input_filepath: `viewer/static/viewer/data/features.las`,
+                            output_filepath: `viewer/static/viewer/data/clusters`,
+                            radius: 0.5,
+                            min_points: 10
+                        })
+                    });
+                    if (!potreeResponse.ok) {
+                        const errData = await potreeResponse.json().catch(() => ({}));
+                        console.error("❌ Potree conversion error detail:", errData);
+                        throw new Error(errData.message || errData.error || "Potree conversion failed");
+                    }
+                    console.log("✅ Potree conversion completed");
+
+                    // STEP 6: Final Loading in Babylon
                     uploadBtn.textContent = "Loading Viewer...";
                     console.log("🏗️ Step 5: Loading Potree data from /data/clusters/...");
 
