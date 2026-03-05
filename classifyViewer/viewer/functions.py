@@ -86,6 +86,7 @@ def mesh_to_point_cloud(mesh_path, num_points=5000000):
     abs_input = os.path.abspath(os.path.join(settings.BASE_DIR, mesh_path))
     
     command = ["/webapp/opt/mesh2pc", abs_input, str(num_points)]
+    # TODO: add also output path 
     launch_subprocess(command)
 
 def ply_to_las(ply_path, out_path=None):
@@ -115,15 +116,26 @@ def feature_extraction(input_filepath, output_filepath, feature_list, radius_lis
     
     launch_subprocess(command)
 
+def Potree(input_filepath, output_filepath):
+    print("\n[FUNCTION] ---- Potree Converter -----")
+
+    # Make paths absolute
+    abs_input = os.path.abspath(os.path.join(settings.BASE_DIR, input_filepath))
+    abs_output = os.path.abspath(os.path.join(settings.BASE_DIR, output_filepath))
+
+    command = ["/app/PotreeConverter_linux_x64", "-i", abs_input, "-o", abs_output]
+    
+    launch_subprocess(command)
+    
 def launch_training_RF(data):
     print("\n[FUNCTION] ---- TRAINING RANDOM FOREST -----\n")
     
     # Use absolute paths for training
-    folder_path = os.path.abspath(os.path.join(settings.BASE_DIR, "viewer/static/viewer/data/"))
+    folder_path = os.path.abspath(os.path.join(settings.BASE_DIR, "viewer/static/viewer/data2/"))
     
     features_filepath = os.path.join(folder_path, "RF/training_using_gaussian/dataset/feature_index_gs.txt")
-    training_filepath = os.path.join(folder_path, "RF/training_using_gaussian/dataset/training.txt")
-    val_filepath = os.path.join(folder_path, "RF/training_using_gaussian/dataset/validation.txt")
+    training_filepath = os.path.join(folder_path, "RF/training_using_gaussian/dataset/training.las")
+    val_filepath = os.path.join(folder_path, "RF/training_using_gaussian/dataset/validation.las")
     
     n_jobs = data['n_jobs']
     n_estimators = data['nr_estimators']
@@ -139,11 +151,11 @@ def launch_training_RF(data):
 def launch_classify_RF(data):
     print("\n[FUNCTION] ---- CLASSIFYING RANDOM FOREST -----\n")
     
-    folder_path = os.path.abspath(os.path.join(settings.BASE_DIR, "viewer/static/viewer/data/"))
+    folder_path = os.path.abspath(os.path.join(settings.BASE_DIR, "viewer/static/viewer/data2/"))
 
     features_filepath = os.path.join(folder_path, "RF/training_using_gaussian/dataset/feature_index_gs.txt")
     model_savepath = os.path.join(folder_path, "RF/training_using_gaussian/output/model_avt_gaussian.pkl")
-    test_filepath = os.path.join(folder_path, "RF/training_using_gaussian/dataset/test_avt.txt")
+    test_filepath = os.path.join(folder_path, "RF/training_using_gaussian/dataset/test_avt.las")
     output_classify_name = os.path.join(folder_path, "RF/training_using_gaussian/output/avt_gs_predicted")
     use_gpu = data['use_gpu']
     

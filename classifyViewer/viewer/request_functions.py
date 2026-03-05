@@ -1,7 +1,7 @@
 from django.shortcuts import render
 from django.http import JsonResponse
 from viewer.functions import load_point_cloud, launch_training_RF, launch_classify_RF, subsampling_point_cloud
-from viewer.functions import mesh_to_point_cloud, ply_to_las, feature_extraction
+from viewer.functions import mesh_to_point_cloud, ply_to_las, feature_extraction, Potree
 from django.views.decorators.csrf import csrf_exempt
 import base64
 import os
@@ -132,6 +132,27 @@ def feat_extraction(request):
 
         except Exception as e:
             print("\n[REQUEST FUNCTION] Feature extraction ERROR " + str(e))
+            print(traceback.format_exc())
+            return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+
+    return JsonResponse({'status': 'error', 'message': 'Method not allowed'}, status=405)
+
+def potree_converter(request):
+    if request.method == 'POST':
+        try:
+            print("\n[REQUEST FUNCTION] POTREE CONVERTER:", request.body[:200]) 
+            data = json.loads(request.body)
+
+            input_filepath = data['input_filepath']
+            output_filepath = data['output_filepath']
+        
+            Potree(input_filepath, output_filepath)
+            print("\n")
+
+            return JsonResponse({"status": 'success', "message": "Potree conversion completed."})
+
+        except Exception as e:
+            print("\n[REQUEST FUNCTION] Potree conversion ERROR " + str(e))
             print(traceback.format_exc())
             return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
 
