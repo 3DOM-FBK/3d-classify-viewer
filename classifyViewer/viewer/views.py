@@ -15,6 +15,77 @@ def test_babylon(request):
     return render(request, "viewer/viewer_page.html")
 
 @csrf_exempt
+def clear_data(request):
+    """
+    Clears all files and subdirectories in static/viewer/data/
+    """
+    if request.method == 'POST':
+        try:
+            data_dir = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                'static', 'viewer', 'data'
+            )
+            
+            if os.path.exists(data_dir):
+                import shutil
+                for filename in os.listdir(data_dir):
+                    # Keep 'clusters' folder if you want, but user said "eliminate all files and folders"
+                    # User: "eliminare tutti i file e cartelle se ne esistono"
+                    file_path = os.path.join(data_dir, filename)
+                    try:
+                        if os.path.isfile(file_path) or os.path.islink(file_path):
+                            os.unlink(file_path)
+                        elif os.path.isdir(file_path):
+                            shutil.rmtree(file_path)
+                    except Exception as e:
+                        print(f'Failed to delete {file_path}. Reason: {e}')
+
+            return JsonResponse({"message": "Data directory cleared successfully"}, status=200)
+        except Exception as e:
+            return JsonResponse({"error": str(e)}, status=500)
+            
+    return JsonResponse({"error": "Method not allowed. Use POST."}, status=405)
+
+
+@csrf_exempt
+def upload_data(request):
+    """
+    Endpoint for uploading a point cloud file (.ply, .las, .laz, .glb) 
+    to the static/viewer/data directory.
+    """
+    if request.method == 'POST':
+        try:
+            uploaded_file = request.FILES.get('file')
+            if not uploaded_file:
+                return JsonResponse({"error": "No file provided"}, status=400)
+
+            # Define static data directory
+            data_dir = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                'static', 'viewer', 'data'
+            )
+            os.makedirs(data_dir, exist_ok=True)
+
+            file_path = os.path.join(data_dir, uploaded_file.name)
+            
+            # Save file
+            with open(file_path, 'wb+') as destination:
+                for chunk in uploaded_file.chunks():
+                    destination.write(chunk)
+
+            return JsonResponse({
+                "message": "File uploaded successfully",
+                "filename": uploaded_file.name,
+                "rel_path": uploaded_file.name
+            }, status=200)
+
+        except Exception as e:
+            return JsonResponse({"error": str(e)}, status=500)
+
+    return JsonResponse({"error": "Method not allowed. Use POST."}, status=405)
+
+
+@csrf_exempt
 def start_training(request):
     """
     Endpoint for receiving training data in binary format.
@@ -34,7 +105,7 @@ def start_training(request):
 
             # Define output directory
             base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            training_dir = os.path.join(base_dir, 'training_data')
+            training_dir = os.path.join(base_dir, 'training_data') # TODO: change this to a user-specific directory
             os.makedirs(training_dir, exist_ok=True)
 
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")

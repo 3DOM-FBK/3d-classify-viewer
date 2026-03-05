@@ -66,78 +66,89 @@ def launch_subprocess(command):
     output_file_path = stdout_lines[-1].strip()
     return output_file_path
 
+from django.conf import settings
+
 def subsampling_point_cloud(file_path, voxel_size=0.002):
     print("\n[FUNCTION] ---- SUBSAMPLING POINT CLOUD -----\n")
     
-    # TODO modify the path
-    command = ["/webapp/opt/subsample_pc", file_path, str(voxel_size)]
+    # Make paths absolute relative to project root
+    abs_input = os.path.abspath(os.path.join(settings.BASE_DIR, file_path))
+    
+    command = ["/webapp/opt/subsample_pc", abs_input, str(voxel_size)]
     output_filepath = launch_subprocess(command)
     
-    # output_filepath = subsampling_pc(file_path=file_path, voxel_size=voxel_size)
-
     return output_filepath
 
 def mesh_to_point_cloud(mesh_path, num_points=5000000):
     print("\n[FUNCTION] ---- MESH TO POINT CLOUD -----\n")
-    # TODO modify the path
-    command = ["/webapp/opt/mesh2pc", mesh_path, str(num_points)]
+    
+    # Make paths absolute
+    abs_input = os.path.abspath(os.path.join(settings.BASE_DIR, mesh_path))
+    
+    command = ["/webapp/opt/mesh2pc", abs_input, str(num_points)]
     launch_subprocess(command)
-    # mesh2pc(mesh_path=mesh_path, num_points=num_points, sampling_method=sampling_method)
 
 def ply_to_las(ply_path, out_path=None):
     print("\n[FUNCTION] ---- PLY TO LAS -----\n")
-    # TODO modify the path
-    command = ["/webapp/opt/ply2las", ply_path, out_path]
+    
+    # Make paths absolute
+    abs_input = os.path.abspath(os.path.join(settings.BASE_DIR, ply_path))
+    abs_output = os.path.abspath(os.path.join(settings.BASE_DIR, out_path)) if out_path else None
+    
+    command = ["/webapp/opt/ply2las", abs_input, abs_output]
     launch_subprocess(command)
-    # ply2las(ply_path = ply_path, out_path=out_path)
 
 def feature_extraction(input_filepath, output_filepath, feature_list, radius_list, sampling=0):
     print("\n[FUNCTION] ---- FEATURE EXTRACTION -----")
 
+    # Make paths absolute
+    abs_input = os.path.abspath(os.path.join(settings.BASE_DIR, input_filepath))
+    abs_output = os.path.abspath(os.path.join(settings.BASE_DIR, output_filepath))
+
     radius_str = ', '.join(str(x) for x in radius_list)
     feature_str = ', '.join(feature_list)
 
-    # # TODO modify the path
     if sampling == 0:
-        command = ["/webapp/opt/feature_extraction_viewer", input_filepath, output_filepath, "--features", feature_str, "--radius", radius_str]
+        command = ["/webapp/opt/feature_extraction_viewer", abs_input, abs_output, "--features", feature_str, "--radius", radius_str]
     else :
-        command = ["/webapp/opt/feature_extraction_viewer", input_filepath, output_filepath, "--features", feature_str, "--radius", radius_str, "--sampling_resolution", sampling]
+        command = ["/webapp/opt/feature_extraction_viewer", abs_input, abs_output, "--features", feature_str, "--radius", radius_str, "--sampling_resolution", sampling]
     
     launch_subprocess(command)
 
 def launch_training_RF(data):
     print("\n[FUNCTION] ---- TRAINING RANDOM FOREST -----\n")
     
-    folder_path = "/webapp/classifyViewer/viewer/static/viewer/data/"
-
-    # TODO: MODIFY THIS FOLDER PATH WITH THE REAL PATH OF THE DATASET FOLDER IN YOUR PROJECT
-    features_filepath = folder_path + "RF/training_using_gaussian/dataset/feature_index_gs.txt"
-    training_filepath = folder_path + "RF/training_using_gaussian/dataset/training.txt"
-    val_filepath = folder_path + "RF/training_using_gaussian/dataset/validation.txt"
+    # Use absolute paths for training
+    folder_path = os.path.abspath(os.path.join(settings.BASE_DIR, "viewer/static/viewer/data/"))
+    
+    features_filepath = os.path.join(folder_path, "RF/training_using_gaussian/dataset/feature_index_gs.txt")
+    training_filepath = os.path.join(folder_path, "RF/training_using_gaussian/dataset/training.txt")
+    val_filepath = os.path.join(folder_path, "RF/training_using_gaussian/dataset/validation.txt")
+    
     n_jobs = data['n_jobs']
     n_estimators = data['nr_estimators']
     max_depth = data['max_depth']
     min_samples_split = data['min_samples_split']
     max_features = data['max_features']
     use_gpu = data['use_gpu']
-    output_training_name = folder_path + "RF/training_using_gaussian/output/test_predicted"
-    model_savepath = folder_path + "RF/training_using_gaussian/output/model_avt_gaussian.pkl"
+    output_training_name = os.path.join(folder_path, "RF/training_using_gaussian/output/test_predicted")
+    model_savepath = os.path.join(folder_path, "RF/training_using_gaussian/output/model_avt_gaussian.pkl")
 
     training(features_filepath, training_filepath, val_filepath, n_jobs, n_estimators, max_depth, min_samples_split, max_features, use_gpu, output_training_name, model_savepath)
 
 def launch_classify_RF(data):
     print("\n[FUNCTION] ---- CLASSIFYING RANDOM FOREST -----\n")
     
-    folder_path = "/webapp/classifyViewer/viewer/static/viewer/data/"
+    folder_path = os.path.abspath(os.path.join(settings.BASE_DIR, "viewer/static/viewer/data/"))
 
-    # TODO: MODIFY THIS FOLDER PATH WITH THE REAL PATH OF THE DATASET FOLDER IN YOUR PROJECT
-    features_filepath = folder_path + "RF/training_using_gaussian/dataset/feature_index_gs.txt"
-    model_savepath = folder_path + "RF/training_using_gaussian/output/model_avt_gaussian.pkl"
-    test_filepath = folder_path + "RF/training_using_gaussian/dataset/test_avt.txt"
-    output_classify_name = folder_path + "RF/training_using_gaussian/output/avt_gs_predicted"
+    features_filepath = os.path.join(folder_path, "RF/training_using_gaussian/dataset/feature_index_gs.txt")
+    model_savepath = os.path.join(folder_path, "RF/training_using_gaussian/output/model_avt_gaussian.pkl")
+    test_filepath = os.path.join(folder_path, "RF/training_using_gaussian/dataset/test_avt.txt")
+    output_classify_name = os.path.join(folder_path, "RF/training_using_gaussian/output/avt_gs_predicted")
     use_gpu = data['use_gpu']
     
-    classification(features_filepath, model_savepath, test_filepath, output_classify_name, use_gpu)    
+    classification(features_filepath, model_savepath, test_filepath, output_classify_name, use_gpu)
+
 
 
 # ---------------------------------------------------------------

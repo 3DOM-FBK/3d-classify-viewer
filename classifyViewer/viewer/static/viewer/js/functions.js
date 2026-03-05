@@ -1287,6 +1287,8 @@ function showDownloadModal() {
 }
 
 function showLoadModal() {
+    let fileInputEl = null;
+
     createModal(
         "Load Point Cloud",
         (body) => {
@@ -1306,13 +1308,14 @@ function showLoadModal() {
             fileCustom.classList.add('file-input-custom');
             fileCustom.innerHTML = `
                 <b>Click to select file</b>
-                <span>Supports .ply, .las, .laz</span>
+                <span>Supports .ply, .las, .laz, .glb</span>
             `;
 
             const fileInput = document.createElement('input');
             fileInput.type = 'file';
             fileInput.classList.add('file-input-hidden');
-            fileInput.accept = ".ply,.las,.laz";
+            fileInput.accept = ".ply,.las,.laz,.glb";
+            fileInputEl = fileInput;
 
             fileInput.onchange = (e) => {
                 const fileName = e.target.files[0]?.name;
@@ -1399,50 +1402,139 @@ function showLoadModal() {
             uploadBtn.classList.add('btn');
             uploadBtn.textContent = "Upload & Process";
             uploadBtn.onclick = async () => {
-                console.log("🚀 Starting point cloud test import...");
+                const file = fileInputEl?.files[0];
+                if (!file) {
+                    alert("Please select a file first.");
+                    return;
+                }
 
-                // Show a simple loading feedback (optional, but good)
-                uploadBtn.textContent = "Loading...";
+                console.log("🚀 Starting complex processing pipeline for:", file.name);
+
+                // Show loading feedback
                 uploadBtn.disabled = true;
 
                 try {
+                    // STEP 1: Clear current data directory
+                    uploadBtn.textContent = "Clearing Workspace...";
+                    console.log("🧹 Step 1: Clearing /static/viewer/data/...");
+                    const clearResponse = await fetch('/api/clear-data/', { method: 'POST' });
+                    if (!clearResponse.ok) throw new Error("Failed to clear data directory");
+                    console.log("✅ Workspace cleared");
+
+                    // STEP 2: Upload the source file
+                    uploadBtn.textContent = "Uploading File...";
+                    console.log("📤 Step 2: Uploading file to /static/viewer/data/...");
+                    const formData = new FormData();
+                    formData.append('file', file);
+
+                    const uploadResponse = await fetch('/api/upload-data/', {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    if (!uploadResponse.ok) {
+                        const errData = await uploadResponse.json().catch(() => ({}));
+                        throw new Error(errData.error || "Failed to upload file");
+                    }
+                    console.log("✅ File uploaded");
+
+                    // STEP 3: Handle conversion based on extension
+                    const filename = file.name;
+                    const extension = filename.split('.').pop().toLowerCase();
+                    const inputPath = `viewer/static/viewer/data/${filename}`;
+                    let lasPath = `viewer/static/viewer/data/output.las`; // Default target
+
+                    if (extension === 'ply') {
+                        uploadBtn.textContent = "Converting PLY to LAS...";
+                        console.log("🔄 Step 3: Converting PLY to LAS...");
+                        const plyResponse = await fetch('/ply2las/', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
+                            body: JSON.stringify({ file_path: inputPath, out_path: lasPath })
+                        });
+                        if (!plyResponse.ok) {
+                            const errData = await plyResponse.json().catch(() => ({}));
+                            console.error("❌ PLY conversion error detail:", errData);
+                            throw new Error(errData.message || errData.error || "PLY conversion failed");
+                        }
+                        console.log("✅ PLY converted to LAS");
+                    }
+                    else if (extension === 'glb') {
+                        uploadBtn.textContent = "Sampling GLB to PC...";
+                        console.log("🔄 Step 3: Converting GLB to LAS...");
+                        const meshResponse = await fetch('/mesh2pc/', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
+                            body: JSON.stringify({ file_path: inputPath, num_points: 5000000 })
+                        });
+                        if (!meshResponse.ok) {
+                            const errData = await meshResponse.json().catch(() => ({}));
+                            console.error("❌ Mesh sampling error detail:", errData);
+                            throw new Error(errData.message || errData.error || "Mesh sampling failed");
+                        }
+                        console.log("✅ Mesh sampled to point cloud");
+                    }
+                    else if (extension === 'las' || extension === 'laz') {
+                        console.log("⏩ Step 3: Skipping conversion (already LAS/LAZ)");
+                        lasPath = inputPath;
+                    }
+
+                    // STEP 4: Feature Extraction
+                    uploadBtn.textContent = "Extracting Features...";
+                    console.log("🧠 Step 4: Starting feature extraction...");
+                    const featResponse = await fetch('/feature_extraction/', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
+                        body: JSON.stringify({
+                            input_filepath: lasPath,
+                            output_filepath: `viewer/static/viewer/data/features.las`,
+                            feature_list: ["linearity", "planarity", "scattering", "verticality"], // Default features
+                            radius_list: [0.1, 0.2, 0.5], // Default radii
+                            sampling: 0
+                        })
+                    });
+                    if (!featResponse.ok) {
+                        const errData = await featResponse.json().catch(() => ({}));
+                        console.error("❌ Feature extraction error detail:", errData);
+                        throw new Error(errData.message || errData.error || "Feature extraction failed");
+                    }
+                    console.log("✅ Features extracted");
+
+                    // STEP 5: Final Loading in Babylon
+                    uploadBtn.textContent = "Loading Viewer...";
+                    console.log("🏗️ Step 5: Loading Potree data from /data/clusters/...");
+
                     const scene = window.__babylonScene;
                     const sceneObjects = window.__sceneObjects;
 
-                    // Cleanup previous point cloud if it exists
                     if (sceneObjects && sceneObjects.currentPointCloud) {
-                        console.log("♻️ Disposing previous point cloud...");
                         if (typeof sceneObjects.currentPointCloud.dispose === 'function') {
                             sceneObjects.currentPointCloud.dispose();
                         }
                         sceneObjects.currentPointCloud = null;
                     }
 
-                    // Load the point cloud from the test directory
                     const pcPath = "/static/viewer/data/clusters";
                     const pc = await loadPointCloud(pcPath, scene);
 
                     if (pc) {
-                        // Store in global state
                         if (sceneObjects) sceneObjects.currentPointCloud = pc;
-
-                        // Frame camera on the point cloud
                         frameCameraOnMesh(scene.activeCamera || scene.cameras[0], pc);
-
-                        // Register in Outline panel (label = last segment of the path)
-                        const pcLabel = pcPath.split("/").filter(Boolean).pop() || "Point Cloud";
+                        const pcLabel = filename || "Point Cloud";
                         if (typeof window.__registerPointCloudInOutline === 'function') {
                             window.__registerPointCloudInOutline(pc, pcLabel);
                         }
-
-                        console.log("✅ Point cloud loaded successfully from:", pcPath);
+                        console.log("✅ Process complete. Potree cloud loaded.");
                     }
-                } catch (err) {
-                    console.error("❌ Failed to load test point cloud:", err);
-                    alert("Error loading point cloud: " + err.message);
-                } finally {
+
                     overlay.classList.remove('active');
                     setTimeout(() => overlay.remove(), 300);
+
+                } catch (err) {
+                    console.error("❌ Processing Pipeline Error:", err);
+                    alert("Pipeline Error: " + err.message);
+                    uploadBtn.textContent = "Upload & Process";
+                    uploadBtn.disabled = false;
                 }
             };
 
@@ -1450,6 +1542,284 @@ function showLoadModal() {
             footer.appendChild(uploadBtn);
         }
     );
+}
+
+/**
+ * Shows a modal for configuring Random Forest training parameters.
+ */
+export function showTrainingModal(scene, onStart) {
+    const overlay = createModal(
+        "Training Configuration",
+        (body) => {
+            // --- SECTION 1: DATA SPLIT ---
+            const splitTitle = document.createElement('div');
+            splitTitle.classList.add('modal-section-title');
+            splitTitle.textContent = "Data Split";
+            body.appendChild(splitTitle);
+
+            const splitContainer = document.createElement('div');
+            splitContainer.classList.add('modal-section');
+            // splitContainer.style.marginBottom = "20px";
+
+            const createSelectRow = (labelStr, id) => {
+                const row = document.createElement('div');
+                row.classList.add('property-row');
+                row.style.alignItems = "center";
+                // row.style.marginBottom = "12px";
+
+                const label = document.createElement('span');
+                label.classList.add('property-label');
+                label.style.width = "100px";
+                label.textContent = labelStr + ":";
+                row.appendChild(label);
+
+                const select = document.createElement('select');
+                select.id = id;
+                select.style.flex = "1";
+                select.classList.add('property-input');
+                row.appendChild(select);
+
+                return { row, select };
+            };
+
+            const trainObj = createSelectRow("Training Data", "train-select");
+            const valObj = createSelectRow("Validation Data", "val-select");
+
+            splitContainer.appendChild(trainObj.row);
+            splitContainer.appendChild(valObj.row);
+            body.appendChild(splitContainer);
+
+            // Get segments from the DOM
+            const segments = document.querySelectorAll('.outline-item[data-segment-id]');
+
+            const addOptions = (select) => {
+                const noneOpt = document.createElement('option');
+                noneOpt.value = "none";
+                noneOpt.textContent = "-- Select Segment --";
+                select.appendChild(noneOpt);
+
+                segments.forEach((item) => {
+                    const segmentId = item.dataset.segmentId;
+                    const nameInput = item.querySelector('.outline-name-input');
+                    const name = nameInput ? nameInput.value : `Segment ${segmentId}`;
+
+                    const opt = document.createElement('option');
+                    opt.value = segmentId;
+                    opt.textContent = name;
+                    select.appendChild(opt);
+                });
+            };
+
+            if (segments.length === 0) {
+                const opt = document.createElement('option');
+                opt.disabled = true;
+                opt.textContent = "No segments found";
+                trainObj.select.appendChild(opt);
+                valObj.select.appendChild(opt.cloneNode(true));
+            } else {
+                addOptions(trainObj.select);
+                addOptions(valObj.select);
+
+                // Pre-select some defaults if possible
+                if (segments.length >= 1) trainObj.select.selectedIndex = 1;
+                if (segments.length >= 2) valObj.select.selectedIndex = 2;
+                else if (segments.length >= 1) valObj.select.selectedIndex = 1;
+            }
+
+            // --- SECTION 2: FEATURE SELECTION (Collapsible) ---
+            const featureTitle = document.createElement('div');
+            featureTitle.classList.add('modal-section-title');
+            featureTitle.style.cursor = "pointer";
+            featureTitle.style.display = "flex";
+            featureTitle.style.justifyContent = "space-between";
+            featureTitle.style.alignItems = "center";
+            featureTitle.style.padding = "8px 0";
+            featureTitle.style.transition = "color 0.2s";
+            featureTitle.innerHTML = `<span>Feature Selection</span><span style="font-size: 0.6rem; opacity: 0.5;">▼</span>`;
+
+            featureTitle.onmouseover = () => featureTitle.style.color = "white";
+            featureTitle.onmouseout = () => featureTitle.style.color = "var(--accent-blue)";
+
+            body.appendChild(featureTitle);
+
+            const featureContainer = document.createElement('div');
+            featureContainer.classList.add('modal-section');
+            featureContainer.style.display = "none"; // Initial state: collapsed
+            featureContainer.style.paddingTop = "10px";
+            featureContainer.style.borderTop = "1px solid rgba(255,255,255,0.05)";
+
+            // Two columns using flex
+            const colsContainer = document.createElement('div');
+            colsContainer.style.display = "flex";
+            colsContainer.style.width = "100%";
+            colsContainer.style.gap = "20px";
+
+            const col1 = document.createElement('div');
+            col1.style.flex = "1";
+            const col2 = document.createElement('div');
+            col2.style.flex = "1";
+            colsContainer.appendChild(col1);
+            colsContainer.appendChild(col2);
+            featureContainer.appendChild(colsContainer);
+
+            featureTitle.onclick = () => {
+                const isHidden = featureContainer.style.display === "none";
+                featureContainer.style.display = isHidden ? "flex" : "none";
+                featureTitle.querySelector('span:last-child').textContent = isHidden ? "▲" : "▼";
+                featureTitle.querySelector('span:last-child').style.opacity = isHidden ? "1" : "0.5";
+            };
+
+            const loader = scene.potree2Loader;
+            const validFeatures = loader ? loader.getAttributeList() : [];
+            const featureSwitches = {};
+
+            if (validFeatures.length === 0) {
+                col1.innerHTML = `<span style="font-size:0.75rem; color:var(--text-muted)">No custom features found</span>`;
+            } else {
+                validFeatures.forEach((featName, idx) => {
+                    const targetCol = (idx % 2 === 0) ? col1 : col2;
+                    const cb = createCheckbox(featName, true, targetCol);
+                    featureSwitches[featName] = cb;
+                });
+            }
+
+            body.appendChild(featureContainer);
+
+            // --- SECTION 3: ALGORITHM SETTINGS (Collapsible) ---
+            const algoTitle = document.createElement('div');
+            algoTitle.classList.add('modal-section-title');
+            algoTitle.style.cursor = "pointer";
+            algoTitle.style.display = "flex";
+            algoTitle.style.justifyContent = "space-between";
+            algoTitle.style.alignItems = "center";
+            algoTitle.style.padding = "8px 0";
+            algoTitle.style.transition = "color 0.2s";
+            algoTitle.innerHTML = `<span>Random Forest Settings</span><span style="font-size: 0.6rem; opacity: 0.5;">▼</span>`;
+
+            algoTitle.onmouseover = () => algoTitle.style.color = "white";
+            algoTitle.onmouseout = () => algoTitle.style.color = "var(--accent-blue)";
+
+            body.appendChild(algoTitle);
+
+            const algoContainer = document.createElement('div');
+            algoContainer.classList.add('modal-section');
+            algoContainer.style.display = "none"; // Initial state: collapsed
+            algoContainer.style.paddingTop = "10px";
+            algoContainer.style.borderTop = "1px solid rgba(255,255,255,0.05)";
+
+            algoTitle.onclick = () => {
+                const isHidden = algoContainer.style.display === "none";
+                algoContainer.style.display = isHidden ? "flex" : "none";
+                algoTitle.querySelector('span:last-child').textContent = isHidden ? "▲" : "▼";
+                algoTitle.querySelector('span:last-child').style.opacity = isHidden ? "1" : "0.5";
+            };
+
+            // Estimators
+            const estRow = document.createElement('div');
+            estRow.classList.add('property-row');
+            estRow.style.padding = "0 4px";
+            estRow.innerHTML = `<span class="property-label">Estimators:</span>`;
+            const estInput = document.createElement('input');
+            estInput.type = "number";
+            estInput.classList.add('property-input');
+            estInput.value = "100";
+            estInput.min = "10";
+            estInput.max = "1000";
+            estRow.appendChild(estInput);
+            algoContainer.appendChild(estRow);
+
+            // Max Depth
+            const depthRow = document.createElement('div');
+            depthRow.classList.add('property-row');
+            depthRow.style.padding = "0 4px";
+            depthRow.innerHTML = `<span class="property-label">Max Depth:</span>`;
+            const depthInput = document.createElement('input');
+            depthInput.type = "number";
+            depthInput.classList.add('property-input');
+            depthInput.placeholder = "None";
+            depthRow.appendChild(depthInput);
+            algoContainer.appendChild(depthRow);
+
+            // Parallel Jobs
+            const jobsRow = document.createElement('div');
+            jobsRow.classList.add('property-row');
+            jobsRow.style.padding = "0 4px";
+            jobsRow.innerHTML = `<span class="property-label">Parallel Jobs:</span>`;
+            const jobsInput = document.createElement('input');
+            jobsInput.type = "number";
+            jobsInput.classList.add('property-input');
+            jobsInput.value = "4";
+            jobsRow.appendChild(jobsInput);
+            algoContainer.appendChild(jobsRow);
+
+            body.appendChild(algoContainer);
+        },
+        (footer, overlay) => {
+            const cancelBtn = document.createElement('button');
+            cancelBtn.classList.add('btn');
+            cancelBtn.style.backgroundColor = 'transparent';
+            cancelBtn.style.border = '1px solid var(--border-color)';
+            cancelBtn.textContent = "Cancel";
+            cancelBtn.onclick = () => {
+                overlay.classList.remove('active');
+                setTimeout(() => overlay.remove(), 300);
+            };
+
+            const runBtn = document.createElement('button');
+            runBtn.classList.add('btn');
+            runBtn.textContent = "Start Training";
+            runBtn.onclick = () => {
+                const body = overlay.querySelector('.modal-body');
+
+                const trainId = body.querySelector('#train-select').value;
+                const valId = body.querySelector('#val-select').value;
+
+                // Reconstruct data map for backend
+                const split = {};
+                if (trainId !== "none") {
+                    split[trainId] = ['train'];
+                }
+                if (valId !== "none") {
+                    if (!split[valId]) split[valId] = [];
+                    if (!split[valId].includes('val')) split[valId].push('val');
+                }
+
+                // Extract Features
+                const selectedFeatures = [];
+                const featContainer = body.querySelectorAll('.modal-section')[1]; // Second section is features
+                featContainer.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+                    if (cb.checked) {
+                        const label = cb.closest('.property-row').querySelector('.property-label').textContent.replace(':', '');
+                        selectedFeatures.push(label);
+                    }
+                });
+
+                // Extract RF params
+                const inputs = body.querySelectorAll('.modal-section')[2].querySelectorAll('input'); // Third section is RF params
+                const params = {
+                    split,
+                    features: selectedFeatures,
+                    rf_params: {
+                        estimators: parseInt(inputs[0].value) || 100,
+                        maxDepth: parseInt(inputs[1].value) || null,
+                        jobs: parseInt(inputs[2].value) || 4
+                    }
+                };
+
+                overlay.classList.remove('active');
+                setTimeout(() => overlay.remove(), 300);
+
+                if (onStart) onStart(params);
+            };
+
+            footer.appendChild(cancelBtn);
+            footer.appendChild(runBtn);
+        }
+    );
+
+    // Adjust modal width
+    const container = overlay.querySelector('.modal-container');
+    if (container) container.style.width = "400px";
 }
 
 /**
@@ -1607,4 +1977,8 @@ function isPointInPoly(poly, pt) {
         if (intersect) inside = !inside;
     }
     return inside;
+}
+
+function getCSRFToken() {
+    return document.querySelector('meta[name="csrf-token"]').getAttribute('content');
 }

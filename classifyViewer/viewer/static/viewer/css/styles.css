@@ -526,6 +526,7 @@ textarea,
     justify-content: space-between;
     align-items: center;
     font-size: 0.85rem;
+    padding-bottom: 12px;
 }
 
 .property-label {
@@ -538,20 +539,38 @@ textarea,
 }
 
 .property-input {
-    background-color: rgba(0, 0, 0, 0.2);
+    background-color: rgba(0, 0, 0, 0.3);
     border: 1px solid var(--border-color);
     border-radius: 4px;
     color: var(--text-primary);
-    padding: 4px 8px;
+    padding: 6px 10px;
     font-size: 0.8rem;
     width: 100px;
-    text-align: right;
+    text-align: left;
     outline: none;
-    transition: border-color 0.2s;
+    transition: all 0.2s;
+}
+
+select.property-input {
+    cursor: pointer;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='%23ffffff80' d='M0 0l5 6 5-6z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    padding-right: 28px;
+    width: auto;
+    min-width: 140px;
 }
 
 .property-input:focus {
     border-color: var(--accent-blue);
+    background-color: rgba(0, 0, 0, 0.5);
+}
+
+select.property-input option {
+    background-color: #1a1a1c;
+    color: var(--text-primary);
+    padding: 8px;
 }
 
 .property-row-vertical {
@@ -933,7 +952,26 @@ textarea,
     padding: 24px 20px;
     display: flex;
     flex-direction: column;
-    gap: 16px;
+    gap: 6px;
+    max-height: 70vh;
+    overflow-y: auto;
+}
+
+.modal-body::-webkit-scrollbar {
+    width: 6px;
+}
+
+.modal-body::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.modal-body::-webkit-scrollbar-thumb {
+    background: var(--border-color);
+    border-radius: 10px;
+}
+
+.modal-body::-webkit-scrollbar-thumb:hover {
+    background: var(--text-muted);
 }
 
 .modal-footer {
@@ -948,7 +986,23 @@ textarea,
 .checkbox-group {
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    /* gap: 12px; */
+}
+
+.modal-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.modal-section-title {
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: var(--accent-blue);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+    opacity: 0.8;
 }
 
 .checkbox-item {

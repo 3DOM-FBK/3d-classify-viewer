@@ -11,6 +11,7 @@ import {
     frameCameraOnMesh,
     showDownloadModal,
     showLoadModal,
+    showTrainingModal,
     selectPoints,
     deselectPoints,
     clearSelection,
@@ -431,15 +432,42 @@ const importExportContent = importExportSection.content;
 const loadPCButton = createButton("Load PointCloud", "loadPC", importExportContent);
 const downloadPCButton = createButton("Download PointCloud", "downloadPC", importExportContent);
 
-// 2. Training
-const trainingSection = createAccordionSection("Training", "sidebar-right-content");
+// 2. Features Computation
+const featuresSection = createAccordionSection("FEATURES COMPUTATION", "sidebar-right-content");
+const featuresContent = featuresSection.content;
+
+const featuresInfo = document.createElement('div');
+featuresInfo.style.fontSize = "0.75rem";
+featuresInfo.style.color = "var(--text-muted)";
+featuresInfo.style.lineHeight = "1.4";
+featuresInfo.textContent = "Recalculate one or more geometric or spectral features for the points in the cloud to improve model accuracy.";
+featuresContent.appendChild(featuresInfo);
+
+const recalculateButton = createButton("Recalculate Features", "recalculateFeatures", featuresContent);
+recalculateButton.onclick = () => {
+    // Placeholder for future popup
+    console.log("Recalculate Features clicked");
+    if (typeof showFeaturesModal === 'function') {
+        showFeaturesModal();
+    } else {
+        alert("Features recalculation popup will be implemented soon.");
+    }
+};
+
+// 3. Training
+const trainingSection = createAccordionSection("TRAINING", "sidebar-right-content");
 const trainingContent = trainingSection.content;
-createPropertyRow("nr estimator", "50-100-150-200", trainingContent);
-createPropertyRow("max depth", "None", trainingContent);
-createPropertyRow("nr jobs", "12", trainingContent);
+
+const trainingInfo = document.createElement('div');
+trainingInfo.style.fontSize = "0.75rem";
+trainingInfo.style.color = "var(--text-muted)";
+trainingInfo.style.lineHeight = "1.4";
+trainingInfo.innerHTML = `Start the classification on the selected regions using a <strong>Random Forest</strong> algorithm.`;
+trainingContent.appendChild(trainingInfo);
+
 const startTrainingButton = createButton("Start Training", "startTraining", trainingContent);
 
-// 3. Viewport Settings
+// 4. Viewport Settings
 const viewportSection = createAccordionSection("Viewport Settings", "sidebar-right-content");
 const viewportContent = viewportSection.content;
 
@@ -919,83 +947,85 @@ if (cutModeButton) {
 
 // --- Training Logic ---
 if (startTrainingButton) {
-    startTrainingButton.addEventListener("click", async () => {
+    startTrainingButton.addEventListener("click", () => {
         const loader = scene.potree2Loader;
         if (!loader) {
             console.warn("No point cloud loaded.");
             return;
         }
 
-        startTrainingButton.disabled = true;
+        // Open the modal and pass the execution callback
+        showTrainingModal(scene, async (params) => {
+            console.log("🚀 Starting Training with params:", params);
 
-        try {
-            // Build segment lookup map: segmentId -> segmentName
-            const segmentMap = {};
-            document.querySelectorAll('.outline-item[data-segment-id]').forEach(item => {
-                const segId = parseInt(item.dataset.segmentId, 10);
-                const nameInput = item.querySelector('.outline-name-input');
-                if (!isNaN(segId) && nameInput) segmentMap[segId] = nameInput.value;
-            });
+            startTrainingButton.disabled = true;
+            try {
+                // Build segment lookup map: segmentId -> segmentName
+                const segmentMap = {};
+                document.querySelectorAll('.outline-item[data-segment-id]').forEach(item => {
+                    const segId = parseInt(item.dataset.segmentId, 10);
+                    const nameInput = item.querySelector('.outline-name-input');
+                    if (!isNaN(segId) && nameInput) segmentMap[segId] = nameInput.value;
+                });
 
-            // Build class lookup map: classId -> className
-            const classMap = {};
-            document.querySelectorAll('.class-item').forEach((item, index) => {
-                const nameInput = item.querySelector('.outline-name-input');
-                if (nameInput) {
-                    // Match the 0-based counter from functions.js
-                    classMap[index] = nameInput.value;
+                // Build class lookup map: classId -> className
+                const classMap = {};
+                classRegistry.forEach((val, id) => {
+                    classMap[id] = val.name;
+                });
+
+                // Visual feedback
+                startTrainingButton.textContent = "Extracting Points...";
+
+                // Extract training data
+                const exportResult = await loader.exportAllTrainingData(segmentMap);
+
+                if (!exportResult || !exportResult.buffer) {
+                    console.warn("No assigned points found to train on.");
+                    alert("No points were identified in the selected regions.");
+                    startTrainingButton.textContent = "Start Training";
+                    startTrainingButton.disabled = false;
+                    return;
                 }
-            });
 
-            // Visual feedback
-            startTrainingButton.textContent = "Extracting Points...";
+                // Visual feedback
+                startTrainingButton.textContent = "Sending Data...";
 
-            // Extract training data
-            const exportResult = await loader.exportAllTrainingData(segmentMap);
+                // Use FormData to send binary buffer + structured metadata
+                const metadata = {
+                    segments: exportResult.segmentMap,
+                    classes: classMap,
+                    split: params.split,
+                    rf_params: params.rf_params
+                };
 
-            if (!exportResult || !exportResult.buffer) {
-                console.warn("No assigned points found to train on.");
-                alert("No points were identified in the selected regions.");
+                const formData = new FormData();
+                formData.append('labels', JSON.stringify(metadata));
+                formData.append('buffer', new Blob([exportResult.buffer], { type: 'application/octet-stream' }));
+
+                console.log(`🚀 Uploading binary buffer (${(exportResult.buffer.byteLength / 1024 / 1024).toFixed(2)} MB)...`);
+
+                const response = await fetch('/api/start-training/', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    const errData = await response.json();
+                    throw new Error(errData.error || "Failed to start training");
+                }
+
+                const data = await response.json();
+                console.log("✅ Training data uploaded successfully:", data);
+                alert(`Training data saved! Binary buffer: ${data.filename}\nLabels: ${data.labels_filename}`);
+
+            } catch (error) {
+                console.error("❌ Error uploading training data:", error);
+                alert(`Error: ${error.message}`);
+            } finally {
                 startTrainingButton.textContent = "Start Training";
                 startTrainingButton.disabled = false;
-                return;
             }
-
-            // Visual feedback
-            startTrainingButton.textContent = "Sending Data...";
-
-            // Use FormData to send binary buffer + structured metadata
-            const metadata = {
-                segments: exportResult.segmentMap,
-                classes: classMap
-            };
-
-            const formData = new FormData();
-            formData.append('labels', JSON.stringify(metadata));
-            formData.append('buffer', new Blob([exportResult.buffer], { type: 'application/octet-stream' }));
-
-            console.log(`🚀 Uploading binary buffer (${(exportResult.buffer.byteLength / 1024 / 1024).toFixed(2)} MB)...`);
-
-            const response = await fetch('/api/start-training/', {
-                method: 'POST',
-                body: formData
-            });
-
-            if (!response.ok) {
-                const errData = await response.json();
-                throw new Error(errData.error || "Failed to start training");
-            }
-
-            const data = await response.json();
-            console.log("✅ Training data uploaded successfully:", data);
-            alert(`Training data saved! Binary buffer: ${data.filename}\nLabels: ${data.labels_filename}`);
-
-        } catch (error) {
-            console.error("❌ Error uploading training data:", error);
-            alert(`Error: ${error.message}`);
-        } finally {
-            startTrainingButton.textContent = "Start Training";
-            startTrainingButton.disabled = false;
-        }
+        });
     });
 }

@@ -16,6 +16,8 @@ urlpatterns = [
     path("subsample_pc/", subsample_pc),
     path("mesh2pc/", mesh2pc),
     path("ply2las/", ply2las),
+    path("api/clear-data/", views.clear_data),
+    path("api/upload-data/", views.upload_data),
     path("api/start-training/", views.start_training),
     path("feature_extraction/", feat_extraction)
 ]
