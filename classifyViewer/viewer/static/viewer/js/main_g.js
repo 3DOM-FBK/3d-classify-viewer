@@ -143,7 +143,7 @@ testGButton.addEventListener("click", async () => {
     
     console.log("Sending request for testing the function...");
 
-    const which_function = "launch_RF_classify/";
+    const which_function = "launch_RF_training/";
     let body = null;
     let file_path = "";
     let use_gpu = false;
@@ -157,14 +157,30 @@ testGButton.addEventListener("click", async () => {
             const min_samples_split = 20;
             const max_features = "sqrt";
             use_gpu = true;
-            
+            let selected_features = [ 'red', 'green', 'blue', 'Omnivariance_0_4', 'Planarity_0_4', 'Linearity_0_4', 'Surface_variation_0_4', 'Sphericity_0_4', 'Verticality_0_4', 
+            'Omnivariance_1', 'Planarity_1', 'Linearity_1', 'Surface_variation_1', 'Sphericity_1', 'Verticality_1', 'Omnivariance_2', 'Planarity_2', 'Linearity_2', 
+            'Surface_variation_2', 'Sphericity_2', 'Verticality_2'];
+
+            // Use absolute paths for training
+            const folder_path = "/webapp/classifyViewer/viewer/static/viewer/data2/";
+            const training_filepath = folder_path + "RF/training_using_gaussian/dataset/training.las";
+            const val_filepath = folder_path + "RF/training_using_gaussian/dataset/validation.las";
+            const output_training_name = folder_path + "RF/training_using_gaussian/output/test_predicted.las";
+            const model_savepath = folder_path + "RF/training_using_gaussian/output/model_avt_gaussian.pkl";
+
             body = JSON.stringify({
                 n_jobs: n_jobs,
                 nr_estimators: nr_estimators,
                 max_depth: max_depth,
                 min_samples_split: min_samples_split,
                 max_features: max_features,
-                use_gpu: use_gpu
+                use_gpu: use_gpu, 
+                selected_features: selected_features, 
+                training_filepath: training_filepath,
+                val_filepath: val_filepath, 
+                output_training_name: output_training_name,
+                model_savepath: model_savepath
+
             });
             break;
         }

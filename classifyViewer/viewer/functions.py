@@ -133,24 +133,20 @@ def Potree(input_filepath, output_filepath):
     
 def launch_training_RF(data):
     print("\n[FUNCTION] ---- TRAINING RANDOM FOREST -----\n")
-    
-    # Use absolute paths for training
-    folder_path = os.path.abspath(os.path.join(settings.BASE_DIR, "viewer/static/viewer/data2/"))
-    
-    features_filepath = os.path.join(folder_path, "RF/training_using_gaussian/dataset/feature_index_gs.txt")
-    training_filepath = os.path.join(folder_path, "RF/training_using_gaussian/dataset/training.las")
-    val_filepath = os.path.join(folder_path, "RF/training_using_gaussian/dataset/validation.las")
-    
+
+    selected_features = data['selected_features']
+    training_filepath = data['training_filepath']
+    val_filepath = data['val_filepath']
     n_jobs = data['n_jobs']
     n_estimators = data['nr_estimators']
     max_depth = data['max_depth']
     min_samples_split = data['min_samples_split']
     max_features = data['max_features']
     use_gpu = data['use_gpu']
-    output_training_name = os.path.join(folder_path, "RF/training_using_gaussian/output/test_predicted")
-    model_savepath = os.path.join(folder_path, "RF/training_using_gaussian/output/model_avt_gaussian.pkl")
+    output_training_name = data['output_training_name']
+    model_savepath = data['model_savepath']
 
-    training(features_filepath, training_filepath, val_filepath, n_jobs, n_estimators, max_depth, min_samples_split, max_features, use_gpu, output_training_name, model_savepath)
+    training(selected_features, training_filepath, val_filepath, n_jobs, n_estimators, max_depth, min_samples_split, max_features, use_gpu, output_training_name, model_savepath)
 
 def launch_classify_RF(data):
     print("\n[FUNCTION] ---- CLASSIFYING RANDOM FOREST -----\n")

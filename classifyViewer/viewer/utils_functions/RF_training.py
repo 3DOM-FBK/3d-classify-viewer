@@ -17,15 +17,15 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import precision_score, recall_score, accuracy_score, f1_score, confusion_matrix, jaccard_score
 import itertools
 from tqdm import tqdm 
+import laspy
+import re
+import copy
 
 ''' Todo:
     1) Add the binary case of training a model with a single class vs all the others. 
     2) Automatic combination of features
 '''
 
-feat_to_use = []           # Indices of the features to use. If n is the number of features, from 0 to n-1. Apply both to train and test sets
-class_index = -1           # Index of the class label. Apply both to train and test sets
-debug = True
 
 def load_features_and_class(filepath):
     ''' Load the features to use from a txt file. Format: 
@@ -39,19 +39,36 @@ def load_features_and_class(filepath):
         for line_index, line in enumerate(f.readlines()):
             tokens = line.strip().split(' ')
             if line_index == 0:
-                global feat_to_use
                 feat_to_use = [int(t) for t in tokens]
             elif line_index == 1:
-                global class_index
                 class_index= int(tokens[0])
+    return feat_to_use, class_index
 
+def get_feature_indices(full_header, selected_features):
+    ''' Get indices of selected features in the full header.
+    
+        Attributes:
+            full_header        : list of all feature names
+            selected_features  : list of feature names to find
+        
+        Return:
+            indices : list of indices of selected features in full_header
+    '''
+    indices = []
+    for feat in selected_features:
+        if feat in full_header:
+            indices.append(full_header.index(feat))
+        else:
+            print(f"Warning: feature '{feat}' not found in header")
+    return indices
 
-def read_data(filepath):
+def read_txt_data(filepath, class_index):
     ''' Read a labelled point cloud.
 
         Attributes:
             filepath    :   path to the .txt file containing the point cloud
-        
+            class_index :   index of the class label
+
         Return:
             X   :   numpy array with features
             Y   :   numpy array with classes
@@ -78,6 +95,68 @@ def read_data(filepath):
                 Y.append(int(float(tokens[class_index])))
     return np.asarray(X, dtype=np.float64), np.asarray(Y, dtype=np.float64), header
 
+def read_las_data(filepath, class_las_index):
+    ''' Read a labelled point cloud from a .las file.
+
+        Attributes:
+            filepath    :   path to the .las file containing the point cloud
+            class_las_index :   index of the class label in the .las file
+
+        Return:
+            X   :   numpy array with features
+            Y   :   numpy array with classes
+            header :   list of feature names (from the las file)
+    '''
+
+    def sanitize_name(name):
+        clean = re.sub(r'[^a-zA-Z0-9_]', '_', name)
+        clean = re.sub(r'_+', '_', clean)
+        return clean.strip('_')
+
+    las = laspy.read(filepath)
+
+    all_dims = list(las.point_format.dimension_names)
+
+    # Exclude the class dimension and 'classification' from features
+    BUILTIN_SKIP = {class_las_index, 'classification'}
+    raw_feature_dims = [d for d in all_dims if d not in BUILTIN_SKIP]
+
+    # Build a map: original_name -> sanitized_name (with uniqueness check)
+    name_map = {}
+    seen = set()
+    for col_name in raw_feature_dims:
+        clean = sanitize_name(col_name)
+        original_clean = clean
+        counter = 1
+        while clean.lower() in seen:
+            clean = f"{original_clean}_{counter}"
+            counter += 1
+        seen.add(clean.lower())
+        name_map[col_name] = clean
+
+    # Build X using original names to access data, sanitized names as header
+    columns = []
+    valid_header = []
+    for original, clean in tqdm(name_map.items(), desc="Loading data"):
+        try:
+            col = np.array(getattr(las, original), dtype=np.float64)
+            columns.append(col)
+            valid_header.append(clean)
+        except Exception as e:
+            print(f"Skipping dimension '{original}' -> '{clean}': {e}")
+
+    X = np.column_stack(columns)
+    header = valid_header
+
+    # Build Y from the class dimension
+    Y = np.array(getattr(las, class_las_index), dtype=np.float64)
+
+    # Filter out rows with NaN values
+    valid_mask = ~np.isnan(X).any(axis=1) & ~np.isnan(Y)
+    X = X[valid_mask]
+    Y = Y[valid_mask]
+
+    return X, Y, header
 
 def train_model(X_train, Y_train, n_jobs, use_gpu=False,
                 n_estimators=200, max_depth=15, min_samples_split=20, max_features='sqrt'):
@@ -105,7 +184,7 @@ def train_model(X_train, Y_train, n_jobs, use_gpu=False,
     # If GPU requested and cuML is available, use cuML's RandomForest (requires RAPIDS stack)
     if use_gpu and GPU_AVAILABLE:
         print(f"GPU is AVAILABLE, so use cuml for training.")
-        Xg = cp.asarray(X_train[:, feat_to_use])
+        Xg = cp.asarray(X_train)
         yg = cp.asarray(Y_train)
         # cuML requires an explicit integer for max_depth — None is not supported
         model = cuRF(
@@ -129,14 +208,14 @@ def train_model(X_train, Y_train, n_jobs, use_gpu=False,
             oob_score=True,
             n_jobs=n_jobs
         )
-        model.fit(X_train[:, feat_to_use], Y_train)         # Use only the specified features.
+        model.fit(X_train, Y_train)
         return model
 
 
-def write_classification(X_test, Y_test_pred, filename, header):
+def write_classification_txt(X_test, Y_test_pred, filename, header):
     ''' Write the test set with the predicted labels 
     '''
-    with open('{}.txt'.format(filename), 'w') as out:
+    with open('{}'.format(filename), 'w') as out:
         X_test = X_test.tolist()
         Y_test_pred = Y_test_pred.tolist()
         out.write('//{}\n'.format(header))
@@ -144,6 +223,95 @@ def write_classification(X_test, Y_test_pred, filename, header):
             x_t_as_str = " ".join([str(x) for x in x_t[0:6]])
             out.write('{} {}\n'.format(x_t_as_str, str(Y_test_pred[index])))
 
+
+def write_classification_las(X, Y, filename, header, source_las_path=None):
+    ''' Write the test set with the predicted labels as .las file '''
+
+    X = np.array(X)
+    Y = np.array(Y)
+
+    if isinstance(header, str):
+        header = header.strip().lstrip('/').strip().split()
+
+    def sanitize_name(name):
+        clean = re.sub(r'[^a-zA-Z0-9_]', '_', name)
+        clean = re.sub(r'_+', '_', clean)
+        return clean.strip('_')
+
+    # Campi built-in LAS: non vanno aggiunti come extra dims
+    LAS_BUILTIN = {'x', 'y', 'z', 'r', 'red', 'g', 'green', 'b', 'blue',
+                   'intensity', 'classification', 'return_number', 'number_of_returns',
+                   'scan_direction_flag', 'edge_of_flight_line', 'synthetic',
+                   'key_point', 'withheld', 'scan_angle_rank', 'user_data', 'point_source_id'}
+
+    name_map = {}
+    seen = set()
+    for col_name in header:
+        clean = sanitize_name(col_name)
+        original_clean = clean
+        counter = 1
+        while clean.lower() in seen:
+            clean = f"{original_clean}_{counter}"
+            counter += 1
+        seen.add(clean.lower())
+        name_map[col_name] = clean
+
+    if source_las_path:
+        source_las = laspy.read(source_las_path)
+        las_header = laspy.LasHeader(point_format=source_las.point_format.id,
+                                     version=source_las.header.version)
+        las_header.offsets = source_las.header.offsets
+        las_header.scales  = source_las.header.scales
+    else:
+        las_header = laspy.LasHeader(point_format=7, version="1.4")
+        if any(h.lower() == 'x' for h in header):
+            las_header.offsets = np.min(X[:, :3], axis=0)
+        las_header.scales = np.array([0.001, 0.001, 0.001])
+
+    # Add only non-builtin dims as extra
+    extra_dims = []
+    for col_name in header:
+        clean = name_map[col_name]
+        if clean.lower() not in LAS_BUILTIN:
+            extra_dims.append(
+                laspy.ExtraBytesParams(name=clean, type=np.float64)
+            )
+    if extra_dims:
+        las_header.add_extra_dims(extra_dims)
+
+    las = laspy.LasData(header=las_header)
+
+    for i, col_name in enumerate(tqdm(header, desc="Writing dimensions")):
+        clean = name_map[col_name]
+        clean_lower = clean.lower()
+        if clean_lower == 'x':
+            las.x = X[:, i]
+        elif clean_lower == 'y':
+            las.y = X[:, i]
+        elif clean_lower == 'z':
+            las.z = X[:, i]
+        elif clean_lower in ('r', 'red'):
+            las.red = (X[:, i] * 257).astype(np.uint16)
+        elif clean_lower in ('g', 'green'):
+            las.green = (X[:, i] * 257).astype(np.uint16)
+        elif clean_lower in ('b', 'blue'):
+            las.blue = (X[:, i] * 257).astype(np.uint16)
+        elif clean_lower == 'intensity':
+            las.intensity = X[:, i].astype(np.uint16)
+        elif clean_lower == 'classification':
+            pass  # scritto separatamente da Y
+        elif clean_lower in LAS_BUILTIN:
+            try:
+                setattr(las, clean_lower, X[:, i])
+            except Exception as e:{
+                # print(f"Skipping built-in '{clean_lower}': {e}")
+            }
+        else:
+            las[clean] = X[:, i]
+
+    las.classification = np.array(Y, dtype=np.uint8).flatten()
+
+    las.write('{}'.format(filename))
 
 def save_model(model, filename):
     ''' Save the trained machine learning model
@@ -156,34 +324,37 @@ def save_model(model, filename):
         pickle.dump(model, out, pickle.HIGHEST_PROTOCOL)
 
     
-def main(features_filepath, training_filepath, val_filepath, n_jobs, n_estimators, max_depth, min_samples_split, max_features, use_gpu, output_training_name, model_savepath):
+def main(selected_features, training_filepath, val_filepath, n_jobs, n_estimators, max_depth, min_samples_split, max_features, use_gpu, output_training_name, model_savepath):
 
     # PARAMETERS    
     n_estimators = n_estimators if n_estimators else 200
     max_depths = max_depth if max_depth else 15
-    min_samples_split=min_samples_split if hasattr(min_samples_split, 'value') else 20
-    max_features=max_features if hasattr(max_features, 'value') else 'sqrt'
+    min_samples_split=min_samples_split if min_samples_split else 20
+    max_features=max_features if max_features else "sqrt"
+    class_las_index = "labels"
+    feat_to_use = []
     
     total_start = time.time()
     t0 = time.time()
-    print("Loading features data...")
-    load_features_and_class(features_filepath)
 
     print("Loading training data...")
-    X_train, Y_train, header = read_data(training_filepath)
-
+    X_train, Y_train, header = read_las_data(training_filepath, class_las_index)
+    
     print("\nLoading validation data...")
-    X_test, Y_test, _ = read_data(val_filepath)
+    X_test, Y_test, _ = read_las_data(val_filepath, class_las_index)
+    
+    # print("\nLoading features data...")
+    feat_to_use = get_feature_indices(header, selected_features)
 
     t1 = time.time()
     tot_sec = round(t1 - t0, 2)
     load_min = int(tot_sec // 60)
     load_sec = int(tot_sec % 60)
     if load_min > 0:
-        print(f'---> Loading time {load_min} min {load_sec} sec')
+        print(f'\n---> Loading time {load_min} min {load_sec} sec')
     else:
-        print(f'---> Loading time {load_sec} sec')
-    print('\nStatistics:\n- Training samples: {}\n- Testing samples: {}\n- Using features with indices: {}'.format(len(Y_train), len(Y_test), feat_to_use))
+        print(f'\n---> Loading time {load_sec} sec')
+    print('\nStatistics:\n- Training samples: {}\n- Testing samples: {}\n- Features selected: {}'.format(len(Y_train), len(Y_test), selected_features))
 
     # Use the header for feature importance visualization
     if header:
@@ -198,8 +369,8 @@ def main(features_filepath, training_filepath, val_filepath, n_jobs, n_estimator
     tot_metrics_sec = 0
     
     t2 = time.time()
-    
-    model = train_model(X_train, Y_train, n_jobs=n_jobs, use_gpu=use_gpu,
+    # X_train[:, feat_to_use] specify only feature needed
+    model = train_model(X_train[:, feat_to_use], Y_train, n_jobs=n_jobs, use_gpu=use_gpu,
                         n_estimators=n_estimators,
                         max_depth=max_depths,
                         min_samples_split=min_samples_split,
@@ -222,6 +393,9 @@ def main(features_filepath, training_filepath, val_filepath, n_jobs, n_estimator
     else:
         Y_test_pred = model.predict(X_test[:, feat_to_use])             # Test the model, using only the specified features
 
+    print(f'\nSaving {output_training_name}')
+    write_classification_las(X_test, Y_test_pred, output_training_name, header)
+
     # Compute metrics
     Precision_pc = precision_score(Y_test, Y_test_pred, average=None)
     Precision = precision_score(Y_test, Y_test_pred, average='weighted')
@@ -243,8 +417,6 @@ def main(features_filepath, training_filepath, val_filepath, n_jobs, n_estimator
     else:
         print(f'---> Prediction + metrics time {metr_sec} sec')
     
-
-
     # Sort features by importance in descending order
     # Try to get feature importances; cuML may expose a similar attribute
     try:
@@ -257,11 +429,10 @@ def main(features_filepath, training_filepath, val_filepath, n_jobs, n_estimator
     sorted_features = sorted(zip(headers, feats), key=lambda x: x[1], reverse=True)
     
     # Print results
-    #print('---> Best parameters: ne: {}, md: {}'.format(best_conf['ne'], best_conf['md']))
-    print('---> Confusion matrix:\n{}'.format(confusion_matrix(Y_test, Y_test_pred)))
-    print('---> Feature importance:')
-    for header, importance in sorted_features:
-        print(f'{header}: {importance:.4f}')
+    print('- Confusion matrix:\n{}'.format(confusion_matrix(Y_test, Y_test_pred)))
+    print('- Feature importance:')
+    for name, importance in sorted_features:
+        print(f'{name}: {importance:.4f}')
 
     tot_sec = round(t4 - total_start, 2)
     tot_min = int(tot_sec // 60)
@@ -271,11 +442,11 @@ def main(features_filepath, training_filepath, val_filepath, n_jobs, n_estimator
     else:
         print(f'---> Total time {tot_sec} sec')
 
-    print('Check the complete report in the folder')
-    ''' ******************************************************************************************** '''
     #Print report with results
     report_fname = os.path.dirname(output_training_name) + "/report_RF.txt"
 
+    print(f'Check the complete report in the folder: {report_fname}')
+    ''' ******************************************************************************************** '''
     np.set_printoptions(precision=4)
     file = open(report_fname,"w") 
     file.write("Overall Accuracy\n\n")
@@ -319,8 +490,8 @@ def main(features_filepath, training_filepath, val_filepath, n_jobs, n_estimator
     file.write("\n\nConfusion Matrix\n\n")
     file.write(str(con_mat))
     file.write("\n\nFeature importance\n\n")
-    for header, importance in sorted_features:
-        file.write(f'{header}: {importance:.4f}\n')
+    for name, importance in sorted_features:
+        file.write(f'{name}: {importance:.4f}\n')
     file.write("\n\nTiming\n\n")
 
     if load_min > 0:
@@ -334,9 +505,9 @@ def main(features_filepath, training_filepath, val_filepath, n_jobs, n_estimator
         file.write(f'Training time:             {train_sec} sec\n')
 
     if metr_min > 0:
-        file.write(f'Prediction + Metrics time:              {metr_min} min {metr_sec} sec\n')
+        file.write(f'Prediction + Metrics time: {metr_min} min {metr_sec} sec\n')
     else:
-        file.write(f'Prediction + Metrics time:              {metr_sec} sec\n')
+        file.write(f'Prediction + Metrics time: {metr_sec} sec\n')
 
     if tot_min > 0:
         file.write(f'Total time:                {tot_min} min {tot_sec} sec\n')
@@ -345,12 +516,6 @@ def main(features_filepath, training_filepath, val_filepath, n_jobs, n_estimator
 
     file.close()
 
-# Save model and write the best classification of the test set
-    if use_gpu and GPU_AVAILABLE and cuRF is not None:
-        Y_test_pred = cp.asnumpy(model.predict(cp.asarray(X_test[:, feat_to_use])))
-    else:
-        Y_test_pred = model.predict(X_test[:, feat_to_use])
-    write_classification(X_test, Y_test_pred, output_training_name, header)
     print(f"Model saved on {model_savepath}")
     save_model(model, model_savepath )
 
