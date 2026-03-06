@@ -1552,7 +1552,7 @@ function showLoadModal() {
                         const meshResponse = await fetch('/mesh2pc/', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
-                            body: JSON.stringify({ file_path: inputPath, num_points: numPoints })
+                            body: JSON.stringify({ file_path: inputPath, out_path: lasPath, num_points: numPoints })
                         });
                         if (!meshResponse.ok) {
                             const errData = await meshResponse.json().catch(() => ({}));
