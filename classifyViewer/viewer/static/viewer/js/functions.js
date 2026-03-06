@@ -1422,42 +1422,118 @@ function showLoadModal() {
 
                 console.log("🚀 Starting complex processing pipeline for:", file.name);
 
-                // Show loading feedback
-                uploadBtn.disabled = true;
+                // ── Replace modal body with step list view ─────────────────
+                const container = overlay.querySelector('.modal-container');
+                const body = overlay.querySelector('.modal-body');
+                const footer = overlay.querySelector('.modal-footer');
+
+                // Swap content: hide original body, show step list
+                body.innerHTML = '';
+                if (footer) footer.style.display = 'none';
+
+                const STEPS = [
+                    "Clearing Workspace",
+                    "Uploading File",
+                    "Converting File",
+                    "Extracting Features",
+                    "Potree Converter",
+                    "Loading Viewer"
+                ];
+
+                // Build step list
+                const stepList = document.createElement('div');
+                stepList.classList.add('pipeline-step-list');
+
+                const stepEls = STEPS.map((label) => {
+                    const item = document.createElement('div');
+                    item.classList.add('pipeline-step-item', 'step-idle');
+
+                    const iconWrap = document.createElement('div');
+                    iconWrap.classList.add('step-icon-wrap');
+                    // Inner ring (the animated spinner arc + static base ring)
+                    iconWrap.innerHTML = `
+                        <svg class="step-svg" viewBox="0 0 32 32">
+                            <circle class="step-track" cx="16" cy="16" r="13" />
+                            <circle class="step-arc"   cx="16" cy="16" r="13" />
+                        </svg>
+                        <div class="step-check">
+                            <svg viewBox="0 0 12 12" fill="none">
+                                <polyline points="2,6 5,9 10,3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                            </svg>
+                        </div>
+                        <div class="step-cross">
+                            <svg viewBox="0 0 12 12" fill="none">
+                                <line x1="2.5" y1="2.5" x2="9.5" y2="9.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                                <line x1="9.5" y1="2.5" x2="2.5" y2="9.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                            </svg>
+                        </div>
+                    `;
+
+                    const labelEl = document.createElement('span');
+                    labelEl.classList.add('step-label');
+                    labelEl.textContent = label;
+
+                    item.appendChild(iconWrap);
+                    item.appendChild(labelEl);
+                    stepList.appendChild(item);
+                    return item;
+                });
+
+                body.appendChild(stepList);
+
+                // Helpers
+                const activateStep = (idx) => {
+                    stepEls[idx].classList.remove('step-idle', 'step-done', 'step-error');
+                    stepEls[idx].classList.add('step-running');
+                };
+                const completeStep = (idx) => {
+                    stepEls[idx].classList.remove('step-running');
+                    stepEls[idx].classList.add('step-done');
+                };
+                const failStep = (idx) => {
+                    stepEls[idx].classList.remove('step-running');
+                    stepEls[idx].classList.add('step-error');
+                };
+
+                // Track current step for error handling
+                let currentStepIdx = 0;
 
                 try {
                     // STEP 1: Clear current data directory
-                    uploadBtn.textContent = "Clearing Workspace...";
+                    currentStepIdx = 0;
+                    activateStep(0);
                     console.log("🧹 Step 1: Clearing /static/viewer/data/...");
                     const clearResponse = await fetch('/api/clear-data/', { method: 'POST' });
                     if (!clearResponse.ok) throw new Error("Failed to clear data directory");
+                    completeStep(0);
                     console.log("✅ Workspace cleared");
 
                     // STEP 2: Upload the source file
-                    uploadBtn.textContent = "Uploading File...";
+                    currentStepIdx = 1;
+                    activateStep(1);
                     console.log("📤 Step 2: Uploading file to /static/viewer/data/...");
                     const formData = new FormData();
                     formData.append('file', file);
-
                     const uploadResponse = await fetch('/api/upload-data/', {
                         method: 'POST',
                         body: formData
                     });
-
                     if (!uploadResponse.ok) {
                         const errData = await uploadResponse.json().catch(() => ({}));
                         throw new Error(errData.error || "Failed to upload file");
                     }
+                    completeStep(1);
                     console.log("✅ File uploaded");
 
                     // STEP 3: Handle conversion based on extension
+                    currentStepIdx = 2;
+                    activateStep(2);
                     const filename = file.name;
                     const extension = filename.split('.').pop().toLowerCase();
                     const inputPath = `viewer/static/viewer/data/${filename}`;
-                    let lasPath = `viewer/static/viewer/data/output.las`; // Default target
+                    let lasPath = `viewer/static/viewer/data/output.las`;
 
                     if (extension === 'ply') {
-                        uploadBtn.textContent = "Converting PLY to LAS...";
                         console.log("🔄 Step 3: Converting PLY to LAS...");
                         const plyResponse = await fetch('/ply2las/', {
                             method: 'POST',
@@ -1466,20 +1542,13 @@ function showLoadModal() {
                         });
                         if (!plyResponse.ok) {
                             const errData = await plyResponse.json().catch(() => ({}));
-                            console.error("❌ PLY conversion error detail:", errData);
                             throw new Error(errData.message || errData.error || "PLY conversion failed");
                         }
                         console.log("✅ PLY converted to LAS");
-                    }
-                    else if (extension === 'glb') {
-                        uploadBtn.textContent = "Sampling GLB to PC...";
+                    } else if (extension === 'glb') {
                         console.log("🔄 Step 3: Converting GLB to LAS...");
-
                         let numPoints = 5000000;
-                        if (meshPointsInput && meshPointsInput.value) {
-                            numPoints = parseInt(meshPointsInput.value, 10);
-                        }
-
+                        if (meshPointsInput && meshPointsInput.value) numPoints = parseInt(meshPointsInput.value, 10);
                         const meshResponse = await fetch('/mesh2pc/', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
@@ -1487,26 +1556,23 @@ function showLoadModal() {
                         });
                         if (!meshResponse.ok) {
                             const errData = await meshResponse.json().catch(() => ({}));
-                            console.error("❌ Mesh sampling error detail:", errData);
                             throw new Error(errData.message || errData.error || "Mesh sampling failed");
                         }
                         console.log(`✅ Mesh sampled to point cloud (${numPoints} points)`);
-                    }
-                    else if (extension === 'las' || extension === 'laz') {
+                    } else if (extension === 'las' || extension === 'laz') {
                         console.log("⏩ Step 3: Skipping conversion (already LAS/LAZ)");
                         lasPath = inputPath;
                     }
+                    completeStep(2);
 
                     // STEP 4: Feature Extraction
-                    uploadBtn.textContent = "Extracting Features...";
+                    currentStepIdx = 3;
+                    activateStep(3);
                     console.log("🧠 Step 4: Starting feature extraction...");
-
                     let samplingParam = 0;
                     if (subToggle.checked) {
                         samplingParam = parseFloat(voxelInput.value) || 0;
-                        console.log(`📏 Subsampling enabled with voxel size: ${samplingParam}`);
                     }
-
                     const featResponse = await fetch('/feature_extraction/', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
@@ -1514,55 +1580,50 @@ function showLoadModal() {
                             input_filepath: lasPath,
                             output_filepath: `viewer/static/viewer/data/features.las`,
                             feature_list: ["anisotropy", "height_above", "height_below", "linearity", "planarity", "verticality", "neighbours", "omnivariance", "sphericity", "surface_variation", "vertical_range"],
-                            radius_list: [0.1, 0.2, 0.5], // Default radii
+                            radius_list: [0.1, 0.2, 0.5],
                             sampling: samplingParam
                         })
                     });
                     if (!featResponse.ok) {
                         const errData = await featResponse.json().catch(() => ({}));
-                        console.error("❌ Feature extraction error detail:", errData);
                         throw new Error(errData.message || errData.error || "Feature extraction failed");
                     }
+                    completeStep(3);
                     console.log("✅ Features extracted");
 
                     // STEP 5: PotreeConverter
-                    uploadBtn.textContent = "Potree Converter...";
+                    currentStepIdx = 4;
+                    activateStep(4);
                     console.log("🧠 Step 5: Starting Potree conversion...");
-
                     const potreeResponse = await fetch('/potree_converter/', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
                         body: JSON.stringify({
                             input_filepath: `viewer/static/viewer/data/features.las`,
-                            output_filepath: `viewer/static/viewer/data/clusters`,
-                            radius: 0.5,
-                            min_points: 10
+                            output_filepath: `viewer/static/viewer/data/clusters`
                         })
                     });
                     if (!potreeResponse.ok) {
                         const errData = await potreeResponse.json().catch(() => ({}));
-                        console.error("❌ Potree conversion error detail:", errData);
                         throw new Error(errData.message || errData.error || "Potree conversion failed");
                     }
+                    completeStep(4);
                     console.log("✅ Potree conversion completed");
 
                     // STEP 6: Final Loading in Babylon
-                    uploadBtn.textContent = "Loading Viewer...";
-                    console.log("🏗️ Step 5: Loading Potree data from /data/clusters/...");
-
+                    currentStepIdx = 5;
+                    activateStep(5);
+                    console.log("🏗️ Step 6: Loading Potree data from /data/clusters/...");
                     const scene = window.__babylonScene;
                     const sceneObjects = window.__sceneObjects;
-
                     if (sceneObjects && sceneObjects.currentPointCloud) {
                         if (typeof sceneObjects.currentPointCloud.dispose === 'function') {
                             sceneObjects.currentPointCloud.dispose();
                         }
                         sceneObjects.currentPointCloud = null;
                     }
-
                     const pcPath = "/static/viewer/data/clusters";
                     const pc = await loadPointCloud(pcPath, scene);
-
                     if (pc) {
                         if (sceneObjects) sceneObjects.currentPointCloud = pc;
                         frameCameraOnMesh(scene.activeCamera || scene.cameras[0], pc);
@@ -1570,17 +1631,41 @@ function showLoadModal() {
                         if (typeof window.__registerPointCloudInOutline === 'function') {
                             window.__registerPointCloudInOutline(pc, pcLabel);
                         }
-                        console.log("✅ Process complete. Potree cloud loaded.");
                     }
+                    completeStep(5);
+                    console.log("✅ Process complete. Potree cloud loaded.");
 
+                    await new Promise(r => setTimeout(r, 800));
                     overlay.classList.remove('active');
                     setTimeout(() => overlay.remove(), 300);
 
                 } catch (err) {
                     console.error("❌ Processing Pipeline Error:", err);
-                    alert("Pipeline Error: " + err.message);
-                    uploadBtn.textContent = "Upload & Process";
-                    uploadBtn.disabled = false;
+
+                    failStep(currentStepIdx);
+
+                    // Show error message below the step list
+                    const errorDiv = document.createElement('div');
+                    errorDiv.classList.add('pipeline-error-msg');
+                    errorDiv.innerHTML = `
+                        <div style="font-weight:600;margin-bottom:4px;">⚠️ Import Failed</div>
+                        <div style="font-family:monospace;font-size:0.8em;white-space:pre-wrap;word-break:break-word;opacity:0.8;">${err.message || err.toString()}</div>
+                    `;
+                    body.appendChild(errorDiv);
+
+                    // Re-show footer with close button
+                    if (footer) {
+                        footer.style.display = '';
+                        footer.innerHTML = '';
+                        const closeBtn = document.createElement('button');
+                        closeBtn.classList.add('btn');
+                        closeBtn.textContent = "Close";
+                        closeBtn.onclick = () => {
+                            overlay.classList.remove('active');
+                            setTimeout(() => overlay.remove(), 300);
+                        };
+                        footer.appendChild(closeBtn);
+                    }
                 }
             };
 
@@ -1715,18 +1800,156 @@ export function showTrainingModal(scene, onStart) {
                 featureTitle.querySelector('span:last-child').style.opacity = isHidden ? "1" : "0.5";
             };
 
+            // Remove unused two-column containers, we'll build the matrix directly
+            colsContainer.remove();
+
             const loader = scene.potree2Loader;
             const validFeatures = loader ? loader.getAttributeList() : [];
             const featureSwitches = {};
 
             if (validFeatures.length === 0) {
-                col1.innerHTML = `<span style="font-size:0.75rem; color:var(--text-muted)">No custom features found</span>`;
+                const emptyMsg = document.createElement('span');
+                emptyMsg.style.cssText = "font-size:0.75rem; color:var(--text-muted)";
+                emptyMsg.textContent = "No custom features found";
+                featureContainer.appendChild(emptyMsg);
             } else {
-                validFeatures.forEach((featName, idx) => {
-                    const targetCol = (idx % 2 === 0) ? col1 : col2;
-                    const cb = createCheckbox(featName, true, targetCol);
-                    featureSwitches[featName] = cb;
+                // Parse features: name_radius (e.g. "linearity_0_1" -> name="linearity", radius="0.1")
+                // Radius part: everything after first underscore-separated non-numeric group
+                const featureMap = new Map(); // featureName -> Set of radiusKeys
+                const radiusOrder = [];
+
+                validFeatures.forEach(featName => {
+                    // Split on underscore, find where numeric part starts
+                    const parts = featName.split('_');
+                    // Find split point: last index where prefix is all non-numeric
+                    let splitIdx = parts.length - 1;
+                    for (let i = parts.length - 1; i >= 1; i--) {
+                        if (isNaN(parts[i])) { splitIdx = i; break; }
+                        splitIdx = i;
+                    }
+                    // Heuristic: look for first part that is numeric from the end
+                    // Better: the base name is everything before the last two numeric segments
+                    // Pattern: name_N_M where N and M are numbers
+                    let baseName, radiusKey;
+                    // Try to match trailing _<num>_<num> or _<num>
+                    const match = featName.match(/^(.+?)_([\d]+(?:_[\d]+)*)$/);
+                    if (match) {
+                        baseName = match[1];
+                        radiusKey = match[2].replace(/_/g, '.');
+                    } else {
+                        baseName = featName;
+                        radiusKey = '-';
+                    }
+
+                    if (!featureMap.has(baseName)) featureMap.set(baseName, new Map());
+                    featureMap.get(baseName).set(radiusKey, featName);
+
+                    if (!radiusOrder.includes(radiusKey)) radiusOrder.push(radiusKey);
                 });
+
+                // Sort radii numerically
+                radiusOrder.sort((a, b) => parseFloat(a) - parseFloat(b));
+
+                // --- Build matrix ---
+                const matrixWrapper = document.createElement('div');
+                matrixWrapper.classList.add('feature-matrix-wrapper');
+
+                // Select All / None controls
+                const matrixControls = document.createElement('div');
+                matrixControls.classList.add('feature-matrix-controls');
+
+                const selectAllBtn = document.createElement('button');
+                selectAllBtn.classList.add('feature-matrix-ctrl-btn');
+                selectAllBtn.textContent = "Select All";
+                selectAllBtn.onclick = () => {
+                    matrixWrapper.querySelectorAll('.feat-cell-btn').forEach(btn => {
+                        btn.classList.add('active');
+                        btn.setAttribute('data-active', 'true');
+                    });
+                };
+
+                const selectNoneBtn = document.createElement('button');
+                selectNoneBtn.classList.add('feature-matrix-ctrl-btn');
+                selectNoneBtn.textContent = "Select None";
+                selectNoneBtn.onclick = () => {
+                    matrixWrapper.querySelectorAll('.feat-cell-btn').forEach(btn => {
+                        btn.classList.remove('active');
+                        btn.setAttribute('data-active', 'false');
+                    });
+                };
+
+                matrixControls.appendChild(selectAllBtn);
+                matrixControls.appendChild(selectNoneBtn);
+                featureContainer.appendChild(matrixControls);
+
+                // Matrix table
+                const table = document.createElement('div');
+                table.classList.add('feature-matrix');
+
+                // Header row
+                const headerRow = document.createElement('div');
+                headerRow.classList.add('feature-matrix-row', 'feature-matrix-header-row');
+
+                // Top-left empty corner
+                const cornerCell = document.createElement('div');
+                cornerCell.classList.add('feature-matrix-cell', 'feature-matrix-corner');
+                cornerCell.textContent = 'Feature \\ Radius';
+                headerRow.appendChild(cornerCell);
+
+                // Radius column headers
+                radiusOrder.forEach(r => {
+                    const th = document.createElement('div');
+                    th.classList.add('feature-matrix-cell', 'feature-matrix-col-header');
+                    th.textContent = r;
+                    headerRow.appendChild(th);
+                });
+                table.appendChild(headerRow);
+
+                // Feature rows
+                featureMap.forEach((radiiMap, baseName) => {
+                    const row = document.createElement('div');
+                    row.classList.add('feature-matrix-row');
+
+                    // Row label
+                    const rowLabel = document.createElement('div');
+                    rowLabel.classList.add('feature-matrix-cell', 'feature-matrix-row-label');
+                    rowLabel.textContent = baseName;
+                    rowLabel.title = baseName;
+                    row.appendChild(rowLabel);
+
+                    // Cells for each radius
+                    radiusOrder.forEach(r => {
+                        const cell = document.createElement('div');
+                        cell.classList.add('feature-matrix-cell', 'feature-matrix-data-cell');
+
+                        const fullName = radiiMap.get(r);
+                        if (fullName) {
+                            const btn = document.createElement('button');
+                            btn.classList.add('feat-cell-btn', 'active');
+                            btn.setAttribute('data-feature', fullName);
+                            btn.setAttribute('data-active', 'true');
+                            btn.title = fullName;
+                            // Checkmark icon
+                            btn.innerHTML = `<svg width="10" height="10" viewBox="0 0 10 10" fill="none"><polyline points="1.5,5 4,7.5 8.5,2.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+                            btn.onclick = () => {
+                                const isActive = btn.getAttribute('data-active') === 'true';
+                                btn.setAttribute('data-active', String(!isActive));
+                                btn.classList.toggle('active', !isActive);
+                            };
+                            featureSwitches[fullName] = btn;
+                            cell.appendChild(btn);
+                        } else {
+                            cell.classList.add('feature-matrix-empty-cell');
+                        }
+
+                        row.appendChild(cell);
+                    });
+
+                    table.appendChild(row);
+                });
+
+                matrixWrapper.appendChild(table);
+                featureContainer.appendChild(matrixWrapper);
             }
 
             body.appendChild(featureContainer);
@@ -1830,14 +2053,10 @@ export function showTrainingModal(scene, onStart) {
                     if (!split[valId].includes('val')) split[valId].push('val');
                 }
 
-                // Extract Features
+                // Extract Features from matrix buttons
                 const selectedFeatures = [];
-                const featContainer = body.querySelectorAll('.modal-section')[1]; // Second section is features
-                featContainer.querySelectorAll('input[type="checkbox"]').forEach(cb => {
-                    if (cb.checked) {
-                        const label = cb.closest('.property-row').querySelector('.property-label').textContent.replace(':', '');
-                        selectedFeatures.push(label);
-                    }
+                body.querySelectorAll('.feat-cell-btn[data-active="true"]').forEach(btn => {
+                    selectedFeatures.push(btn.getAttribute('data-feature'));
                 });
 
                 // Extract RF params
@@ -1865,7 +2084,7 @@ export function showTrainingModal(scene, onStart) {
 
     // Adjust modal width
     const container = overlay.querySelector('.modal-container');
-    if (container) container.style.width = "400px";
+    if (container) container.style.width = "620px";
 }
 
 /**

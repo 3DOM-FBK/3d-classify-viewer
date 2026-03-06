@@ -54,6 +54,8 @@ body {
     user-select: none;
     /* Disable selection globally */
     cursor: default;
+    display: flex;
+    flex-direction: column;
 }
 
 input,
@@ -63,10 +65,107 @@ textarea,
     /* Allow selection in inputs */
 }
 
+/* Navbar */
+.top-navbar {
+    height: 48px;
+    background-color: var(--panel-bg);
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    gap: 24px;
+    flex-shrink: 0;
+    z-index: 1000;
+}
+
+.navbar-left {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    height: 100%;
+}
+
+.nav-logo {
+    height: 32px;
+    object-fit: contain;
+}
+
+.nav-btn {
+    background: transparent;
+    color: var(--text-primary);
+    border: none;
+    font-family: inherit;
+    font-size: 0.9rem;
+    font-weight: 500;
+    padding: 6px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.nav-btn:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+}
+
+.nav-btn:active {
+    background-color: rgba(255, 255, 255, 0.15);
+}
+
+/* Navbar Separator */
+.navbar-separator {
+    width: 1px;
+    height: 22px;
+    background-color: var(--border-color);
+    flex-shrink: 0;
+}
+
+/* Layout Mode Toggle */
+.navbar-mode-group {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background-color: rgba(0, 0, 0, 0.3);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 3px;
+}
+
+.nav-mode-btn {
+    background: transparent;
+    color: var(--text-muted);
+    border: none;
+    font-family: inherit;
+    font-size: 0.8rem;
+    font-weight: 500;
+    padding: 4px 14px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.2s, color 0.2s;
+    letter-spacing: 0.3px;
+}
+
+.nav-mode-btn:hover:not(:disabled) {
+    color: var(--text-primary);
+    background-color: rgba(255, 255, 255, 0.07);
+}
+
+.nav-mode-btn.active {
+    background-color: var(--accent-blue);
+    color: #ffffff;
+    font-weight: 600;
+    cursor: default;
+}
+
+.nav-mode-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+}
+
 .app-container {
     display: flex;
     width: 100%;
-    height: 100vh;
+    flex: 1;
+    overflow: hidden;
 }
 
 /* Pannelli Laterali */
@@ -526,7 +625,6 @@ textarea,
     justify-content: space-between;
     align-items: center;
     font-size: 0.85rem;
-    padding-bottom: 12px;
 }
 
 .property-label {
@@ -1506,4 +1604,335 @@ input[type="number"].property-input::-webkit-outer-spin-button:active {
     background-image:
         linear-gradient(transparent, transparent),
         url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path fill='white' d='M8 4l4 4H4z'/><path fill='white' d='M8 12l-4-4h8z'/></svg>");
+}
+
+/* =====================================================================
+   Feature Matrix (Training Modal)
+   ===================================================================== */
+
+.feature-matrix-controls {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.feature-matrix-ctrl-btn {
+    background: transparent;
+    border: 1px solid var(--border-color);
+    color: var(--text-muted);
+    font-family: inherit;
+    font-size: 0.72rem;
+    font-weight: 500;
+    padding: 4px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s;
+    letter-spacing: 0.2px;
+}
+
+.feature-matrix-ctrl-btn:hover {
+    border-color: var(--text-muted);
+    color: var(--text-primary);
+    background-color: rgba(255, 255, 255, 0.05);
+}
+
+.feature-matrix-wrapper {
+    width: 100%;
+    overflow-x: auto;
+}
+
+.feature-matrix {
+    display: table;
+    border-collapse: collapse;
+    width: 100%;
+    min-width: max-content;
+}
+
+.feature-matrix-row {
+    display: table-row;
+}
+
+.feature-matrix-row:hover .feature-matrix-row-label {
+    color: var(--text-primary);
+}
+
+.feature-matrix-cell {
+    display: table-cell;
+    vertical-align: middle;
+    padding: 0;
+    border: 1px solid var(--border-color);
+}
+
+/* Corner */
+.feature-matrix-corner {
+    font-size: 0.62rem;
+    color: var(--text-muted);
+    padding: 6px 10px;
+    background-color: rgba(255, 255, 255, 0.03);
+    white-space: nowrap;
+    font-style: italic;
+}
+
+/* Column headers (radii) */
+.feature-matrix-col-header {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-align: center;
+    padding: 5px 8px;
+    background-color: rgba(255, 255, 255, 0.03);
+    white-space: nowrap;
+    min-width: 48px;
+    letter-spacing: 0.3px;
+}
+
+.feature-matrix-header-row .feature-matrix-cell {
+    border-bottom: 2px solid var(--border-color);
+}
+
+/* Row labels (feature names) */
+.feature-matrix-row-label {
+    font-size: 0.73rem;
+    font-weight: 500;
+    color: var(--text-muted);
+    padding: 0 12px 0 8px;
+    white-space: nowrap;
+    max-width: 140px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    background-color: rgba(255, 255, 255, 0.03);
+    transition: color 0.15s;
+    height: 30px;
+}
+
+/* Data cells */
+.feature-matrix-data-cell {
+    text-align: center;
+    padding: 3px;
+    background-color: transparent;
+    transition: background-color 0.15s;
+}
+
+.feature-matrix-data-cell:hover {
+    background-color: rgba(255, 255, 255, 0.03);
+}
+
+.feature-matrix-empty-cell {
+    background-color: rgba(0, 0, 0, 0.15);
+}
+
+/* Toggle button inside each cell */
+.feat-cell-btn {
+    width: 28px;
+    height: 24px;
+    border-radius: 4px;
+    border: 1px solid var(--border-color);
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s ease;
+    padding: 0;
+}
+
+.feat-cell-btn:hover {
+    border-color: var(--accent-blue);
+    color: var(--accent-blue);
+    background-color: rgba(59, 130, 246, 0.1);
+}
+
+.feat-cell-btn.active {
+    background-color: var(--accent-blue);
+    border-color: var(--accent-blue);
+    color: #ffffff;
+    box-shadow: 0 0 6px rgba(59, 130, 246, 0.35);
+}
+
+.feat-cell-btn.active:hover {
+    background-color: #2563eb;
+    border-color: #2563eb;
+    color: #ffffff;
+}
+
+
+/* =====================================================================
+   Pipeline Step List (Load Data modal — processing view)
+   ===================================================================== */
+
+.pipeline-step-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 4px 0;
+}
+
+/* ── Single step row ── */
+.pipeline-step-item {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 10px 14px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    transition: background-color 0.25s, border-color 0.25s;
+}
+
+/* Idle: dark, muted */
+.pipeline-step-item.step-idle {
+    background: rgba(255, 255, 255, 0.03);
+    border-color: var(--border-color);
+}
+
+/* Running: subtle blue tint */
+.pipeline-step-item.step-running {
+    background: rgba(59, 130, 246, 0.07);
+    border-color: rgba(59, 130, 246, 0.3);
+}
+
+/* Done: subtle green tint */
+.pipeline-step-item.step-done {
+    background: rgba(34, 197, 94, 0.07);
+    border-color: rgba(34, 197, 94, 0.25);
+}
+
+/* Error: subtle red tint */
+.pipeline-step-item.step-error {
+    background: rgba(239, 68, 68, 0.07);
+    border-color: rgba(239, 68, 68, 0.3);
+}
+
+/* ── Icon wrapper ── */
+.step-icon-wrap {
+    position: relative;
+    width: 28px;
+    height: 28px;
+    flex-shrink: 0;
+}
+
+/* SVG ring — static, rotated so arc starts at top */
+.step-svg {
+    width: 28px;
+    height: 28px;
+    display: block;
+}
+
+/* Base track ring */
+.step-track {
+    fill: none;
+    stroke: rgba(255, 255, 255, 0.08);
+    stroke-width: 2.5;
+}
+
+/* Animated arc — idle: fully hidden */
+/* r=13 → circumference = 2π×13 ≈ 81.68, rounded to 82 */
+.step-arc {
+    fill: none;
+    stroke: var(--text-muted);
+    stroke-width: 2.5;
+    stroke-linecap: round;
+    stroke-dasharray: 82;
+    stroke-dashoffset: 82;
+    /* rotate so the gap starts at 12-o'clock */
+    transform-origin: 16px 16px;
+    transform: rotate(-90deg);
+    transition: stroke 0.3s;
+}
+
+/* Running: animate the arc offset to create a spinning effect */
+.step-running .step-arc {
+    stroke: var(--accent-blue);
+    animation: step-spin 1s linear infinite;
+}
+
+@keyframes step-spin {
+    0% {
+        stroke-dashoffset: 72;
+        transform: rotate(-90deg);
+    }
+
+    100% {
+        stroke-dashoffset: 72;
+        transform: rotate(270deg);
+    }
+}
+
+/* Done: full green circle, no animation */
+.step-done .step-arc {
+    stroke: #22c55e;
+    stroke-dashoffset: 0;
+    transform: rotate(-90deg);
+    animation: none;
+}
+
+/* Error: full red circle, no animation */
+.step-error .step-arc {
+    stroke: #ef4444;
+    stroke-dashoffset: 0;
+    transform: rotate(-90deg);
+    animation: none;
+}
+
+/* Check and cross icons, centered over the SVG */
+.step-check,
+.step-cross {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.2s;
+}
+
+.step-check svg,
+.step-cross svg {
+    width: 11px;
+    height: 11px;
+}
+
+.step-done .step-check {
+    opacity: 1;
+    color: #22c55e;
+}
+
+.step-error .step-cross {
+    opacity: 1;
+    color: #ef4444;
+}
+
+/* ── Step label ── */
+.step-label {
+    font-size: 0.82rem;
+    font-weight: 500;
+    letter-spacing: 0.15px;
+    transition: color 0.25s;
+}
+
+.step-idle .step-label {
+    color: var(--text-muted);
+}
+
+.step-running .step-label {
+    color: var(--text-primary);
+}
+
+.step-done .step-label {
+    color: #22c55e;
+}
+
+.step-error .step-label {
+    color: #ef4444;
+}
+
+/* ── Error message below list ── */
+.pipeline-error-msg {
+    margin-top: 12px;
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid rgba(239, 68, 68, 0.35);
+    border-radius: 8px;
+    padding: 10px 14px;
+    color: #fca5a5;
+    font-size: 0.8rem;
 }

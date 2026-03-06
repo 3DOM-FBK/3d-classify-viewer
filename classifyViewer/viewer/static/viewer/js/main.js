@@ -426,13 +426,7 @@ export const sceneObjects = {
 
 // --- Sidebar Right: Accordion Sections ---
 
-// 1. Import/Export
-const importExportSection = createAccordionSection("IMPORT & EXPORT", "sidebar-right-content");
-const importExportContent = importExportSection.content;
-const loadPCButton = createButton("Load Data", "loadData", importExportContent);
-const downloadPCButton = createButton("Download Data", "downloadData", importExportContent);
-
-// 2. Features Computation
+// 1. Features Computation
 const featuresSection = createAccordionSection("FEATURES COMPUTATION", "sidebar-right-content");
 const featuresContent = featuresSection.content;
 
@@ -812,13 +806,26 @@ const fpsCounterDisplay = document.getElementById('fps-counter');
 //     }
 // });
 
-loadPCButton.addEventListener("click", () => {
-    showLoadModal();
-});
+// --- File Menu Navbar Logic ---
+const navFileBtn = document.getElementById("nav-file-btn");
+const fileDropdown = document.getElementById("file-dropdown");
+if (navFileBtn && fileDropdown) {
+    navFileBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (typeof closeAllDropdowns === 'function') closeAllDropdowns();
+        fileDropdown.classList.toggle('show');
+    });
 
-downloadPCButton.addEventListener("click", () => {
-    showDownloadModal();
-});
+    document.getElementById("menu-load-data").addEventListener("click", () => {
+        fileDropdown.classList.remove('show');
+        showLoadModal();
+    });
+
+    document.getElementById("menu-download-data").addEventListener("click", () => {
+        fileDropdown.classList.remove('show');
+        showDownloadModal();
+    });
+}
 
 engine.runRenderLoop(() => {
     scene.render();
