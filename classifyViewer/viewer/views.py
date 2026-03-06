@@ -86,6 +86,7 @@ def upload_data(request):
 
 
 @csrf_exempt
+@csrf_exempt
 def start_training(request):
     """
     Endpoint for receiving training data in binary format.
@@ -103,9 +104,11 @@ def start_training(request):
             if not buffer_file:
                 return JsonResponse({"error": "Missing 'buffer' binary data"}, status=400)
 
-            # Define output directory
-            base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            training_dir = os.path.join(base_dir, 'training_data') # TODO: change this to a user-specific directory
+            # Save in the same data directory used by the pipeline
+            training_dir = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                'static', 'viewer', 'data'
+            )
             os.makedirs(training_dir, exist_ok=True)
 
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -127,6 +130,8 @@ def start_training(request):
                 "message": "Binary data saved successfully",
                 "filename": bin_filename,
                 "labels_filename": json_filename,
+                "bin_path": bin_path,
+                "json_path": json_path,
                 "size_bytes": os.path.getsize(bin_path)
             }, status=200)
 

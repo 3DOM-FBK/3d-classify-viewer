@@ -1091,6 +1091,7 @@ select.property-input option {
     display: flex;
     flex-direction: column;
     gap: 8px;
+    padding-bottom: 12px;
 }
 
 .modal-section-title {
@@ -1935,4 +1936,46 @@ input[type="number"].property-input::-webkit-outer-spin-button:active {
     padding: 10px 14px;
     color: #fca5a5;
     font-size: 0.8rem;
+}
+
+/* =====================================================================
+   RF Toggle Button (Training Modal — Use GPU)
+   ===================================================================== */
+
+.rf-toggle-wrap {
+    display: flex;
+    align-items: center;
+}
+
+.rf-toggle-btn {
+    min-width: 52px;
+    height: 26px;
+    padding: 0 10px;
+    border-radius: 4px;
+    border: 1px solid var(--border-color);
+    background: transparent;
+    color: var(--text-muted);
+    font-family: inherit;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    cursor: pointer;
+    transition: background-color 0.2s, border-color 0.2s, color 0.2s;
+}
+
+.rf-toggle-btn:hover {
+    border-color: var(--text-muted);
+    color: var(--text-primary);
+}
+
+.rf-toggle-btn.on {
+    background-color: var(--accent-blue);
+    border-color: var(--accent-blue);
+    color: #ffffff;
+    box-shadow: 0 0 8px rgba(59, 130, 246, 0.35);
+}
+
+.rf-toggle-btn.on:hover {
+    background-color: #2563eb;
+    border-color: #2563eb;
 }

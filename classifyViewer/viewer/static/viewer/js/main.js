@@ -966,8 +966,16 @@ if (startTrainingButton) {
             console.log("🚀 Starting Training with params:", params);
 
             startTrainingButton.disabled = true;
+
+            // ── Step feedback helper ──────────────────────────────────────
+            const setStatus = (text) => { startTrainingButton.textContent = text; };
+            // ─────────────────────────────────────────────────────────────
+
             try {
-                // Build segment lookup map: segmentId -> segmentName
+                // ── STEP 1: Extract points from the loaded point cloud ────
+                setStatus("Extracting Points...");
+                console.log("📦 Step 1: Extracting training points from scene...");
+
                 const segmentMap = {};
                 document.querySelectorAll('.outline-item[data-segment-id]').forEach(item => {
                     const segId = parseInt(item.dataset.segmentId, 10);
@@ -975,62 +983,86 @@ if (startTrainingButton) {
                     if (!isNaN(segId) && nameInput) segmentMap[segId] = nameInput.value;
                 });
 
-                // Build class lookup map: classId -> className
                 const classMap = {};
-                classRegistry.forEach((val, id) => {
-                    classMap[id] = val.name;
-                });
+                classRegistry.forEach((val, id) => { classMap[id] = val.name; });
 
-                // Visual feedback
-                startTrainingButton.textContent = "Extracting Points...";
-
-                // Extract training data
                 const exportResult = await loader.exportAllTrainingData(segmentMap);
 
                 if (!exportResult || !exportResult.buffer) {
                     console.warn("No assigned points found to train on.");
                     alert("No points were identified in the selected regions.");
-                    startTrainingButton.textContent = "Start Training";
-                    startTrainingButton.disabled = false;
                     return;
                 }
+                console.log(`✅ Extracted ${(exportResult.buffer.byteLength / 1024 / 1024).toFixed(2)} MB of point data`);
 
-                // Visual feedback
-                startTrainingButton.textContent = "Sending Data...";
+                // ── STEP 2: Upload binary buffer + metadata ───────────────
+                setStatus("Saving Training Data...");
+                console.log("📤 Step 2: Uploading binary buffer and metadata...");
 
-                // Use FormData to send binary buffer + structured metadata
                 const metadata = {
                     segments: exportResult.segmentMap,
                     classes: classMap,
                     split: params.split,
-                    rf_params: params.rf_params
+                    rf_params: params.rf_params,
+                    features: params.features
                 };
 
                 const formData = new FormData();
                 formData.append('labels', JSON.stringify(metadata));
                 formData.append('buffer', new Blob([exportResult.buffer], { type: 'application/octet-stream' }));
 
-                console.log(`🚀 Uploading binary buffer (${(exportResult.buffer.byteLength / 1024 / 1024).toFixed(2)} MB)...`);
-
-                const response = await fetch('/api/start-training/', {
+                const saveResponse = await fetch('/api/start-training/', {
                     method: 'POST',
                     body: formData
                 });
 
-                if (!response.ok) {
-                    const errData = await response.json();
-                    throw new Error(errData.error || "Failed to start training");
+                if (!saveResponse.ok) {
+                    const errData = await saveResponse.json().catch(() => ({}));
+                    throw new Error(errData.error || "Failed to save training data");
                 }
 
-                const data = await response.json();
-                console.log("✅ Training data uploaded successfully:", data);
-                alert(`Training data saved! Binary buffer: ${data.filename}\nLabels: ${data.labels_filename}`);
+                const saveData = await saveResponse.json();
+                console.log("✅ Binary + metadata saved:", saveData.filename, saveData.labels_filename);
+
+                // ── STEP 3: Split LAS by binary labels ───────────────────
+                setStatus("Splitting LAS by Labels...");
+                console.log("✂️ Step 3: Splitting LAS file by binary segment labels...");
+
+                // The LAS source is always the processed features file
+                const lasSourcePath = "viewer/static/viewer/data/features.las";
+                // Output dir: same /static/viewer/data/ folder where bin/json were saved
+                const outputDir = "viewer/static/viewer/data";
+
+                const splitResponse = await fetch('/split_las_by_binary/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || ''
+                    },
+                    body: JSON.stringify({
+                        las_path: lasSourcePath,
+                        bin_path: saveData.bin_path,
+                        meta_path: saveData.json_path,
+                        output_dir: outputDir
+                    })
+                });
+
+                if (!splitResponse.ok) {
+                    const errData = await splitResponse.json().catch(() => ({}));
+                    throw new Error(errData.message || errData.error || "Failed to split LAS file");
+                }
+
+                const splitData = await splitResponse.json();
+                console.log("✅ LAS split completed:", splitData);
+
+                // ── Done ─────────────────────────────────────────────────
+                alert(`Training data ready!\n\nBinary:  ${saveData.filename}\nMetadata: ${saveData.labels_filename}\nLAS segments saved in: ${outputDir}`);
 
             } catch (error) {
-                console.error("❌ Error uploading training data:", error);
+                console.error("❌ Training pipeline error:", error);
                 alert(`Error: ${error.message}`);
             } finally {
-                startTrainingButton.textContent = "Start Training";
+                setStatus("Start Training");
                 startTrainingButton.disabled = false;
             }
         });

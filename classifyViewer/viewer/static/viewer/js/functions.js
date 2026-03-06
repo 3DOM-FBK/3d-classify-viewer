@@ -1983,43 +1983,80 @@ export function showTrainingModal(scene, onStart) {
                 algoTitle.querySelector('span:last-child').style.opacity = isHidden ? "1" : "0.5";
             };
 
-            // Estimators
-            const estRow = document.createElement('div');
-            estRow.classList.add('property-row');
-            estRow.style.padding = "0 4px";
-            estRow.innerHTML = `<span class="property-label">Estimators:</span>`;
-            const estInput = document.createElement('input');
-            estInput.type = "number";
-            estInput.classList.add('property-input');
-            estInput.value = "100";
-            estInput.min = "10";
-            estInput.max = "1000";
-            estRow.appendChild(estInput);
-            algoContainer.appendChild(estRow);
+            // Helper to build a standard number row
+            const makeNumberRow = (labelText, defaultVal, minVal, maxVal, placeholderText) => {
+                const row = document.createElement('div');
+                row.classList.add('property-row');
+                row.style.padding = "0 4px";
+                row.innerHTML = `<span class="property-label">${labelText}</span>`;
+                const inp = document.createElement('input');
+                inp.type = "number";
+                inp.classList.add('property-input');
+                if (defaultVal !== null) inp.value = defaultVal;
+                if (minVal !== null) inp.min = minVal;
+                if (maxVal !== null) inp.max = maxVal;
+                if (placeholderText) inp.placeholder = placeholderText;
+                row.appendChild(inp);
+                algoContainer.appendChild(row);
+                return inp;
+            };
 
-            // Max Depth
-            const depthRow = document.createElement('div');
-            depthRow.classList.add('property-row');
-            depthRow.style.padding = "0 4px";
-            depthRow.innerHTML = `<span class="property-label">Max Depth:</span>`;
-            const depthInput = document.createElement('input');
-            depthInput.type = "number";
-            depthInput.classList.add('property-input');
-            depthInput.placeholder = "None";
-            depthRow.appendChild(depthInput);
-            algoContainer.appendChild(depthRow);
+            // n_estimators
+            const estInput = makeNumberRow("N. Estimators:", 200, 10, 2000, null);
+            // max_depth
+            const depthInput = makeNumberRow("Max Depth:", 15, 1, 100, null);
+            // min_samples_split
+            const minSplitInput = makeNumberRow("Min Samples Split:", 20, 2, 1000, null);
+            // n_jobs
+            const jobsInput = makeNumberRow("N. Jobs:", 12, 1, 128, null);
 
-            // Parallel Jobs
-            const jobsRow = document.createElement('div');
-            jobsRow.classList.add('property-row');
-            jobsRow.style.padding = "0 4px";
-            jobsRow.innerHTML = `<span class="property-label">Parallel Jobs:</span>`;
-            const jobsInput = document.createElement('input');
-            jobsInput.type = "number";
-            jobsInput.classList.add('property-input');
-            jobsInput.value = "4";
-            jobsRow.appendChild(jobsInput);
-            algoContainer.appendChild(jobsRow);
+            // use_gpu — toggle switch row
+            const gpuRow = document.createElement('div');
+            gpuRow.classList.add('property-row');
+            gpuRow.style.padding = "0 4px";
+            gpuRow.innerHTML = `<span class="property-label">Use GPU:</span>`;
+
+            const gpuToggleWrap = document.createElement('div');
+            gpuToggleWrap.classList.add('rf-toggle-wrap');
+
+            const gpuToggle = document.createElement('button');
+            gpuToggle.classList.add('rf-toggle-btn');
+            gpuToggle.setAttribute('data-on', 'false');
+            gpuToggle.textContent = 'OFF';
+            gpuToggle.onclick = () => {
+                const isOn = gpuToggle.getAttribute('data-on') === 'true';
+                gpuToggle.setAttribute('data-on', String(!isOn));
+                gpuToggle.textContent = isOn ? 'OFF' : 'ON';
+                gpuToggle.classList.toggle('on', !isOn);
+            };
+
+            gpuToggleWrap.appendChild(gpuToggle);
+            gpuRow.appendChild(gpuToggleWrap);
+            algoContainer.appendChild(gpuRow);
+
+            // user_rgb — toggle switch row
+            const rgbRow = document.createElement('div');
+            rgbRow.classList.add('property-row');
+            rgbRow.style.padding = "0 4px";
+            rgbRow.innerHTML = `<span class="property-label">Use RGB:</span>`;
+
+            const rgbToggleWrap = document.createElement('div');
+            rgbToggleWrap.classList.add('rf-toggle-wrap');
+
+            const rgbToggle = document.createElement('button');
+            rgbToggle.classList.add('rf-toggle-btn');
+            rgbToggle.setAttribute('data-on', 'false');
+            rgbToggle.textContent = 'OFF';
+            rgbToggle.onclick = () => {
+                const isOn = rgbToggle.getAttribute('data-on') === 'true';
+                rgbToggle.setAttribute('data-on', String(!isOn));
+                rgbToggle.textContent = isOn ? 'OFF' : 'ON';
+                rgbToggle.classList.toggle('on', !isOn);
+            };
+
+            rgbToggleWrap.appendChild(rgbToggle);
+            rgbRow.appendChild(rgbToggleWrap);
+            algoContainer.appendChild(rgbRow);
 
             body.appendChild(algoContainer);
         },
@@ -2059,15 +2096,19 @@ export function showTrainingModal(scene, onStart) {
                     selectedFeatures.push(btn.getAttribute('data-feature'));
                 });
 
-                // Extract RF params
-                const inputs = body.querySelectorAll('.modal-section')[2].querySelectorAll('input'); // Third section is RF params
+                // Extract RF params directly from named inputs/toggle
+                const algoSec = body.querySelectorAll('.modal-section')[2];
+                const rfInputs = algoSec.querySelectorAll('input[type="number"]');
+                const gpuBtn = algoSec.querySelector('.rf-toggle-btn');
                 const params = {
                     split,
                     features: selectedFeatures,
                     rf_params: {
-                        estimators: parseInt(inputs[0].value) || 100,
-                        maxDepth: parseInt(inputs[1].value) || null,
-                        jobs: parseInt(inputs[2].value) || 4
+                        n_estimators: parseInt(rfInputs[0]?.value) || 200,
+                        max_depth: parseInt(rfInputs[1]?.value) || 15,
+                        min_samples_split: parseInt(rfInputs[2]?.value) || 20,
+                        n_jobs: parseInt(rfInputs[3]?.value) || 12,
+                        use_gpu: gpuBtn?.getAttribute('data-on') === 'true'
                     }
                 };
 
