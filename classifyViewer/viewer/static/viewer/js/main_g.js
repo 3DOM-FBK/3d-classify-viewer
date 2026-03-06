@@ -129,13 +129,14 @@ testGButton.addEventListener("click", async () => {
     
     console.log("Sending request for testing the function...");
 
-    const which_function = "launch_RF_classify/";
+    const which_function = "ply2las/";
     let body = null;
     let file_path = "";
     let use_gpu = false;
     let selected_features = [ 'red', 'green', 'blue', 'Omnivariance_0_4', 'Planarity_0_4', 'Linearity_0_4', 'Surface_variation_0_4', 'Sphericity_0_4', 'Verticality_0_4', 
     'Omnivariance_1', 'Planarity_1', 'Linearity_1', 'Surface_variation_1', 'Sphericity_1', 'Verticality_1', 'Omnivariance_2', 'Planarity_2', 'Linearity_2', 
     'Surface_variation_2', 'Sphericity_2', 'Verticality_2'];
+    const folder_path = "/webapp/classifyViewer/viewer/static/viewer/data2/";
 
     switch (which_function) {
         case "launch_RF_training/": {
@@ -148,7 +149,6 @@ testGButton.addEventListener("click", async () => {
             use_gpu = true;
 
             // Use absolute paths for training
-            const folder_path = "/webapp/classifyViewer/viewer/static/viewer/data2/";
             const training_filepath = folder_path + "RF/training_using_gaussian/dataset/training.las";
             const val_filepath = folder_path + "RF/training_using_gaussian/dataset/validation.las";
             const output_training_name = folder_path + "RF/training_using_gaussian/output/test_predicted.las";
@@ -172,10 +172,9 @@ testGButton.addEventListener("click", async () => {
         }
         case "launch_RF_classify/":{
             use_gpu = true;
-            const folder_path = "/webapp/classifyViewer/viewer/static/viewer/data2/";
-            const model_savepath = folder_path+"RF/training_using_gaussian/output/model_avt_gaussian.pkl";
-            const test_filepath = folder_path+"RF/training_using_gaussian/dataset/test_avt.las";
-            const output_classify_name = folder_path+"RF/training_using_gaussian/output/avt_gs_predicted.las";
+            const model_savepath = folder_path +"RF/training_using_gaussian/output/model_avt_gaussian.pkl";
+            const test_filepath = folder_path +"RF/training_using_gaussian/dataset/test_avt.las";
+            const output_classify_name = folder_path +"RF/training_using_gaussian/output/avt_gs_predicted.las";
 
             body = JSON.stringify({
                 use_gpu: use_gpu, 
@@ -188,7 +187,7 @@ testGButton.addEventListener("click", async () => {
         }
         case "subsample_pc/": {
             // SUBSAMPLING PARAMETERS
-            file_path = "/webapp/classifyViewer/viewer/static/viewer/data/c78_pc.ply";
+            file_path = folder_path + "c78_pc.ply";
             const voxel_size = 0.05; // 5cm
 
             body = JSON.stringify({
@@ -199,12 +198,14 @@ testGButton.addEventListener("click", async () => {
         }
         case "mesh2pc/": {
             // MESH TO POINT CLOUD PARAMETERS
-            file_path = "/webapp/classifyViewer/viewer/static/viewer/data/c78.glb";
+            file_path = folder_path + "c78.glb";
+            const out_path = folder_path + "c78_pc_output.las";
             num_points = 5000000; // 5 millions points
             // const sampling_method = "uniform"; // or "poisson"
 
             body = JSON.stringify({
                 file_path: file_path,
+                out_path: out_path,
                 num_points: num_points,
                 //sampling_method: sampling_method // not used for C++
             });
@@ -212,8 +213,8 @@ testGButton.addEventListener("click", async () => {
         }
         case "ply2las/": {
             // PLY TO LAS PARAMETERS
-            file_path = "/webapp/classifyViewer/viewer/static/viewer/data/c78_pc.ply";
-            const out_path = "/webapp/classifyViewer/viewer/static/viewer/data/c78_pc.las";
+            file_path = folder_path + "c78_pc.ply";
+            const out_path = folder_path + "c78_pc_output.las";
 
             body = JSON.stringify({
                 file_path: file_path,
@@ -224,10 +225,10 @@ testGButton.addEventListener("click", async () => {
         case "feature_extraction/":{
             // FEATURE EXTRACTION PARAMETERS
 
-            let input_filepath = "/webapp/classifyViewer/viewer/static/viewer/data/c78_pc.las"
-            let output_filepath = "/webapp/classifyViewer/viewer/static/viewer/data/c78_pc_feat.las"
-            let radius_list = [0.4, 1.0, 2.0]
-            let feature_list = ["planarity", "linearity", "height"]
+            let input_filepath = folder_path + "c78_pc.las";
+            let output_filepath = folder_path + "c78_pc_feat.las";
+            let radius_list = [0.4, 1.0, 2.0];
+            let feature_list = ["planarity", "linearity", "height"];
             let sampling = 0.05; // 5cm
 
             body = JSON.stringify({

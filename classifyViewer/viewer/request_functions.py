@@ -69,10 +69,11 @@ def mesh2pc(request):
             data = json.loads(request.body)
 
             file_path = data['file_path']
+            out_path = data['out_path']
             num_points = data['num_points']
             # sampling_method = data['sampling_method']
 
-            mesh_to_point_cloud(file_path, num_points=num_points)
+            mesh_to_point_cloud(file_path, out_path, num_points=num_points)
             print("\n")
 
             return JsonResponse({"status": 'success', "message": "Mesh to Point Cloud completed."})

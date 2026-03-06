@@ -345,13 +345,14 @@ SubMeshResult process_submesh(
 }
 
 int main(int argc, char* argv[]) {
-    if (argc < 2) {
-        std::cerr << "Usage: " << argv[0] << " <file.glb> [num_points]" << std::endl;
+    if (argc < 3) {
+        std::cerr << "Usage: " << argv[0] << " <input.ply> <output.las> [num_points]" << std::endl;
         return 1;
     }
 
     std::string mesh_path = argv[1];
-    int num_points = (argc >= 3) ? std::stoi(argv[2]) : 5000000;
+    std::string out_path = argv[2];
+    int num_points = (argc >= 4) ? std::stoi(argv[3]) : 5000000;
 
     auto global_start = now_t();
 
@@ -405,18 +406,17 @@ int main(int argc, char* argv[]) {
             all_normals[i] = {n[0], n[1], n[2]};
     }
 
-    std::string out_file = mesh_path.substr(0, mesh_path.rfind(".glb")) + "_pc.las";
-    write_las(out_file, all_points, all_colors, all_normals);
+    write_las(out_path, all_points, all_colors, all_normals);
 
     double total = elapsed(global_start);
     int mn = (int)(total / 60);
     int sc = (int)total % 60;
-    std::cout << "Saved: " << out_file << " with " << all_points.size() << " points" << std::endl;
+    std::cout << "Saved: " << out_path << " with " << all_points.size() << " points" << std::endl;
     if (mn > 0)
         std::cout << "Processing time: " << mn << " min " << sc << " sec" << std::endl;
     else
         std::cout << "Processing time: " << sc << " sec" << std::endl;
 
-    std::cout << out_file << std::endl;
+    std::cout << out_path << std::endl;
     return 0;
 }

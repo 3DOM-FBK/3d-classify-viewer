@@ -79,13 +79,14 @@ def subsampling_point_cloud(file_path, voxel_size=0.002):
     
     return output_filepath
 
-def mesh_to_point_cloud(mesh_path, num_points=5000000):
+def mesh_to_point_cloud(mesh_path, out_path, num_points=5000000):
     print("\n[FUNCTION] ---- MESH TO POINT CLOUD -----\n")
     
     # Make paths absolute
     abs_input = os.path.abspath(os.path.join(settings.BASE_DIR, mesh_path))
+    abs_output = os.path.abspath(os.path.join(settings.BASE_DIR, out_path)) if out_path else None
     
-    command = ["/webapp/opt/mesh2pc", abs_input, str(num_points)]
+    command = ["/webapp/opt/mesh2pc", abs_input, abs_output, str(num_points)]
     # TODO: add also output path 
     launch_subprocess(command)
 

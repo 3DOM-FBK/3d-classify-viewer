@@ -173,15 +173,14 @@ void write_las(const std::string& out_file,
 }
 
 int main(int argc, char* argv[]) {
-    if (argc < 2) {
-        std::cerr << "Usage: " << argv[0] << " <file.ply> [output.las]" << std::endl;
+    if (argc < 3) {
+        std::cerr << "Usage: " << argv[0] << " <input.ply> <output.las> " << std::endl;
         return 1;
     }
 
     std::string ply_path = argv[1];
-    std::string out_path = (argc >= 3) ? argv[2]
-                           : ply_path.substr(0, ply_path.rfind(".ply")) + ".las";
-
+    std::string out_path = argv[2];
+    
     auto global_start = now_t();
 
     std::cout << "Loading PLY from " << ply_path << std::endl;
