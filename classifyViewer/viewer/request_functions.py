@@ -1,6 +1,6 @@
 from django.shortcuts import render
 from django.http import JsonResponse
-from viewer.functions import load_point_cloud, launch_training_RF, launch_classify_RF, subsampling_point_cloud
+from viewer.functions import launch_training_RF, launch_classify_RF, subsampling_point_cloud
 from viewer.functions import mesh_to_point_cloud, ply_to_las, feature_extraction, Potree
 from django.views.decorators.csrf import csrf_exempt
 import base64
@@ -8,14 +8,6 @@ import os
 import json
 import traceback
 
-def load_points(request):
-    # MODIFY WITH THE REAL PATH OF POINT CLOUD FILE
-    file_path = "classifyViewer/viewer/static/viewer/data/cloud.txt"
-    # points, header = load_point_cloud(file_path)
-    # # Se vuoi, puoi limitare i punti per non mandare troppe coordinate al browser
-    # points = points[:5].tolist()  
-    # print(f"Limited points count: {len(points)}")
-    return JsonResponse({"filepath": file_path})
 
 def launch_RF_training(request):
     if request.method == 'POST':

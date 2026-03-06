@@ -1,6 +1,6 @@
 from django.urls import path
 from . import views
-from .request_functions import load_points, save_file, launch_RF_training, launch_RF_classify, subsample_pc
+from .request_functions import save_file, launch_RF_training, launch_RF_classify, subsample_pc
 from .request_functions import mesh2pc, ply2las, feat_extraction, potree_converter
 
 urlpatterns = [
@@ -9,7 +9,6 @@ urlpatterns = [
     # Serve point cloud binary files with Range request support
     path('pointcloud-data/<path:filepath>', views.serve_range_file, name='serve_range_file'),
     # Add more path to launch other functions
-    path("load-points/", load_points),
     path("save_file/", save_file),
     path("launch_RF_training/", launch_RF_training),
     path("launch_RF_classify/", launch_RF_classify),

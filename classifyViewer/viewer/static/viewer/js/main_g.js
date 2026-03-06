@@ -124,29 +124,18 @@ testGButton.style.right = "50dvw";
 testGButton.style.transform = "translateX(50%)";
 testGButton.style.width = "10dvh";
 
-// TODO: remove button
-// #testG{
-//     background-color: var(--canvas-bg-color);
-//     color: var(--text-color);
-//     font-size: var(--button-font-size);
-//     border-radius: var(--button-border-radius);
-//     padding: var(--button-padding);
-//     position: absolute;
-//     top: 90dvh;
-//     right: 50dvw;
-//     transform: translateX(50%);
-//     cursor: pointer;
-//     z-index: 1;
-// }
 
 testGButton.addEventListener("click", async () => {
     
     console.log("Sending request for testing the function...");
 
-    const which_function = "launch_RF_training/";
+    const which_function = "launch_RF_classify/";
     let body = null;
     let file_path = "";
     let use_gpu = false;
+    let selected_features = [ 'red', 'green', 'blue', 'Omnivariance_0_4', 'Planarity_0_4', 'Linearity_0_4', 'Surface_variation_0_4', 'Sphericity_0_4', 'Verticality_0_4', 
+    'Omnivariance_1', 'Planarity_1', 'Linearity_1', 'Surface_variation_1', 'Sphericity_1', 'Verticality_1', 'Omnivariance_2', 'Planarity_2', 'Linearity_2', 
+    'Surface_variation_2', 'Sphericity_2', 'Verticality_2'];
 
     switch (which_function) {
         case "launch_RF_training/": {
@@ -157,9 +146,6 @@ testGButton.addEventListener("click", async () => {
             const min_samples_split = 20;
             const max_features = "sqrt";
             use_gpu = true;
-            let selected_features = [ 'red', 'green', 'blue', 'Omnivariance_0_4', 'Planarity_0_4', 'Linearity_0_4', 'Surface_variation_0_4', 'Sphericity_0_4', 'Verticality_0_4', 
-            'Omnivariance_1', 'Planarity_1', 'Linearity_1', 'Surface_variation_1', 'Sphericity_1', 'Verticality_1', 'Omnivariance_2', 'Planarity_2', 'Linearity_2', 
-            'Surface_variation_2', 'Sphericity_2', 'Verticality_2'];
 
             // Use absolute paths for training
             const folder_path = "/webapp/classifyViewer/viewer/static/viewer/data2/";
@@ -186,14 +172,22 @@ testGButton.addEventListener("click", async () => {
         }
         case "launch_RF_classify/":{
             use_gpu = true;
+            const folder_path = "/webapp/classifyViewer/viewer/static/viewer/data2/";
+            const model_savepath = folder_path+"RF/training_using_gaussian/output/model_avt_gaussian.pkl";
+            const test_filepath = folder_path+"RF/training_using_gaussian/dataset/test_avt.las";
+            const output_classify_name = folder_path+"RF/training_using_gaussian/output/avt_gs_predicted.las";
+
             body = JSON.stringify({
-                use_gpu: use_gpu
+                use_gpu: use_gpu, 
+                selected_features: selected_features, 
+                model_savepath: model_savepath, 
+                test_filepath: test_filepath, 
+                output_classify_name: output_classify_name
             });
             break;
         }
         case "subsample_pc/": {
             // SUBSAMPLING PARAMETERS
-            // TODO change the path to the correct one
             file_path = "/webapp/classifyViewer/viewer/static/viewer/data/c78_pc.ply";
             const voxel_size = 0.05; // 5cm
 
