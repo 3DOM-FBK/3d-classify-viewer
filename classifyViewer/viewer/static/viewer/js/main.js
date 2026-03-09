@@ -12,6 +12,7 @@ import {
     showDownloadModal,
     showLoadModal,
     showTrainingModal,
+    showRecalculateFeaturesModal,
     selectPoints,
     deselectPoints,
     clearSelection,
@@ -439,13 +440,32 @@ featuresContent.appendChild(featuresInfo);
 
 const recalculateButton = createButton("Recalculate Features", "recalculateFeatures", featuresContent);
 recalculateButton.onclick = () => {
-    // Placeholder for future popup
-    console.log("Recalculate Features clicked");
-    if (typeof showFeaturesModal === 'function') {
-        showFeaturesModal();
-    } else {
-        alert("Features recalculation popup will be implemented soon.");
-    }
+    const scene = window.__babylonScene;
+    showRecalculateFeaturesModal(scene, async ({ features, radii }) => {
+        console.log("🔄 Recalculate Features:", features, "radii:", radii);
+        try {
+            const lasPath = `viewer/static/viewer/data/features.las`;
+            const featResponse = await fetch('/feature_extraction/', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': document.querySelector('meta[name="csrf-token"]').getAttribute('content') },
+                body: JSON.stringify({
+                    input_filepath: lasPath,
+                    output_filepath: lasPath,
+                    feature_list: features,
+                    radius_list: radii,
+                    sampling: 0
+                })
+            });
+            if (!featResponse.ok) {
+                const errData = await featResponse.json().catch(() => ({}));
+                throw new Error(errData.message || errData.error || "Feature recalculation failed");
+            }
+            console.log("✅ Features recalculated successfully");
+        } catch (err) {
+            console.error("❌ Feature recalculation error:", err);
+            alert(`Feature recalculation failed: ${err.message}`);
+        }
+    });
 };
 
 // 3. Training

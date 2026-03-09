@@ -1429,7 +1429,40 @@ function showLoadModal() {
 
                 // Swap content: hide original body, show step list
                 body.innerHTML = '';
-                if (footer) footer.style.display = 'none';
+
+                // Hide the X close button during pipeline
+                const modalCloseBtn = overlay.querySelector('.modal-close');
+                if (modalCloseBtn) modalCloseBtn.style.display = 'none';
+
+                // Show footer with Cancel Import button
+                let isCancelled = false;
+                if (footer) {
+                    footer.style.display = '';
+                    footer.innerHTML = '';
+                    const cancelImportBtn = document.createElement('button');
+                    cancelImportBtn.classList.add('btn');
+                    cancelImportBtn.style.backgroundColor = 'transparent';
+                    cancelImportBtn.style.border = '1px solid var(--border-color)';
+                    cancelImportBtn.textContent = 'Cancel Import';
+                    cancelImportBtn.onclick = async () => {
+                        if (isCancelled) return;
+                        isCancelled = true;
+                        cancelImportBtn.disabled = true;
+                        cancelImportBtn.textContent = 'Cancelling\u2026';
+                        try {
+                            const stopRes = await fetch('/stop_process/', {
+                                method: 'POST',
+                                headers: { 'X-CSRFToken': getCSRFToken() }
+                            });
+                            if (!stopRes.ok) throw new Error('Stop request failed');
+                        } catch (e) {
+                            console.warn('\u26a0\ufe0f Could not call stop_process:', e);
+                        }
+                        overlay.classList.remove('active');
+                        setTimeout(() => overlay.remove(), 300);
+                    };
+                    footer.appendChild(cancelImportBtn);
+                }
 
                 const STEPS = [
                     "Clearing Workspace",
@@ -1636,11 +1669,15 @@ function showLoadModal() {
                     console.log("✅ Process complete. Potree cloud loaded.");
 
                     await new Promise(r => setTimeout(r, 800));
-                    overlay.classList.remove('active');
-                    setTimeout(() => overlay.remove(), 300);
+                    if (!isCancelled) {
+                        overlay.classList.remove('active');
+                        setTimeout(() => overlay.remove(), 300);
+                    }
 
                 } catch (err) {
                     console.error("❌ Processing Pipeline Error:", err);
+
+                    if (isCancelled) return; // pipeline aborted by user, don't show error UI
 
                     failStep(currentStepIdx);
 
@@ -1653,7 +1690,10 @@ function showLoadModal() {
                     `;
                     body.appendChild(errorDiv);
 
-                    // Re-show footer with close button
+                    // Restore X close button
+                    if (modalCloseBtn) modalCloseBtn.style.display = '';
+
+                    // Replace Cancel Import with Close button
                     if (footer) {
                         footer.style.display = '';
                         footer.innerHTML = '';
@@ -1847,7 +1887,7 @@ export function showTrainingModal(scene, onStart) {
                     if (!radiusOrder.includes(radiusKey)) radiusOrder.push(radiusKey);
                 });
 
-                // Sort radii numerically
+                // Sort radius numerically
                 radiusOrder.sort((a, b) => parseFloat(a) - parseFloat(b));
 
                 // --- Build matrix ---
@@ -2283,6 +2323,174 @@ function isPointInPoly(poly, pt) {
         if (intersect) inside = !inside;
     }
     return inside;
+}
+
+/**
+ * Shows a modal for recalculating selected features with custom radii.
+ * Features are derived from the currently loaded point cloud attributes,
+ * deduplicated (stripping radius suffixes). The user picks which features
+ * to include and provides a comma-separated list of radii.
+ */
+export function showRecalculateFeaturesModal(scene, onConfirm) {
+    const overlay = createModal(
+        "Recalculate Features",
+        (body) => {
+            // Derive unique feature base names from the loader attribute list
+            const loader = scene && scene.potree2Loader;
+            const allAttrs = loader ? loader.getAttributeList() : [];
+
+            // Extract base names (strip trailing _<digits> or _<digits>_<digits>)
+            const baseNames = [];
+            allAttrs.forEach(attr => {
+                const match = attr.match(/^(.+?)_(\d+(?:_\d+)*)$/);
+                const base = match ? match[1] : attr;
+                if (!baseNames.includes(base)) baseNames.push(base);
+            });
+
+            // --- Info text ---
+            const info = document.createElement('div');
+            info.style.cssText = "font-size:0.75rem;color:var(--text-muted);line-height:1.5;margin-bottom:12px;";
+            info.textContent = "Select the features to recalculate and specify the search radius.";
+            body.appendChild(info);
+
+            // --- Feature list ---
+            const featTitle = document.createElement('div');
+            featTitle.classList.add('modal-section-title');
+            featTitle.textContent = "Features";
+            body.appendChild(featTitle);
+
+            const featSection = document.createElement('div');
+            featSection.classList.add('modal-section');
+            featSection.style.paddingTop = "6px";
+
+            if (baseNames.length === 0) {
+                const empty = document.createElement('span');
+                empty.style.cssText = "font-size:0.75rem;color:var(--text-muted);";
+                empty.textContent = "No features found in the current point cloud.";
+                featSection.appendChild(empty);
+            } else {
+                // Select All / None controls
+                const controls = document.createElement('div');
+                controls.classList.add('feature-matrix-controls');
+                controls.style.marginBottom = "8px";
+
+                const selAll = document.createElement('button');
+                selAll.classList.add('feature-matrix-ctrl-btn');
+                selAll.textContent = "Select All";
+
+                const selNone = document.createElement('button');
+                selNone.classList.add('feature-matrix-ctrl-btn');
+                selNone.textContent = "Select None";
+
+                controls.appendChild(selAll);
+                controls.appendChild(selNone);
+                featSection.appendChild(controls);
+
+                // Checkbox list
+                const listWrapper = document.createElement('div');
+                listWrapper.classList.add('checkbox-group');
+                listWrapper.style.cssText = "display:flex;flex-direction:column;gap:4px;max-height:220px;overflow-y:auto;padding-right:4px;";
+
+                const checkboxes = [];
+                baseNames.forEach(name => {
+                    const cb = createSimpleCheckbox(name, true, listWrapper);
+                    checkboxes.push({ name, cb });
+                });
+
+                selAll.onclick = () => checkboxes.forEach(({ cb }) => { cb.checked = true; });
+                selNone.onclick = () => checkboxes.forEach(({ cb }) => { cb.checked = false; });
+
+                featSection.appendChild(listWrapper);
+                featSection._getSelected = () => checkboxes.filter(({ cb }) => cb.checked).map(({ name }) => name);
+            }
+
+            body.appendChild(featSection);
+
+            // --- Radii input ---
+            const radiiTitle = document.createElement('div');
+            radiiTitle.classList.add('modal-section-title');
+            radiiTitle.style.marginTop = "16px";
+            radiiTitle.textContent = "Search Radius";
+            body.appendChild(radiiTitle);
+
+            const radiiSection = document.createElement('div');
+            radiiSection.classList.add('modal-section');
+            radiiSection.style.paddingTop = "6px";
+
+            const radiiHint = document.createElement('div');
+            radiiHint.style.cssText = "font-size:0.72rem;color:var(--text-muted);margin-bottom:8px;";
+            radiiHint.textContent = "Comma-separated values in meters (e.g. 0.1, 0.2, 0.5)";
+            radiiSection.appendChild(radiiHint);
+
+            const radiiRow = document.createElement('div');
+            radiiRow.classList.add('property-row');
+            radiiRow.innerHTML = `<span class="property-label">Radius:</span>`;
+
+            const radiiInput = document.createElement('input');
+            radiiInput.type = 'text';
+            radiiInput.classList.add('property-input');
+            radiiInput.value = "0.1, 0.2, 0.5";
+            radiiInput.placeholder = "0.1, 0.2, 0.5";
+            radiiRow.appendChild(radiiInput);
+            radiiSection.appendChild(radiiRow);
+
+            body.appendChild(radiiSection);
+
+            // Attach getters to body for footer access
+            body._getFeatSection = () => featSection;
+            body._getRadiiInput = () => radiiInput;
+        },
+        (footer, overlay) => {
+            const cancelBtn = document.createElement('button');
+            cancelBtn.classList.add('btn');
+            cancelBtn.style.backgroundColor = 'transparent';
+            cancelBtn.style.border = '1px solid var(--border-color)';
+            cancelBtn.textContent = "Cancel";
+            cancelBtn.onclick = () => {
+                overlay.classList.remove('active');
+                setTimeout(() => overlay.remove(), 300);
+            };
+
+            const confirmBtn = document.createElement('button');
+            confirmBtn.classList.add('btn');
+            confirmBtn.textContent = "Recalculate";
+            confirmBtn.onclick = () => {
+                const body = overlay.querySelector('.modal-body');
+                const featSection = body._getFeatSection();
+                const radiiInput = body._getRadiiInput();
+
+                const selectedFeatures = featSection._getSelected
+                    ? featSection._getSelected()
+                    : [];
+
+                if (selectedFeatures.length === 0) {
+                    alert("Please select at least one feature.");
+                    return;
+                }
+
+                // Parse radii string -> array of floats
+                const radii = radiiInput.value
+                    .split(',')
+                    .map(s => parseFloat(s.trim()))
+                    .filter(n => !isNaN(n) && n > 0);
+
+                if (radii.length === 0) {
+                    alert("Please enter at least one valid radius.");
+                    return;
+                }
+
+                overlay.classList.remove('active');
+                setTimeout(() => overlay.remove(), 300);
+
+                if (onConfirm) onConfirm({ features: selectedFeatures, radii });
+            };
+
+            footer.appendChild(cancelBtn);
+            footer.appendChild(confirmBtn);
+        }
+    );
+
+    return overlay;
 }
 
 function getCSRFToken() {
