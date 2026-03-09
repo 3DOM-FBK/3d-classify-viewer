@@ -65,30 +65,33 @@ class JobManager:
         self.error = None
         self.result = None
 
+        # Crea il processo localmente prima di salvarlo
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,  # stderr già mergiato in stdout
+            text=True,
+            preexec_fn=os.setsid,
+            bufsize=1,
+            env={**os.environ, "PYTHONUNBUFFERED": "1"}
+        )
+
         with self._lock:
-            self._process = subprocess.Popen(
-                command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                preexec_fn=os.setsid,
-                bufsize=1,                    # ← line buffered
-                env={**os.environ, "PYTHONUNBUFFERED": "1"}  # ← no buffering Python
-            )
+            self._process = process  # ← salva riferimento per stop()
 
         try:
-            for line in self._process.stdout:
-                # tqdm manda righe che finiscono con \r — stampa solo l'ultima
+            for line in process.stdout:  # ← usa variabile locale, non self._process
                 if '\r' in line:
                     parts = line.split('\r')
                     print('\r' + parts[-1], end="", flush=True)
                 else:
                     print(line, end="", flush=True)
                 stdout_lines.append(line)
-            self._process.wait()
 
-            if self._process.returncode not in (0, -signal.SIGTERM):
-                self.error = f"Process failed (code {self._process.returncode})\n{self._process.stderr.read()}"
+            process.wait()  # ← variabile locale
+
+            if process.returncode not in (0, -signal.SIGTERM):
+                self.error = f"Process failed (code {process.returncode})"
                 raise RuntimeError(self.error)
 
             if stdout_lines:
@@ -97,7 +100,8 @@ class JobManager:
 
         finally:
             with self._lock:
-                self._process = None
+                if self._process is process:  # ← rimuovi solo se è ancora il nostro
+                    self._process = None
 
     def launch_subprocess_async(self, command):
         """Launch subprocess in background."""
@@ -144,7 +148,7 @@ def subsampling_point_cloud(file_path, voxel_size=0.002):
     abs_input = os.path.abspath(os.path.join(settings.BASE_DIR, file_path))
     
     command = ["/webapp/opt/subsample_pc", abs_input, str(voxel_size)]
-    output_filepath = job.launch_subprocess_async(command)
+    output_filepath = job.launch_subprocess(command)
     
     return output_filepath
 
@@ -156,7 +160,9 @@ def mesh_to_point_cloud(mesh_path, out_path, num_points=5000000):
     abs_output = os.path.abspath(os.path.join(settings.BASE_DIR, out_path)) if out_path else None
     
     command = ["/webapp/opt/mesh2pc", abs_input, abs_output, str(num_points)]
-    job.launch_subprocess_async(command)
+    job.launch_subprocess(command)
+
+    return True
 
 def ply_to_las(ply_path, out_path=None):
     print("\n[FUNCTION] ---- PLY TO LAS -----")
@@ -166,7 +172,7 @@ def ply_to_las(ply_path, out_path=None):
     abs_output = os.path.abspath(os.path.join(settings.BASE_DIR, out_path)) if out_path else None
     
     command = ["/webapp/opt/ply2las", abs_input, abs_output]
-    job.launch_subprocess_async(command)
+    job.launch_subprocess(command)
 
 def feature_extraction(input_filepath, output_filepath, feature_list, radius_list, sampling=0):
     print("\n[FUNCTION] ---- FEATURE EXTRACTION -----")
@@ -183,7 +189,7 @@ def feature_extraction(input_filepath, output_filepath, feature_list, radius_lis
     else :
         command = ["/webapp/opt/feature_extraction_viewer", abs_input, abs_output, "--features", feature_str, "--radius", radius_str, "--sampling_resolution", sampling]
     
-    job.launch_subprocess_async(command)
+    job.launch_subprocess(command)
 
 def Potree(input_filepath, output_filepath):
     print("\n[FUNCTION] ---- Potree Converter -----")
@@ -198,7 +204,7 @@ def Potree(input_filepath, output_filepath):
 
     command = ["/app/PotreeConverter_linux_x64/PotreeConverter", "-i", abs_input, "-o", abs_output]
     
-    job.launch_subprocess_async(command)
+    job.launch_subprocess(command)
     
 def launch_training_RF(data):
     print("\n[FUNCTION] ---- TRAINING RANDOM FOREST -----")
@@ -233,7 +239,7 @@ def launch_training_RF(data):
     if use_gpu:
         command.append("--use_gpu")
 
-    job.launch_subprocess_async(command)
+    job.launch_subprocess(command)
 
 def launch_classify_RF(data):
     print("\n[FUNCTION] ---- CLASSIFYING RANDOM FOREST -----")
@@ -257,11 +263,11 @@ def launch_classify_RF(data):
     if use_gpu:
         command.append("--use_gpu")
 
-    job.launch_subprocess_async(command)
+    job.launch_subprocess(command)
 
 
 
-# TODO Put job.launch_subprocess_async(command) to have possible to kill
+# TODO Put job.launch_subprocess(command) to have possible to kill
 def export_point_cloud(filepath, points, header=None):
     """
     Export the point cloud in a txt file showing the loading bar 
@@ -291,7 +297,7 @@ def export_point_cloud(filepath, points, header=None):
             f.write(line + '\n')
    
 
-# TODO Put job.launch_subprocess_async(command) to have possible to kill
+# TODO Put job.launch_subprocess(command) to have possible to kill
 def split_las_by_binary(las_path: str, bin_path: str, meta_path: str, output_dir: str = None):
     """
     Splits a LAS file into multiple files based on a binary label buffer.
