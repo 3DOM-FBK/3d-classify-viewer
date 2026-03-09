@@ -154,12 +154,11 @@ void printAvailableFeatures()
 }
 
 // ============================================================
-// Read LAS/LAZ via PDAL and populate a PCL PointCloud
-// Shifts points to local coordinate system using first point as origin
-// ============================================================
-// ============================================================
 // Parse LAS header to get offset_to_data and point_data_record_length
-// so we can read raw extra bytes directly from the binary file.
+// so we can read raw extra bytes (normals) directly from the binary file.
+//
+// Supports both LAS 1.2 (header offsets 94/104/107) and LAS 1.4 (96/105/247).
+// Point format is read to determine base record size correctly.
 // ============================================================
 struct LasRawInfo {
     uint32_t offset_to_data;
@@ -175,27 +174,116 @@ LasRawInfo readLasRawInfo(const std::string& fileName)
     std::ifstream f(fileName, std::ios::binary);
     if (!f) return info;
 
-    f.seekg(94);  // offset_to_point_data is at byte 94
+    // Read LAS version (bytes 24-25)
+    uint8_t ver_major, ver_minor;
+    f.seekg(24); f.read(reinterpret_cast<char*>(&ver_major), 1);
+    f.read(reinterpret_cast<char*>(&ver_minor), 1);
+    bool isLas14 = (ver_major == 1 && ver_minor >= 4);
+
+    // offset_to_point_data is at byte 96 in ALL LAS versions (1.0–1.4).
+    // Byte 94 is header_size (uint16) — a common confusion.
+    f.seekg(96);
     f.read(reinterpret_cast<char*>(&info.offset_to_data), 4);
 
-    f.seekg(104); // point_data_record_length at byte 104
-    f.read(reinterpret_cast<char*>(&info.point_record_length), 2);
+    // point_data_format @ 104 (same in both versions)
+    uint8_t point_format;
+    f.seekg(104); f.read(reinterpret_cast<char*>(&point_format), 1);
+    point_format &= 0x0F;
 
-    f.seekg(107); // number_of_point_records at byte 107
-    f.read(reinterpret_cast<char*>(&info.point_count), 4);
+    // point_data_record_length @ 105 (same in both versions)
+    f.seekg(105); f.read(reinterpret_cast<char*>(&info.point_record_length), 2);
 
-    // LAS 1.2 format 3 base size = 34 bytes (x,y,z,intensity,flags,class,angle,user,src,gpstime,r,g,b)
-    // If point_record_length > 34, there are extra bytes
-    int base_size = 34;
-    info.has_extra_bytes = (info.point_record_length > base_size);
+    // point count
+    if (isLas14) {
+        uint64_t cnt64;
+        f.seekg(247); f.read(reinterpret_cast<char*>(&cnt64), 8);
+        info.point_count = (uint32_t)cnt64;
+    } else {
+        f.seekg(107); f.read(reinterpret_cast<char*>(&info.point_count), 4);
+    }
+
+    // Base record sizes per LAS specification.
+    // IMPORTANT: format 6 = 30, format 7 = 36 (NOT 34).
+    // A common mistake is using 34 (format 3) for LAS 1.4 files.
+    //   Format 0: 20, 1: 28, 2: 26, 3: 34  (LAS 1.2)
+    //   Format 4: 57, 5: 63                 (waveform)
+    //   Format 6: 30, 7: 36, 8: 38          (LAS 1.4)
+    //   Format 9: 59, 10: 67                (LAS 1.4 waveform)
+    static const int base_sizes[] = {
+        20, 28, 26, 34, 57, 63, 30, 36, 38, 59, 67
+    };
+    int base_size = (point_format <= 10) ? base_sizes[point_format] : 20;
+
+    // Cross-check: use PDAL to get the actual number of extra bytes,
+    // which is reliable regardless of LAS version or format quirks.
+    // PDAL exposes extra byte dims; we count their total byte size.
+    // If PDAL reports 0 extra dims but point_record_length > base_size,
+    // the extra bytes exist but have no VLR — we trust the base_size calc.
+    {
+        pdal::Option opt("filename", fileName);
+        pdal::Options opts; opts.add(opt);
+        pdal::PointTable tbl;
+        pdal::LasReader rdr;
+        rdr.setOptions(opts);
+        rdr.prepare(tbl);
+        pdal::PointViewSet pvs = rdr.execute(tbl);
+        pdal::PointViewPtr pv = *pvs.begin();
+
+        // Sum up byte sizes of all non-standard dims as reported by PDAL.
+        // This gives us the true extra bytes offset.
+        std::set<std::string> stdNames = {
+            "X","Y","Z","Intensity","ReturnNumber","NumberOfReturns",
+            "ScanDirectionFlag","EdgeOfFlightLine","Classification",
+            "ScanAngleRank","UserData","PointSourceId","GpsTime",
+            "Red","Green","Blue","ScannerChannel","ClassificationFlags",
+            "ScanAngle","Synthetic","KeyPoint","Withheld","Overlap",
+            "NormalX","NormalY","NormalZ"
+        };
+
+        int pdal_extra_bytes = 0;
+        for (const auto& dimId : pv->dims())
+        {
+            std::string dname = pdal::Dimension::name(dimId);
+            if (!stdNames.count(dname))
+            {
+                pdal::Dimension::Type dtype = pv->layout()->dimType(dimId);
+                pdal_extra_bytes += (int)pdal::Dimension::size(dtype);
+            }
+        }
+
+        // If PDAL found extra dims, use their total size to compute base_size.
+        // This is more reliable than the manual lookup table.
+        if (pdal_extra_bytes > 0 && pdal_extra_bytes <= (int)info.point_record_length)
+        {
+            int pdal_base = (int)info.point_record_length - pdal_extra_bytes;
+            if (pdal_base != base_size)
+            {
+                std::cout << "  [raw] base_size corrected by PDAL: "
+                          << base_size << " -> " << pdal_base
+                          << " (format=" << (int)point_format
+                          << " rec_len=" << info.point_record_length
+                          << " pdal_extra=" << pdal_extra_bytes << ")" << std::endl;
+                base_size = pdal_base;
+            }
+        }
+    }
+
+    info.has_extra_bytes    = (info.point_record_length > base_size);
     info.extra_bytes_offset = base_size;
 
-    // std::cout << "LAS raw info: offset=" << info.offset_to_data
-    //           << " rec_len=" << info.point_record_length
-    //           << " extra_bytes=" << (info.point_record_length - base_size) << std::endl;
     return info;
 }
 
+// ============================================================
+// Read LAS/LAZ via PDAL and populate a PCL PointCloud.
+// Shifts points to local coordinate system using first point as origin.
+//
+// POINT_ID strategy (in priority order):
+//   1. Read via PDAL if exposed as a named extra dim (most reliable).
+//   2. Read from raw binary extra bytes as fallback (handles missing VLR).
+// Normals are always read from raw binary because PDAL renames NormalX/Y/Z
+// with non-UTF8 VLR metadata that crashes PotreeConverter.
+// ============================================================
 void laz2pcl(std::string fileName, pcl::PointCloud<CustomPoint>::Ptr outputCloud)
 {
     // std::cout << "Reading LAS/LAZ: " << fileName << std::endl;
@@ -209,29 +297,43 @@ void laz2pcl(std::string fileName, pcl::PointCloud<CustomPoint>::Ptr outputCloud
     las_reader.prepare(table);
     pdal::PointViewSet point_view_set = las_reader.execute(table);
     pdal::PointViewPtr point_view = *point_view_set.begin();
-    // pdal::las::Header las_header = las_reader.header();
+
     bool hasColor = point_view->hasDim(pdal::Dimension::Id::Red) &&
                     point_view->hasDim(pdal::Dimension::Id::Green) &&
                     point_view->hasDim(pdal::Dimension::Id::Blue);
 
+    // ----------------------------------------------------------
+    // Check if PDAL exposes POINT_ID as a named extra dim.
+    // PDAL may or may not surface it depending on VLR presence.
+    // We check all dim names case-insensitively.
+    // ----------------------------------------------------------
+    bool hasPDALPointId = false;
+    pdal::Dimension::Id pdal_pid_dim = pdal::Dimension::Id::Unknown;
+    for (const auto& dimId : point_view->dims())
+    {
+        std::string dname = pdal::Dimension::name(dimId);
+        // Match common variants: POINT_ID, point_id, PointId, Point_ID
+        std::string lower = dname;
+        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+        if (lower == "point_id" || lower == "pointid")
+        {
+            pdal_pid_dim    = dimId;
+            hasPDALPointId  = true;
+            // std::cout << "POINT_ID found via PDAL as dim: " << dname << std::endl;
+            break;
+        }
+    }
+
     double offsetX = 0;
     double offsetY = 0;
-    int count = 0;
+    int count = (int)point_view->size();
 
     // First pass: compute offset from first point
-    for (pdal::PointId idx = 0; idx < point_view->size(); ++idx)
+    if (count > 0)
     {
-        using namespace pdal::Dimension;
-        double x = point_view->getFieldAs<double>(Id::X, idx);
-        double y = point_view->getFieldAs<double>(Id::Y, idx);
-
-        if (count == 0)
-        {
-            offsetX = x;
-            offsetY = y;
-            // std::cout << "Offset X: " << offsetX << "  Y: " << offsetY << std::endl;
-        }
-        count++;
+        offsetX = point_view->getFieldAs<double>(pdal::Dimension::Id::X, 0);
+        offsetY = point_view->getFieldAs<double>(pdal::Dimension::Id::Y, 0);
+        // std::cout << "Offset X: " << offsetX << "  Y: " << offsetY << std::endl;
     }
 
     // std::cout << "- Point count: " << count << std::endl;
@@ -240,7 +342,7 @@ void laz2pcl(std::string fileName, pcl::PointCloud<CustomPoint>::Ptr outputCloud
     outputCloud->height = 1;
     outputCloud->points.resize(count);
 
-    // Initialize all raw extra fields to 0 to avoid NaN if not present in file
+    // Initialize all raw extra fields to 0
     for (int j = 0; j < count; ++j)
     {
         outputCloud->points[j].raw_normal_x = 0.0f;
@@ -252,10 +354,11 @@ void laz2pcl(std::string fileName, pcl::PointCloud<CustomPoint>::Ptr outputCloud
         outputCloud->points[j].normal_z     = 0.0f;
     }
 
-    int i = 0;
-    for (pdal::PointId idx = 0; idx < point_view->size(); ++idx)
+    for (pdal::PointId idx = 0; idx < (pdal::PointId)count; ++idx)
     {
         using namespace pdal::Dimension;
+        int i = (int)idx;
+
         double x = point_view->getFieldAs<double>(Id::X, idx);
         double y = point_view->getFieldAs<double>(Id::Y, idx);
         double z = point_view->getFieldAs<double>(Id::Z, idx);
@@ -271,8 +374,6 @@ void laz2pcl(std::string fileName, pcl::PointCloud<CustomPoint>::Ptr outputCloud
         outputCloud->points[i].number_of_returns = point_view->getFieldAs<float>(Id::NumberOfReturns, idx);
         outputCloud->points[i].return_num        = point_view->getFieldAs<float>(Id::ReturnNumber, idx);
         // Store sequential index as point_source_id - used as key for extra dims lookup.
-        // We use i (not POINT_ID or PointSourceId) to avoid float precision loss
-        // and dependency on file-specific fields.
         outputCloud->points[i].point_source_id = static_cast<float>(i);
 
         if (hasColor)
@@ -282,50 +383,79 @@ void laz2pcl(std::string fileName, pcl::PointCloud<CustomPoint>::Ptr outputCloud
             outputCloud->points[i].b = static_cast<float>(point_view->getFieldAs<int>(Id::Blue,  idx) * color_bitter);
         }
 
+        // Strategy 1: read POINT_ID via PDAL (preferred - no binary math needed)
+        if (hasPDALPointId)
+            outputCloud->points[i].raw_point_id =
+                point_view->getFieldAs<uint32_t>(pdal_pid_dim, idx);
+
 #ifdef REMAP_CLASSES
         // outputCloud->points[i].class_id = class_mapping[(int)outputCloud->points[i].class_id];
 #endif
-        i++;
     }
-
-    // std::cout << "Loaded " << count << " points" << std::endl;
 
     // ----------------------------------------------------------
     // Read raw extra bytes directly from LAS binary file.
-    // This handles extra dims written as raw bytes (e.g. by ply2las)
-    // that PDAL may not expose as named dims without correct VLRs.
-    // Expected layout after base 34 bytes: normal_x(f32), normal_y(f32), normal_z(f32), POINT_ID(u32)
+    //
+    // Used for TWO purposes:
+    //   A) Normals (always): PDAL renames NormalX/Y/Z and corrupts VLR metadata.
+    //      Reading them as raw bytes bypasses this entirely.
+    //   B) POINT_ID (fallback only): if PDAL did not expose it as a named dim
+    //      (e.g. extra bytes were written without proper VLR record), we read
+    //      it from raw bytes using the known layout:
+    //        [extra_bytes_offset + 0]  = normal_x  (float32)
+    //        [extra_bytes_offset + 4]  = normal_y  (float32)
+    //        [extra_bytes_offset + 8]  = normal_z  (float32)
+    //        [extra_bytes_offset + 12] = POINT_ID  (uint32)
+    // ----------------------------------------------------------
+    // ----------------------------------------------------------
+    // Read raw extra bytes directly from LAS binary file.
+    //
+    // Used for TWO purposes:
+    //   A) Normals (always): PDAL renames NormalX/Y/Z and corrupts VLR metadata.
+    //   B) POINT_ID (fallback): if PDAL did not expose it as a named dim.
+    //
+    // Expected extra bytes layout (written by ply2las / previous pipeline):
+    //   +0  normal_x  (float32)
+    //   +4  normal_y  (float32)
+    //   +8  normal_z  (float32)
+    //   +12 POINT_ID  (uint32)
+    //
+    // If only POINT_ID is present (extra_size == 4), it is at offset +0.
     // ----------------------------------------------------------
     LasRawInfo rawInfo = readLasRawInfo(fileName);
     if (rawInfo.has_extra_bytes)
     {
         int extra_size = rawInfo.point_record_length - rawInfo.extra_bytes_offset;
-        // std::cout << "Reading " << extra_size << " extra bytes/point from raw LAS..." << std::endl;
 
         std::ifstream rawf(fileName, std::ios::binary);
         for (int idx = 0; idx < count; ++idx)
         {
-            // Seek to start of extra bytes for this point
-            std::streampos pos = rawInfo.offset_to_data
-                                 + (std::streampos)idx * rawInfo.point_record_length
-                                 + rawInfo.extra_bytes_offset;
+            std::streampos pos = (std::streampos)rawInfo.offset_to_data
+                                 + (std::streamoff)idx * rawInfo.point_record_length
+                                 + (std::streamoff)rawInfo.extra_bytes_offset;
             rawf.seekg(pos);
 
-            // Read normal_x, normal_y, normal_z (3 x float32) if available
-            if (extra_size >= 12)
+            if (extra_size == 4)
             {
+                // Only POINT_ID present, no normals
+                if (!hasPDALPointId)
+                    rawf.read(reinterpret_cast<char*>(&outputCloud->points[idx].raw_point_id), 4);
+            }
+            else if (extra_size >= 12)
+            {
+                // A) normals
                 rawf.read(reinterpret_cast<char*>(&outputCloud->points[idx].raw_normal_x), 4);
                 rawf.read(reinterpret_cast<char*>(&outputCloud->points[idx].raw_normal_y), 4);
                 rawf.read(reinterpret_cast<char*>(&outputCloud->points[idx].raw_normal_z), 4);
-            }
-            // Read POINT_ID (uint32) if available
-            if (extra_size >= 16)
-            {
-                rawf.read(reinterpret_cast<char*>(&outputCloud->points[idx].raw_point_id), 4);
+
+                // B) POINT_ID after normals
+                if (!hasPDALPointId && extra_size >= 16)
+                    rawf.read(reinterpret_cast<char*>(&outputCloud->points[idx].raw_point_id), 4);
             }
         }
-        // std::cout << "Raw extra bytes loaded." << std::endl;
     }
+
+    // std::cout << "Loaded " << count << " points" << std::endl;
 }
 
 // ============================================================
@@ -431,7 +561,6 @@ void computeFeatures(pcl::PointCloud<CustomPoint>::Ptr inputCloud, pcl::search::
 
     auto startTime = std::chrono::steady_clock::now();
 
-    // Apri il terminale reale (funziona anche quando stdout è una pipe)
     FILE* tty = fopen("/dev/tty", "w");
     if (!tty) tty = stderr;
     int lastPerc = -1;
@@ -567,32 +696,47 @@ void voxelCentroidNearestNeighborFilter(pcl::PointCloud<CustomPoint>::Ptr inputC
 //
 // The LAS output from writeToLas has record_length N bytes/point.
 // We extend each record by 12 bytes (3 x float32) and update:
-//   - point_data_record_length (offset 104, uint16)
-// We also write a minimal Extra Bytes VLR for the 3 normal fields.
+//   - point_data_record_length (offset 105, uint16)
 // ============================================================
 void appendNormals(const std::string& lasPath,
                    pcl::PointCloud<CustomPoint>::Ptr cloud)
 {
     // std::cout << "Appending normals to LAS..." << std::endl;
 
-    // --- Read current header info ---
     std::fstream f(lasPath, std::ios::in | std::ios::out | std::ios::binary);
     if (!f) { std::cerr << "Cannot open " << lasPath << std::endl; return; }
 
-    // offset_to_point_data @ 96 (LAS 1.4 header is 375 bytes)
-    // Note: in LAS 1.4 the offset_to_point_data field is at byte 96
+    // Read LAS version to use correct header offsets
+    uint8_t ver_major, ver_minor;
+    f.seekg(24); f.read(reinterpret_cast<char*>(&ver_major), 1);
+    f.read(reinterpret_cast<char*>(&ver_minor), 1);
+    bool isLas14 = (ver_major == 1 && ver_minor >= 4);
+
+    // offset_to_point_data is at byte 96 in ALL LAS versions.
     uint32_t offset_to_data;
-    f.seekg(96); f.read(reinterpret_cast<char*>(&offset_to_data), 4);
+    f.seekg(96);
+    f.read(reinterpret_cast<char*>(&offset_to_data), 4);
 
     uint16_t rec_len;
     f.seekg(105); f.read(reinterpret_cast<char*>(&rec_len), 2);
 
+    // Point count: LAS 1.4 uses uint64 at byte 247; LAS 1.2 uses uint32 at byte 107.
     uint64_t num_points;
-    f.seekg(247); f.read(reinterpret_cast<char*>(&num_points), 8);
+    if (isLas14)
+    {
+        f.seekg(247); f.read(reinterpret_cast<char*>(&num_points), 8);
+    }
+    else
+    {
+        uint32_t cnt32 = 0;
+        f.seekg(107); f.read(reinterpret_cast<char*>(&cnt32), 4);
+        num_points = cnt32;
+    }
 
-    // std::cout << "  offset=" << offset_to_data
-    //           << " rec_len=" << rec_len
-    //           << " num_points=" << num_points << std::endl;
+    // std::cout << "  LAS " << (int)ver_major << "." << (int)ver_minor
+    //           << "  offset=" << offset_to_data
+    //           << "  rec_len=" << rec_len
+    //           << "  num_points=" << num_points << std::endl;
 
     if ((size_t)num_points != cloud->points.size()) {
         std::cerr << "  WARNING: point count mismatch ("
@@ -601,26 +745,24 @@ void appendNormals(const std::string& lasPath,
         return;
     }
 
-    // --- Read all existing point data ---
+    // Read all existing point data
     std::vector<std::vector<uint8_t>> points(num_points, std::vector<uint8_t>(rec_len));
     f.seekg(offset_to_data);
     for (uint64_t i = 0; i < num_points; ++i)
         f.read(reinterpret_cast<char*>(points[i].data()), rec_len);
 
-    // --- New record length = old + 12 bytes (nx, ny, nz as float32) ---
+    // New record length = old + 12 bytes (nx, ny, nz as float32)
     uint16_t new_rec_len = rec_len + 12;
 
     // Update point_data_record_length in header
     f.seekp(105); f.write(reinterpret_cast<char*>(&new_rec_len), 2);
 
-    // --- Rewrite all points with appended normals ---
+    // Rewrite all points with appended normals
     f.seekp(offset_to_data);
     for (uint64_t i = 0; i < num_points; ++i)
     {
-        // Write existing point data
         f.write(reinterpret_cast<char*>(points[i].data()), rec_len);
 
-        // Append normals (clamp NaN/inf to 0)
         auto safeF = [](float v) { return std::isfinite(v) ? v : 0.0f; };
         float nx = safeF(cloud->points[i].raw_normal_x);
         float ny = safeF(cloud->points[i].raw_normal_y);
@@ -645,7 +787,7 @@ void appendNormals(const std::string& lasPath,
 // If you add a new feature to CustomPoint, add its setField block here.
 // ============================================================
 void writeToLas(const std::string& outputPath,
-                const std::string& inputPath,  // re-read to passthrough ALL extra dims
+                const std::string& inputPath,
                 pcl::PointCloud<CustomPoint>::Ptr cloud,
                 const std::set<std::string>& requestedFeatures,
                 double offsetX, double offsetY)
@@ -653,11 +795,8 @@ void writeToLas(const std::string& outputPath,
     std::cout << "Writing LAS output ... " << std::endl;
 
     // -------------------------------------------------------
-    // Re-read input file to get ALL dims (standard + extra).
-    // This is the simplest and most reliable way to passthrough
-    // any extra dims (normals, POINT_ID, etc.) regardless of how
-    // they were written. Index in srcView == index in inputCloud
-    // because laz2pcl reads points in the same order.
+    // Re-read input file to passthrough ALL dims (standard + extra).
+    // Index in srcView == index in inputCloud (same read order as laz2pcl).
     // -------------------------------------------------------
     pdal::PointTable srcTable;
     pdal::LasReader srcReader;
@@ -674,38 +813,27 @@ void writeToLas(const std::string& outputPath,
         "ScanDirectionFlag", "EdgeOfFlightLine", "Classification",
         "ScanAngleRank", "UserData", "PointSourceId",
         "GpsTime", "Red", "Green", "Blue",
-        // LAS 1.4 format 6/7 extra standard fields - skip passthrough to avoid VLR corruption
+        // LAS 1.4 format 6/7 extra standard fields
         "ScannerChannel", "ClassificationFlags", "ScanAngle",
-        // Also skip any PDAL internal normal dim names that get remapped
+        // Skip PDAL internal normal dim names that corrupt VLR metadata
         "NormalX", "NormalY", "NormalZ", "Synthetic", "KeyPoint", "Withheld", "Overlap"
+        // NOTE: "POINT_ID" is excluded from passthrough — it is written explicitly
+        // via dimPID (as "pt_id") with the correct value from raw_point_id.
+        // Passing it through would overwrite with PDAL's remapped (wrong) value.
+        "POINT_ID",
     };
 
-    // Discover all extra dims and print them
+    // Discover all extra dims from source
     std::vector<std::string> extraDimNames;
     std::vector<pdal::Dimension::Id> srcDimIds;
-    // std::cout << "\nAll dims in source file:" << std::endl;
     for (const auto& dimId : srcView->dims())
     {
         std::string dname = pdal::Dimension::name(dimId);
-        pdal::Dimension::Type dtype = srcView->layout()->dimType(dimId);
-        bool isStd = standardDimNames.count(dname) > 0;
-        // std::cout << "  " << dname << " [" << pdal::Dimension::toName(pdal::Dimension::base(dtype)) << "]"
-        //           << (isStd ? "" : " <-- EXTRA") << std::endl;
-        if (!isStd)
+        if (!standardDimNames.count(dname))
         {
             extraDimNames.push_back(dname);
             srcDimIds.push_back(dimId);
         }
-    }
-
-    if (extraDimNames.empty()){
-        // std::cout << "No extra dims found in source file." << std::endl;
-    }
-    else
-    {
-        // std::cout << "Passthrough extra dims (" << extraDimNames.size() << "): ";
-        // for (auto& n : extraDimNames) std::cout << n << " ";
-        // std::cout << std::endl;
     }
 
     // -------------------------------------------------------
@@ -714,7 +842,6 @@ void writeToLas(const std::string& outputPath,
     pdal::PointTable table;
     pdal::PointLayoutPtr layout = table.layout();
 
-    // Standard LAS dimensions (always present - passthrough from input)
     layout->registerDim(pdal::Dimension::Id::X);
     layout->registerDim(pdal::Dimension::Id::Y);
     layout->registerDim(pdal::Dimension::Id::Z);
@@ -727,7 +854,8 @@ void writeToLas(const std::string& outputPath,
     layout->registerDim(pdal::Dimension::Id::Green);
     layout->registerDim(pdal::Dimension::Id::Blue);
 
-    // Register all extra dims from source with their original type
+    // Register all passthrough extra dims with their original type.
+    // POINT_ID from source (if PDAL sees it) will be in here.
     std::map<std::string, pdal::Dimension::Id> passthroughDims;
     for (size_t k = 0; k < extraDimNames.size(); ++k)
     {
@@ -735,16 +863,24 @@ void writeToLas(const std::string& outputPath,
         passthroughDims[extraDimNames[k]] = layout->registerOrAssignDim(extraDimNames[k], dtype);
     }
 
-    // NOTE: Normali NON scritte come extra dims PDAL perché PDAL le rinomina
-    // in NormalX/NormalY/NormalZ con VLR metadata non-UTF8 che crasha PotreeConverter.
-    // Le normali vengono aggiunte come raw bytes DOPO la scrittura PDAL (vedi appendNormals).
-    // POINT_ID scritto come extra dim standard (nome lowercase = no conflitto PDAL).
-    pdal::Dimension::Id dimPID = layout->registerOrAssignDim("point_id", pdal::Dimension::Type::Unsigned32);
+    // Explicit POINT_ID output dim.
+    // Written from raw_point_id (which holds the authoritative value read in laz2pcl
+    // via PDAL-first strategy or raw binary fallback).
+    // Using "POINT_ID" as dim name to match the original file.
+    // If POINT_ID was already registered via passthroughDims, registerOrAssignDim
+    // returns the existing dim id and we overwrite it with the correct value below.
+    // Use "pt_id" instead of "POINT_ID" to prevent PDAL from remapping it to its
+    // own internal index dim (which resets the value to 0 or the sequential index).
+    pdal::Dimension::Id dimPID = layout->registerOrAssignDim("POINT_ID", pdal::Dimension::Type::Unsigned32);
+
+    // NOTE: Normals are NOT written via PDAL - they are appended as raw bytes
+    // after this function (appendNormals) to avoid PDAL renaming them with
+    // non-UTF8 VLR metadata that crashes PotreeConverter.
 
     // -------------------------------------------------------
     // Register extra dims for requested features.
-    // Scale-based features → featureName_radius (e.g. planarity_0_8, planarity_1_2)
-    // Single features      → featureName
+    // Scale-based: featureName_radius  (e.g. planarity_0_8)
+    // Single:      featureName
     // -------------------------------------------------------
     std::map<std::string, pdal::Dimension::Id> extraDims;
 
@@ -752,14 +888,13 @@ void writeToLas(const std::string& outputPath,
         extraDims[name] = layout->registerOrAssignDim(name, pdal::Dimension::Type::Float);
     };
 
-    // Scale-based features
     struct ScaleFeatureDef {
         std::string name;
         std::function<float(const CustomPoint&, int)> getter;
     };
 
     std::vector<ScaleFeatureDef> scaleFeatureDefs = {
-        { "anisotropy",     [](const CustomPoint& p, int s) { return p.anisotropy[s]; } },
+        { "anisotropy",       [](const CustomPoint& p, int s) { return p.anisotropy[s]; } },
         { "height_above",     [](const CustomPoint& p, int s) { return p.heightAbove[s]; } },
         { "height_below",     [](const CustomPoint& p, int s) { return p.heightBelow[s]; } },
         { "linearity",        [](const CustomPoint& p, int s) { return p.linearity[s]; } },
@@ -772,8 +907,6 @@ void writeToLas(const std::string& outputPath,
         { "vertical_range",   [](const CustomPoint& p, int s) { return p.verticalRange[s]; } },
     };
 
-    // Build dim name from feature name + actual radius value (e.g. "planarity_0_8")
-    // Uses the same formatDimName logic: replaces '.' with '_'
     auto dimName = [](const std::string& feat, int s) {
         std::ostringstream ss;
         ss << std::fixed << std::setprecision(1) << scales[s];
@@ -785,24 +918,17 @@ void writeToLas(const std::string& outputPath,
     for (auto& def : scaleFeatureDefs)
     {
         if (requestedFeatures.count(def.name))
-        {
             for (int s = 0; s < scalesCount; s++)
                 registerExtra(dimName(def.name, s));
-        }
     }
 
-    // Single features
     struct SingleFeatureDef {
         std::string name;
         std::function<float(const CustomPoint&)> getter;
     };
 
     std::vector<SingleFeatureDef> singleFeatureDefs = {
-        { "height",             [](const CustomPoint& p) { return p.height; } },
-        // { "intensity",          [](const CustomPoint& p) { return p.intensity; } },
-        // { "number_of_returns",  [](const CustomPoint& p) { return p.number_of_returns; } },
-        // { "return_num",         [](const CustomPoint& p) { return p.return_num; } },
-        // { "scan_angle",         [](const CustomPoint& p) { return p.scan_angle; } },
+        { "height", [](const CustomPoint& p) { return p.height; } },
     };
 
     for (auto& def : singleFeatureDefs)
@@ -820,12 +946,10 @@ void writeToLas(const std::string& outputPath,
     {
         const CustomPoint& pt = cloud->points[i];
 
-        // Restore original coordinates (undo local shift)
         view->setField(pdal::Dimension::Id::X, i, (double)pt.x + offsetX);
         view->setField(pdal::Dimension::Id::Y, i, (double)pt.y + offsetY);
         view->setField(pdal::Dimension::Id::Z, i, (double)pt.z);
 
-        // Standard fields - passthrough from input
         view->setField(pdal::Dimension::Id::Classification,  i, (uint8_t)pt.class_id);
         view->setField(pdal::Dimension::Id::Intensity,       i, (uint16_t)pt.intensity);
         view->setField(pdal::Dimension::Id::ScanAngleRank,   i, (int8_t)pt.scan_angle);
@@ -834,7 +958,8 @@ void writeToLas(const std::string& outputPath,
         view->setField(pdal::Dimension::Id::Red,   i, (uint16_t)(pt.r / color_bitter));
         view->setField(pdal::Dimension::Id::Green, i, (uint16_t)(pt.g / color_bitter));
         view->setField(pdal::Dimension::Id::Blue,  i, (uint16_t)(pt.b / color_bitter));
-        // Passthrough PDAL-visible extra dims (Synthetic, KeyPoint, etc.)
+
+        // Passthrough PDAL-visible extra dims from source
         if (!extraDimNames.empty())
         {
             pdal::PointId srcIdx = (pdal::PointId)pt.point_source_id;
@@ -846,8 +971,9 @@ void writeToLas(const std::string& outputPath,
             }
         }
 
-        // Write POINT_ID as extra dim
-        // Normali scritte come raw bytes dopo (appendNormals), non via PDAL
+        // Write POINT_ID from the authoritative value stored in raw_point_id.
+        // This correctly overwrites any passthrough value that may have been
+        // corrupted by PDAL remapping (e.g. PDAL mapping POINT_ID to its own index).
         view->setField(dimPID, i, pt.raw_point_id);
 
         // Scale-based features
@@ -876,17 +1002,12 @@ void writeToLas(const std::string& outputPath,
 
     // -------------------------------------------------------
     // Write with LasWriter
-    // extra_dims "all" is required to write extra byte fields
-    // LAS 1.4 / point format 7 needed for extra dims + RGB support
     // -------------------------------------------------------
     pdal::BufferReader reader;
     reader.addView(view);
 
     pdal::Options writerOpts;
     writerOpts.add("filename",      outputPath);
-    // extra_dims "all" is required to write extra byte fields
-    // LAS 1.4 / point format 7 needed for extra dims + RGB support
-    // RGB is written via Red/Green/Blue standard dims which are always included.
     writerOpts.add("extra_dims",    "all");
     writerOpts.add("minor_version", 4);
     writerOpts.add("dataformat_id", 7);
@@ -902,8 +1023,7 @@ void writeToLas(const std::string& outputPath,
 
 // ============================================================
 // Parse the --features argument value.
-// Accepts comma-separated list, e.g.:
-//   planarity,linearity,height,intensity
+// Accepts comma-separated list, e.g.: planarity,linearity,height
 // ============================================================
 std::set<std::string> parseFeatureList(const std::string& featuresArg)
 {
@@ -912,7 +1032,6 @@ std::set<std::string> parseFeatureList(const std::string& featuresArg)
     std::string token;
     while (std::getline(ss, token, ','))
     {
-        // trim spaces
         token.erase(0, token.find_first_not_of(" \t"));
         token.erase(token.find_last_not_of(" \t") + 1);
         if (!token.empty())
@@ -936,9 +1055,7 @@ void parseRadiusList(const std::string& radiusArg)
         token.erase(0, token.find_first_not_of(" \t"));
         token.erase(token.find_last_not_of(" \t") + 1);
         if (!token.empty() && count < MAX_SCALES)
-        {
             scales[count++] = std::stof(token);
-        }
     }
     if (count > 0)
         scalesCount = count;
@@ -958,7 +1075,6 @@ void parseRadiusList(const std::string& radiusArg)
 // ============================================================
 int main(int argc, char** argv)
 {
-    
     if (argc < 3)
     {
         std::cout << "\nUsage: " << argv[0] << " <input_file> <output_file> [--sampling_resolution sr] [--features f1,f2,...] [--radius r1,r2,...]\n" << std::endl;
@@ -967,7 +1083,6 @@ int main(int argc, char** argv)
         return 0;
     }
 
-    // Check for --list-features anywhere in args
     for (int a = 1; a < argc; a++)
     {
         if (std::string(argv[a]) == "--list-features")
@@ -982,9 +1097,8 @@ int main(int argc, char** argv)
 
     bool doSubsampling = false;
     std::set<std::string> requestedFeatures;
-    bool useAllFeatures = true; // default: write all features
+    bool useAllFeatures = true;
 
-    // Parse optional arguments (resolution, --features, --radius)
     for (int a = 3; a < argc; a++)
     {
         std::string arg(argv[a]);
@@ -994,24 +1108,17 @@ int main(int argc, char** argv)
             requestedFeatures = parseFeatureList(std::string(argv[++a]));
             useAllFeatures = false;
 
-            // Validate requested features
             for (auto& f : requestedFeatures)
             {
                 if (!AVAILABLE_SCALE_FEATURES.count(f) && !AVAILABLE_SINGLE_FEATURES.count(f))
-                {
                     std::cerr << "WARNING: Unknown feature '" << f << "' will be ignored." << std::endl;
-                }
             }
         }
         else if (arg == "--radius" && a + 1 < argc)
         {
-            // Consume all following tokens until next -- flag or end of args
-            // This handles both: --radius 0.8,1.2,2.0  AND  --radius 0.8, 1.2, 2.0
             std::string radiusStr = argv[++a];
             while (a + 1 < argc && std::string(argv[a+1]).substr(0, 2) != "--")
-            {
                 radiusStr += argv[++a];
-            }
             parseRadiusList(radiusStr);
         }
         else if (arg == "--sampling_resolution" && a + 1 < argc)
@@ -1025,7 +1132,6 @@ int main(int argc, char** argv)
         }
     }
 
-    // If no --features given, use all available features
     if (useAllFeatures)
     {
         for (auto& f : AVAILABLE_SCALE_FEATURES)  requestedFeatures.insert(f);
@@ -1033,11 +1139,8 @@ int main(int argc, char** argv)
     }
 
     auto global_start = now_t();
-       
-    std::map<int, int> classes;
 
     std::string ext = std::filesystem::path(inputFile).extension().string();
-
     if (ext != ".laz" && ext != ".las") {
         std::cerr << "Skipping non-LAS file: " << inputFile << std::endl;
         return 1;
@@ -1051,8 +1154,6 @@ int main(int argc, char** argv)
     laz2pcl(inputFile, inputCloud);
 
     // Save offset for output (to restore original coordinates)
-    // NOTE: laz2pcl uses the first point as offset.
-    // We re-read it here from the file to pass it to writeToLas.
     double offsetX = 0, offsetY = 0;
     {
         pdal::Option opt("filename", inputFile);
@@ -1092,11 +1193,10 @@ int main(int argc, char** argv)
     // ----------------------------------------------------------
     std::cout << "Selected Features: ";
     for (auto& f : requestedFeatures) std::cout << f << " ";
-
     std::cout << "with radius: ";
     for (int s = 0; s < scalesCount; s++) std::cout << scales[s] << " ";
-    
     std::cout << std::endl;
+
     computeFeatures(filteredCloud, tree);
 
     // ----------------------------------------------------------
@@ -1104,8 +1204,7 @@ int main(int argc, char** argv)
     // ----------------------------------------------------------
     writeToLas(outputFile, inputFile, filteredCloud, requestedFeatures, offsetX, offsetY);
 
-    // Append normals as raw bytes directly into the LAS file.
-    // Done after PDAL write to avoid PDAL renaming NormalX/Y/Z in VLR metadata.
+    // Append normals as raw bytes after PDAL write
     appendNormals(outputFile, filteredCloud);
 
     double total = elapsed(global_start);
@@ -1115,15 +1214,6 @@ int main(int argc, char** argv)
         std::cout << "Processing time: " << mn << " min " << sc << " sec" << std::endl;
     else
         std::cout << "Processing time: " << sc << " sec" << std::endl;
-
-        // // Class distribution (informational)
-        // for (size_t i = 0; i < filteredCloud->points.size(); ++i)
-        //     classes[(int)filteredCloud->points[i].class_id]++;
-    // }
-
-    // std::cout << "\n--- Class distribution ---" << std::endl;
-    // for (const auto& pair : classes)
-    //     std::cout << "  class " << pair.first << ": " << pair.second << " points" << std::endl;
 
     return 0;
 }
