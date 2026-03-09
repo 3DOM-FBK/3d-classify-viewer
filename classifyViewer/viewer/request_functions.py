@@ -73,10 +73,10 @@ def mesh2pc(request):
             num_points = data['num_points']
             # sampling_method = data['sampling_method']
 
-            result = mesh_to_point_cloud(file_path, out_path, num_points=num_points)
+            mesh_to_point_cloud(file_path, out_path, num_points=num_points)
             print("\n")
-            if (result):
-                return JsonResponse({"status": 'success', "message": "Mesh to Point Cloud completed."})
+
+            return JsonResponse({"status": 'success', "message": "Mesh to Point Cloud completed."})
 
         except Exception as e:
             print("\n[REQUEST FUNCTION] Mesh to Point Cloud ERROR " + str(e))

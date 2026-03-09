@@ -162,7 +162,6 @@ def mesh_to_point_cloud(mesh_path, out_path, num_points=5000000):
     command = ["/webapp/opt/mesh2pc", abs_input, abs_output, str(num_points)]
     job.launch_subprocess(command)
 
-    return True
 
 def ply_to_las(ply_path, out_path=None):
     print("\n[FUNCTION] ---- PLY TO LAS -----")
