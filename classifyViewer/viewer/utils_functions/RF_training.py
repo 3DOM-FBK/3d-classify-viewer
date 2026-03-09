@@ -16,7 +16,6 @@ except Exception:
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import precision_score, recall_score, accuracy_score, f1_score, confusion_matrix, jaccard_score
 import itertools
-from tqdm import tqdm 
 import laspy
 import re
 import copy
@@ -79,7 +78,7 @@ def read_txt_data(filepath, class_index):
     with open(filepath, 'r') as f:
         lines = f.readlines()
         total_lines = len(lines)
-        for line_index, line in enumerate(tqdm(lines, desc="Loading points")):
+        for line_index, line in enumerate(lines):
             tokens = line.strip().split(' ')
             if line_index == 0:
                 # Treat first line as header only if it contains non-numeric tokens (actual column names)
@@ -137,7 +136,7 @@ def read_las_data(filepath, class_las_index):
     # Build X using original names to access data, sanitized names as header
     columns = []
     valid_header = []
-    for original, clean in tqdm(name_map.items(), desc="Loading data"):
+    for original, clean in name_map.items():
         try:
             col = np.array(getattr(las, original), dtype=np.float64)
             columns.append(col)
@@ -219,7 +218,7 @@ def write_classification_txt(X_test, Y_test_pred, filename, header):
         X_test = X_test.tolist()
         Y_test_pred = Y_test_pred.tolist()
         out.write('//{}\n'.format(header))
-        for index, x_t in enumerate(tqdm(X_test, desc="Writing classified points")):
+        for index, x_t in enumerate(X_test):
             x_t_as_str = " ".join([str(x) for x in x_t[0:6]])
             out.write('{} {}\n'.format(x_t_as_str, str(Y_test_pred[index])))
 
@@ -281,7 +280,7 @@ def write_classification_las(X, Y, filename, header, source_las_path=None):
 
     las = laspy.LasData(header=las_header)
 
-    for i, col_name in enumerate(tqdm(header, desc="Writing dimensions")):
+    for i, col_name in enumerate(header):
         clean = name_map[col_name]
         clean_lower = clean.lower()
         if clean_lower == 'x':
@@ -324,20 +323,41 @@ def save_model(model, filename):
         pickle.dump(model, out, pickle.HIGHEST_PROTOCOL)
 
     
-def main(selected_features, training_filepath, val_filepath, n_jobs, n_estimators, max_depth, min_samples_split, max_features, use_gpu, output_training_name, model_savepath):
+def main():
+    parser = argparse.ArgumentParser(description='Train the random forest model.')
+    parser.add_argument('--selected_features', nargs="+", required = True, help='Selected feature for training')
+    parser.add_argument('--training_filepath', required = True, help='Path to the training file (.txt) [f1, ..., fn, c]')
+    parser.add_argument('--val_filepath', required = True, help='Path to the test file (.txt) [f1, ..., fn, c]')
+    parser.add_argument('--n_jobs', required = True, help='Number of threads used to train the model', type=int)
+    parser.add_argument('--n_estimators', required = True, help='Number of trees (e.g. 200)', type=int)
+    parser.add_argument('--max_depth', help='Maximum depth of each tree', type=int)
+    parser.add_argument('--min_samples_split', help='Minimum samples required to split a node', type=int)
+    parser.add_argument('--max_features', help='Number of features per split', type=str)
+    parser.add_argument('--use_gpu', help='Try to use GPU-accelerated training (cuML)', action='store_true')
+    parser.add_argument('--output_training_name', required = True, help='Name of the predicted test file')
+    parser.add_argument('--model_savepath', help='Path to save the model')
+    args= parser.parse_args()
 
-    # PARAMETERS    
-    n_estimators = n_estimators if n_estimators else 200
-    max_depths = max_depth if max_depth else 15
-    min_samples_split=min_samples_split if min_samples_split else 20
-    max_features=max_features if max_features else "sqrt"
+    # PARAMETERS 
+    selected_features = args.selected_features
+    training_filepath = args.training_filepath
+    val_filepath = args.val_filepath
+    n_jobs = args.n_jobs
+    n_estimators = args.n_estimators if args.n_estimators else 200
+    max_depths = args.max_depth if args.max_depth else 15
+    min_samples_split=args.min_samples_split if args.min_samples_split else 20
+    max_features=args.max_features if args.max_features else "sqrt"
+    use_gpu = args.use_gpu
+    output_training_name = args.output_training_name
+    model_savepath = args.model_savepath
     class_las_index = "labels"
+
     feat_to_use = []
     
     total_start = time.time()
     t0 = time.time()
 
-    print("Loading training data...")
+    print("\nLoading training data...")
     X_train, Y_train, header = read_las_data(training_filepath, class_las_index)
     
     print("\nLoading validation data...")
@@ -434,14 +454,6 @@ def main(selected_features, training_filepath, val_filepath, n_jobs, n_estimator
     for name, importance in sorted_features:
         print(f'{name}: {importance:.4f}')
 
-    tot_sec = round(t4 - total_start, 2)
-    tot_min = int(tot_sec // 60)
-    tot_sec = int(tot_sec % 60)
-    if tot_min > 0:
-        print(f'---> Total time {tot_min} min {tot_sec} sec')
-    else:
-        print(f'---> Total time {tot_sec} sec')
-
     #Print report with results
     report_fname = os.path.dirname(output_training_name) + "/report_RF.txt"
 
@@ -518,6 +530,15 @@ def main(selected_features, training_filepath, val_filepath, n_jobs, n_estimator
 
     print(f"Model saved on {model_savepath}")
     save_model(model, model_savepath )
+
+
+    tot_sec = round(t4 - total_start, 2)
+    tot_min = int(tot_sec // 60)
+    tot_sec = int(tot_sec % 60)
+    if tot_min > 0:
+        print(f'---> Total time {tot_min} min {tot_sec} sec')
+    else:
+        print(f'---> Total time {tot_sec} sec')
 
 if __name__== '__main__':
     main()

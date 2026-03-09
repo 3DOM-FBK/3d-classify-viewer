@@ -1,6 +1,6 @@
 from django.shortcuts import render
 from django.http import JsonResponse
-from viewer.functions import launch_training_RF, launch_classify_RF, subsampling_point_cloud
+from viewer.functions import launch_training_RF, launch_classify_RF, subsampling_point_cloud, stop_processes
 from viewer.functions import mesh_to_point_cloud, ply_to_las, feature_extraction, Potree, split_las_by_binary
 from django.views.decorators.csrf import csrf_exempt
 import base64
@@ -146,6 +146,22 @@ def potree_converter(request):
 
         except Exception as e:
             print("\n[REQUEST FUNCTION] Potree conversion ERROR " + str(e))
+            print(traceback.format_exc())
+            return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+
+    return JsonResponse({'status': 'error', 'message': 'Method not allowed'}, status=405)
+
+def stop_process(request):
+    if request.method == 'POST':
+        try:
+            print("\n[REQUEST FUNCTION] STOP PROCESS:") 
+
+            stop_processes()
+
+            return JsonResponse({"status": 'success', "message": "Process stopped successfully."})
+
+        except Exception as e:
+            print("\n[REQUEST FUNCTION] Stop process ERROR " + str(e))
             print(traceback.format_exc())
             return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
 

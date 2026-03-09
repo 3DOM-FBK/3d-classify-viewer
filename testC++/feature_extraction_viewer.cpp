@@ -434,7 +434,7 @@ void computeFeatures(pcl::PointCloud<CustomPoint>::Ptr inputCloud, pcl::search::
     // Apri il terminale reale (funziona anche quando stdout è una pipe)
     FILE* tty = fopen("/dev/tty", "w");
     if (!tty) tty = stderr;
-
+    int lastPerc = -1;
     #pragma omp parallel for
     for (int i = 0; i < (int)inputCloud->points.size(); i++)
     {
@@ -447,32 +447,22 @@ void computeFeatures(pcl::PointCloud<CustomPoint>::Ptr inputCloud, pcl::search::
             if (progress % 10000 == 0 || progress == (int)inputCloud->points.size())
             {
                 int total   = inputCloud->points.size();
-                float perc  = (progress * 100.0f) / total;
-                int barWidth = 50;
-                int filled  = (int)(barWidth * progress / total);
+                int perc    = int((progress * 100.0f) / total);
 
                 auto now     = std::chrono::steady_clock::now();
                 double elapsed = std::chrono::duration<double>(now - startTime).count();
                 double eta   = (elapsed / progress) * (total - progress);
-
-                std::string bar = "[";
-                for (int b = 0; b < barWidth; b++)
-                    bar += (b < filled) ? "█" : " ";
-                bar += "]";
-
                 int min = static_cast<int>(eta / 60);
                 int sec = static_cast<int>(eta) % 60;
 
-                // Scrivi sul terminale reale, non sulla pipe
-                fprintf(tty, "\rComputing Features %3.0f%% %s %d/%d [ ETA: %02d:%02d ] ",
-                    perc, bar.c_str(), progress, total, min, sec);
-                fflush(tty);
+                if (perc != lastPerc && (perc == 0 || perc == 33 || perc == 66 || perc == 100)) {
+                    fprintf(stdout, "Computing Features %3d%% [ETA: %02d:%02d]\n", perc, min, sec);
+                    fflush(stdout);
+                    lastPerc = perc;
+                }
             }
         }
     }
-
-    fprintf(tty, "\n");
-    fflush(tty);
 
     if (tty != stderr) fclose(tty);
 }

@@ -13,7 +13,6 @@ except Exception:
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score
 from sklearn.metrics import f1_score
-from tqdm import tqdm 
 import laspy
 import re
 
@@ -80,7 +79,7 @@ def read_txt_data(filepath):
     with open(filepath, 'r') as f:
         lines = f.readlines()
         total_lines = len(lines)
-        for line_index, line in enumerate(tqdm(lines, desc="Loading points")):
+        for line_index, line in enumerate(lines):
             tokens = line.strip().split(' ')
             if line_index == 0:
                 # Store the header (first line) for later use
@@ -131,7 +130,7 @@ def read_las_data(filepath):
     # Build X using original names to access data, sanitized names as header
     columns = []
     valid_header = []
-    for original, clean in tqdm(name_map.items(), desc="Loading data"):
+    for original, clean in name_map.items():
         try:
             col = np.array(getattr(las, original), dtype=np.float64)
             columns.append(col)
@@ -154,7 +153,7 @@ def write_classification_txt(X, Y, filename, header):
         X = X.tolist()
         Y_pred = Y.tolist()
         out.write('//{}\n'.format(header))
-        for index, x in enumerate(tqdm(X, desc="Writing classified points")):
+        for index, x in enumerate(X):
             # x_as_str = " ".join([str(i) for i in x[0:6]])
             x_as_str = " ".join([str(i) for i in x]) # If I want to write all features, not only the first 6 (x,y,z,r,g,b)
             out.write('{} {}\n'.format(x_as_str, str(Y_pred[index])))
@@ -215,7 +214,7 @@ def write_classification_las(X, Y, filename, header, source_las_path=None):
 
     las = laspy.LasData(header=las_header)
 
-    for i, col_name in enumerate(tqdm(header, desc="Writing dimensions")):
+    for i, col_name in enumerate(header):
         clean = name_map[col_name]
         clean_lower = clean.lower()
         if clean_lower == 'x':
@@ -245,12 +244,25 @@ def write_classification_las(X, Y, filename, header, source_las_path=None):
 
     las.write('{}'.format(filename))
 
-def main(selected_features, model, test_filepath, output_classify_name, use_gpu):
+def main():
+    parser = argparse.ArgumentParser(description='Classify a point cloud with a pretrained model.')
+    parser.add_argument('--selected_features',nargs="+", required=True, help='Selected feature for training')
+    parser.add_argument('--model', required=True, help='Path to .pkl file containing the trained model.')
+    parser.add_argument('--test_filepath', required=True, help='Path to .txt file containing the point cloud to classify.')
+    parser.add_argument('--output_classify_name', required=True, help='Name of the predicted test file')
+    parser.add_argument('--use_gpu', help='Use GPU for inference when possible (cuML)', action='store_true')
+    args = parser.parse_args()
+
+    selected_features = args.selected_features
+    model = args.model
+    test_filepath = args.test_filepath
+    output_classify_name = args.output_classify_name
+    use_gpu = args.use_gpu
 
     feat_to_use = []
 
     t0 = time.time()
-    print('Loading model ...')
+    print('\nLoading model ...')
     model = read_model(model)                          # Load trained model
     print('Loading testing data ...')
     X, header = read_las_data(test_filepath)               # Load data to classify
@@ -303,9 +315,9 @@ def main(selected_features, model, test_filepath, output_classify_name, use_gpu)
     minutes = int(tot_sec // 60)
     seconds = int(tot_sec % 60)
     if minutes > 0:
-        print(f'\nTotal time {minutes} min {seconds} sec')
+        print(f'\nTotal time {minutes} min {seconds} sec\n')
     else:
-        print(f'\nTotal time {seconds} sec')
+        print(f'\nTotal time {seconds} sec\n')
 
 if __name__== '__main__':
     main()

@@ -46,7 +46,7 @@ window.addEventListener("resize", function () {
 });
 
 
-const importPCButton = createButton("Export PointCloud", "importPC");
+// const importPCButton = createButton("Export PointCloud", "importPC");
 console.clear();
 // // Testa quanta memoria ha il tuo browser
 // console.log("Max heap size:", performance.memory?.jsHeapSizeLimit / 1024 / 1024, "MB");
@@ -69,15 +69,15 @@ console.clear();
 // );
 // frameCameraOnMesh(camera, pointCloud);
  
-importPCButton.addEventListener("click", async () => {
+// importPCButton.addEventListener("click", async () => {
 
-    // Salva PLY binary
-    //await exportPointCloud(pointCloud, export_folder_path + "c78_exp.ply", "ply", true);
+//     // Salva PLY binary
+//     //await exportPointCloud(pointCloud, export_folder_path + "c78_exp.ply", "ply", true);
 
-    // // Salva TXT ascii
-    await exportPointCloud(pointCloud, export_folder_path + "c78_exp.txt", "txt", true);
+//     // // Salva TXT ascii
+//     await exportPointCloud(pointCloud, export_folder_path + "c78_exp.txt", "txt", true);
     
-});
+// });
 
 scene.onPointerDown = (evt) => {
     const ray = scene.createPickingRay(
@@ -115,11 +115,30 @@ scene.onPointerDown = (evt) => {
         sphere.position.copyFrom(closestPoint);
     }
 };
+const stopGButton = createButton("Stop G", "stopG");
+stopGButton.style.position = "absolute";
+stopGButton.style.top = "90dvh";
+stopGButton.style.right = "50dvw";
+stopGButton.style.transform = "translateX(50%)";
+stopGButton.style.width = "10dvh";
 
+
+stopGButton.addEventListener("click", async () => {
+    // Send request to launch function
+    // console.log("Sending request to stop the process...");
+    const response = await send_request("stop_process/", "POST");
+    
+    if (response.ok) {  
+        console.log("Process stopped successfully..");
+    } else {
+        const error = `Error: ${response.statusText}`;
+        console.error(`${error}`);
+    }
+});
 
 const testGButton = createButton("Test G", "testG");
 testGButton.style.position = "absolute";
-testGButton.style.top = "90dvh";
+testGButton.style.top = "85dvh";
 testGButton.style.right = "50dvw";
 testGButton.style.transform = "translateX(50%)";
 testGButton.style.width = "10dvh";
@@ -129,13 +148,11 @@ testGButton.addEventListener("click", async () => {
     
     console.log("Sending request for testing the function...");
 
-    const which_function = "ply2las/";
+    const which_function = "feature_extraction/";
     let body = null;
     let file_path = "";
     let use_gpu = false;
-    let selected_features = [ 'red', 'green', 'blue', 'Omnivariance_0_4', 'Planarity_0_4', 'Linearity_0_4', 'Surface_variation_0_4', 'Sphericity_0_4', 'Verticality_0_4', 
-    'Omnivariance_1', 'Planarity_1', 'Linearity_1', 'Surface_variation_1', 'Sphericity_1', 'Verticality_1', 'Omnivariance_2', 'Planarity_2', 'Linearity_2', 
-    'Surface_variation_2', 'Sphericity_2', 'Verticality_2'];
+    let selected_features = ['red','green','blue','Omnivariance_0_4','Planarity_0_4','Linearity_0_4','Surface_variation_0_4'];
     const folder_path = "/webapp/classifyViewer/viewer/static/viewer/data2/";
 
     switch (which_function) {
@@ -198,9 +215,9 @@ testGButton.addEventListener("click", async () => {
         }
         case "mesh2pc/": {
             // MESH TO POINT CLOUD PARAMETERS
-            file_path = folder_path + "c78.glb";
+            let file_path = folder_path + "c78_mesh.glb";
             const out_path = folder_path + "c78_pc_output.las";
-            num_points = 5000000; // 5 millions points
+            let num_points = 5000000; // 5 millions points
             // const sampling_method = "uniform"; // or "poisson"
 
             body = JSON.stringify({
