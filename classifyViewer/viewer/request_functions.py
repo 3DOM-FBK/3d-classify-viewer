@@ -12,7 +12,7 @@ import traceback
 def launch_RF_training(request):
     if request.method == 'POST':
         try:
-            print("\n[REQUEST FUNCTION] Launch RF training: ", request.body[:200]) 
+            print("\n[REQUEST FUNCTION] Launch RF training: ", request.body[:200])
             data = json.loads(request.body)
             launch_training_RF(data)
             print("\n")

@@ -296,6 +296,13 @@ function setCameraView(alpha, beta) {
     // Animate would be better, but let's keep it simple for now
 }
 
+// --- Layout mode tool-button references (set inside initToolbar) ---
+let toolBtnRect = null;
+let toolBtnLasso = null;
+let toolBtnCut = null;
+let toolBtnMeasure = null;
+let toolBtnArea = null;
+
 // --- Right Toolbar Buttons Logic ---
 function initToolbar() {
     console.log("Initializing toolbar...", rightToolbar);
@@ -314,16 +321,20 @@ function initToolbar() {
     createToolButton("tool-1", tool1Img, "Default mode", rightToolbar, () => {
         clearSelection(scene);
     });
-    createToolButton("tool-2", tool2Img, "Rectangle selection", rightToolbar);
-    createToolButton("tool-3", tool3Img, "Lasso selection", rightToolbar);
-    createToolButton("tool-4", tool4Img, "Cut mode", rightToolbar);
+    toolBtnRect = createToolButton("tool-2", tool2Img, "Rectangle selection", rightToolbar);
+    toolBtnLasso = createToolButton("tool-3", tool3Img, "Lasso selection", rightToolbar);
+    toolBtnCut = createToolButton("tool-4", tool4Img, "Cut mode", rightToolbar);
     createToolButton("tool-5", tool5Img, "Frame to PCD", rightToolbar);
+    const tool6Img = `<img src="${iconBase}measure.png" alt="Measure">`;
+    toolBtnMeasure = createToolButton("tool-6", tool6Img, "Measure distance", rightToolbar);
+    const tool7Img = `<img src="${iconBase}measure-area.png" alt="Measure Area">`;
+    toolBtnArea = createToolButton("tool-7", tool7Img, "Measure area", rightToolbar);
 
     // Initial active button
     document.getElementById("tool-1").classList.add("active");
 
     // Tool switching logic
-    [1, 2, 3, 4].forEach(i => {
+    [1, 2, 3, 4, 6, 7].forEach(i => {
         const btn = document.getElementById(`tool-${i}`);
         btn.addEventListener('click', () => {
             // Remove active from all stateful tools
@@ -334,12 +345,20 @@ function initToolbar() {
             btn.classList.add('active');
             activeTool = `tool-${i}`;
 
-            // Disable camera control only for drawing tools (2 = rect, 3 = lasso)
-            if (activeTool === "tool-2" || activeTool === "tool-3") {
+            // Disable camera control for drawing tools (rect, lasso) and measure
+            if (activeTool === "tool-2" || activeTool === "tool-3" || activeTool === "tool-6" || activeTool === "tool-7") {
                 camera.detachControl(canvas);
             } else {
                 camera.attachControl(canvas, true);
             }
+            // Hide measure guides when switching away
+            const measureGroup = document.getElementById('guide-measure');
+            if (measureGroup && activeTool !== "tool-6") measureGroup.style.display = "none";
+            const areaGroup = document.getElementById('guide-area');
+            if (areaGroup && activeTool !== "tool-7") areaGroup.style.display = "none";
+            // Reset measure/area state when switching away
+            if (activeTool !== "tool-6") clearMeasure();
+            if (activeTool !== "tool-7") clearArea();
 
             // Manage command guide visibility and content
             const guide = document.getElementById('command-guide');
@@ -355,6 +374,22 @@ function initToolbar() {
                     guide.classList.add('visible');
                     navGroup.style.display = "none";
                     selectionGroup.style.display = "block";
+                } else if (activeTool === "tool-6") {
+                    guide.classList.add('visible');
+                    navGroup.style.display = "none";
+                    selectionGroup.style.display = "none";
+                    const measureGroup = document.getElementById('guide-measure');
+                    if (measureGroup) measureGroup.style.display = "block";
+                    const areaGroupHide = document.getElementById('guide-area');
+                    if (areaGroupHide) areaGroupHide.style.display = "none";
+                } else if (activeTool === "tool-7") {
+                    guide.classList.add('visible');
+                    navGroup.style.display = "none";
+                    selectionGroup.style.display = "none";
+                    const measureGroupHide = document.getElementById('guide-measure');
+                    if (measureGroupHide) measureGroupHide.style.display = "none";
+                    const areaGroup = document.getElementById('guide-area');
+                    if (areaGroup) areaGroup.style.display = "block";
                 } else {
                     // tool-4 (Cut), tool-5 (Frame)
                     guide.classList.remove('visible');
@@ -481,7 +516,22 @@ trainingContent.appendChild(trainingInfo);
 
 const startTrainingButton = createButton("Start Training", "startTraining", trainingContent);
 
-// 4. Viewport Settings
+// 4. Classify (hidden by default — shown only in Classify mode)
+const classifySection = createAccordionSection("CLASSIFY", "sidebar-right-content");
+const classifyContent = classifySection.content;
+const classifySectionEl = classifySection.content.closest('.accordion-section');
+classifySectionEl.style.display = 'none';
+
+const classifyInfo = document.createElement('div');
+classifyInfo.style.fontSize = "0.75rem";
+classifyInfo.style.color = "var(--text-muted)";
+classifyInfo.style.lineHeight = "1.4";
+classifyInfo.textContent = "Run the trained Random Forest model on the full point cloud to assign a class label to every point.";
+classifyContent.appendChild(classifyInfo);
+
+const startClassifyButton = createButton("Start Classify", "startClassify", classifyContent);
+
+// 5. Viewport Settings
 const viewportSection = createAccordionSection("Viewport Settings", "sidebar-right-content");
 const viewportContent = viewportSection.content;
 
@@ -691,7 +741,528 @@ function updateLassoPath() {
     lassoPath.setAttribute("points", pointsStr);
 }
 
+// ---------------------------------------------------------------------------
+// MEASURE TOOL (tool-6) — click two points, show distance
+// ---------------------------------------------------------------------------
+let measurePoint1 = null;   // BABYLON.Vector3 | null
+let measurePoint2 = null;   // BABYLON.Vector3 | null
+let measureSphere1 = null;   // marker mesh
+let measureSphere2 = null;   // marker mesh
+let measureLine = null;   // LineSystem mesh
+let measureLabel = null;   // HTML div
+let measureMidpoint = null;   // BABYLON.Vector3 midpoint
+
+// Initialise the HTML label overlay (created once)
+function initMeasureLabel() {
+    if (document.getElementById('measure-label')) return;
+    measureLabel = document.createElement('div');
+    measureLabel.id = 'measure-label';
+    measureLabel.classList.add('measure-label');
+    measureLabel.style.display = 'none';
+    centralViewport.appendChild(measureLabel);
+}
+initMeasureLabel();
+
+// Dispose 3-D objects and reset state
+function disposeMeasureMarker(marker) {
+    if (!marker) return;
+    if (marker._scaleObserver) {
+        scene.onBeforeRenderObservable.remove(marker._scaleObserver);
+        marker._scaleObserver = null;
+    }
+    // Dispose all children (discs) then the root node
+    marker.getChildMeshes().forEach(m => m.dispose());
+    marker.dispose();
+}
+
+function clearMeasure() {
+    disposeMeasureMarker(measureSphere1); measureSphere1 = null;
+    disposeMeasureMarker(measureSphere2); measureSphere2 = null;
+    if (measureLine) { measureLine.dispose(); measureLine = null; }
+    measurePoint1 = null;
+    measurePoint2 = null;
+    measureMidpoint = null;
+    if (measureLabel) measureLabel.style.display = 'none';
+}
+
+// Create a small sphere marker at a world position
+// Returns a { root, update } object.
+// root is a TransformNode parenting two billboard discs:
+//   - outer ring  (halo, semi-transparent)
+//   - inner solid dot
+// update() rescales root so the marker stays a constant apparent size.
+function createMeasureMarker(position, name) {
+    const root = new BABYLON.TransformNode(name + 'Root', scene);
+    root.position.copyFrom(position);
+
+    // --- Outer halo disc ---
+    const halo = BABYLON.MeshBuilder.CreateDisc(name + 'Halo', { radius: 1, tessellation: 32 }, scene);
+    halo.parent = root;
+    halo.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
+    halo.isPickable = false;
+    halo.renderingGroupId = 2;
+    const haloMat = new BABYLON.StandardMaterial(name + 'HaloMat', scene);
+    haloMat.emissiveColor = BABYLON.Color3.FromHexString('#3b82f6');
+    haloMat.alpha = 0.25;
+    haloMat.backFaceCulling = false;
+    haloMat.disableLighting = true;
+    halo.material = haloMat;
+
+    // --- Border ring (slightly larger than dot, accent-blue) ---
+    const ring = BABYLON.MeshBuilder.CreateDisc(name + 'Ring', { radius: 0.58, tessellation: 32 }, scene);
+    ring.parent = root;
+    ring.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
+    ring.isPickable = false;
+    ring.renderingGroupId = 2;
+    const ringMat = new BABYLON.StandardMaterial(name + 'RingMat', scene);
+    ringMat.emissiveColor = BABYLON.Color3.FromHexString('#3b82f6');
+    ringMat.disableLighting = true;
+    ringMat.backFaceCulling = false;
+    ring.material = ringMat;
+    ring.position.z = -0.001;   // just behind the white dot
+
+    // Scale so the marker is ~18 px regardless of camera distance
+    function updateScale() {
+        const dist = BABYLON.Vector3.Distance(camera.position, position);
+        const s = dist * 0.01;   // tweak this constant to taste
+        root.scaling.setAll(Math.max(s, 0.01));
+    }
+    updateScale();
+
+    // Register per-frame rescaling
+    const observer = scene.onBeforeRenderObservable.add(updateScale);
+    root._scaleObserver = observer;   // stored so clearMeasure can remove it
+
+    return root;
+}
+
+// Draw / update the line between the two markers
+function updateMeasureLine() {
+    if (measureLine) { measureLine.dispose(); measureLine = null; }
+    if (!measurePoint1 || !measurePoint2) return;
+    measureLine = BABYLON.MeshBuilder.CreateDashedLines(
+        'measureLine',
+        {
+            points: [measurePoint1, measurePoint2],
+            dashSize: 0.4,
+            gapSize: 0.2,
+            dashNb: 40,
+            updatable: false
+        },
+        scene
+    );
+    const lineMat = new BABYLON.StandardMaterial('measureLineMat', scene);
+    lineMat.emissiveColor = BABYLON.Color3.FromHexString('#3b82f6');
+    lineMat.disableLighting = true;
+    measureLine.material = lineMat;
+    measureLine.isPickable = false;
+    measureLine.renderingGroupId = 1;
+}
+
+// Project a world point to canvas-space and update the label position
+function updateMeasureLabelPosition() {
+    if (!measureLabel || !measureMidpoint) return;
+    const projected = BABYLON.Vector3.Project(
+        measureMidpoint,
+        BABYLON.Matrix.Identity(),
+        scene.getTransformMatrix(),
+        camera.viewport.toGlobal(engine.getRenderWidth(), engine.getRenderHeight())
+    );
+    if (projected.z < 0 || projected.z > 1) {
+        measureLabel.style.display = 'none';
+        return;
+    }
+    measureLabel.style.display = 'block';
+    measureLabel.style.left = projected.x + 'px';
+    measureLabel.style.top = projected.y + 'px';
+}
+
+// Find the 3-D point in the loaded point cloud closest to a screen-space click
+// ---------------------------------------------------------------------------
+// PICKING CACHE
+// Caches raw Float32Array of positions per mesh so getVerticesData() is only
+// called once per loaded node instead of on every click.
+// ---------------------------------------------------------------------------
+const _pickPosCache = new Map();   // mesh -> Float32Array
+
+function _getPickCache(mesh) {
+    if (_pickPosCache.has(mesh)) return _pickPosCache.get(mesh);
+    const pos = mesh.getVerticesData(BABYLON.VertexBuffer.PositionKind);
+    if (pos) _pickPosCache.set(mesh, pos);
+    return pos || null;
+}
+
+function _evictPickCache() {
+    for (const mesh of _pickPosCache.keys()) {
+        if (!mesh._scene || mesh.isDisposed()) _pickPosCache.delete(mesh);
+    }
+}
+
+function pickClosestPointInCloud(screenX, screenY) {
+    const loader = scene.potree2Loader;
+    if (!loader || !loader.loadedNodes || loader.loadedNodes.size === 0) return null;
+
+    _evictPickCache();
+
+    const worldMatrix = loader.rootTransform
+        ? loader.rootTransform.getWorldMatrix()
+        : BABYLON.Matrix.Identity();
+    const vp = camera.viewport.toGlobal(engine.getRenderWidth(), engine.getRenderHeight());
+
+    const vpScale = BABYLON.Matrix.FromValues(
+        vp.width / 2, 0, 0, 0,
+        0, -vp.height / 2, 0, 0,
+        0, 0, 1, 0,
+        vp.x + vp.width / 2, vp.y + vp.height / 2, 0, 1
+    );
+    const m = worldMatrix.multiply(scene.getTransformMatrix()).multiply(vpScale).m;
+    const wm = worldMatrix.m;
+
+    // PHASE 1: cull nodes whose screen bounding sphere is far from the click
+    const CULL_R2 = 200 * 200;  // 200 px radius
+    const candidates = [];
+    for (const mesh of loader.loadedNodes.values()) {
+        if (!mesh.isVisible) continue;
+        const bb = mesh.getBoundingInfo();
+        if (!bb) { candidates.push({ mesh, minD2: 0 }); continue; }
+        const c = bb.boundingSphere.centerWorld;
+        const cw = c.x * m[3] + c.y * m[7] + c.z * m[11] + m[15];
+        if (cw <= 0) continue;
+        const cx = (c.x * m[0] + c.y * m[4] + c.z * m[8] + m[12]) / cw;
+        const cy = (c.x * m[1] + c.y * m[5] + c.z * m[9] + m[13]) / cw;
+        const screenR = (bb.boundingSphere.radiusWorld / cw) * (vp.width / 2);
+        const ddx = cx - screenX, ddy = cy - screenY;
+        const distCenter = Math.sqrt(ddx * ddx + ddy * ddy);
+        const minD = Math.max(0, distCenter - screenR);
+        if (minD * minD > CULL_R2) continue;
+        candidates.push({ mesh, minD2: minD * minD });
+    }
+
+    // Sort closer nodes first so bestDist2 tightens quickly
+    candidates.sort((a, b) => a.minD2 - b.minD2);
+
+    // PHASE 2: iterate points only in candidate nodes
+    let bestDist2 = Infinity;
+    let bestX = 0, bestY = 0, bestZ = 0;
+    let found = false;
+
+    for (const { mesh, minD2 } of candidates) {
+        if (minD2 >= bestDist2) continue;  // entire node is farther than current best
+        const pos = _getPickCache(mesh);
+        if (!pos) continue;
+        const n = pos.length / 3;
+        for (let i = 0; i < n; i++) {
+            const lx = pos[i * 3], ly = pos[i * 3 + 1], lz = pos[i * 3 + 2];
+            const w = lx * m[3] + ly * m[7] + lz * m[11] + m[15];
+            if (w <= 0) continue;
+            const sx = (lx * m[0] + ly * m[4] + lz * m[8] + m[12]) / w;
+            const sy = (lx * m[1] + ly * m[5] + lz * m[9] + m[13]) / w;
+            const dx = sx - screenX, dy = sy - screenY;
+            const d2 = dx * dx + dy * dy;
+            if (d2 < bestDist2) {
+                bestDist2 = d2;
+                const ww = lx * wm[3] + ly * wm[7] + lz * wm[11] + wm[15];
+                bestX = (lx * wm[0] + ly * wm[4] + lz * wm[8] + wm[12]) / ww;
+                bestY = (lx * wm[1] + ly * wm[5] + lz * wm[9] + wm[13]) / ww;
+                bestZ = (lx * wm[2] + ly * wm[6] + lz * wm[10] + wm[14]) / ww;
+                found = true;
+            }
+        }
+    }
+    return found ? new BABYLON.Vector3(bestX, bestY, bestZ) : null;
+}
+
+// Pointer observer for the measure tool
+scene.onPointerObservable.add((pointerInfo) => {
+    if (activeTool !== 'tool-6') return;
+    if (pointerInfo.type !== BABYLON.PointerEventTypes.POINTERDOWN) return;
+    if (pointerInfo.event.button !== 0) return;
+
+    const sx = scene.pointerX;
+    const sy = scene.pointerY;
+
+    const hit = pickClosestPointInCloud(sx, sy);
+    if (!hit) return;
+
+    if (!measurePoint1) {
+        // First click: place point A
+        clearMeasure();
+        measurePoint1 = hit.clone();
+        measureSphere1 = createMeasureMarker(measurePoint1, 'measureSphere1');
+    } else {
+        // Second click: place point B, draw line, show label
+        measurePoint2 = hit.clone();
+        measureSphere2 = createMeasureMarker(measurePoint2, 'measureSphere2');
+        measureMidpoint = BABYLON.Vector3.Lerp(measurePoint1, measurePoint2, 0.5);
+
+        updateMeasureLine();
+
+        const dist = BABYLON.Vector3.Distance(measurePoint1, measurePoint2);
+        const label = dist >= 1
+            ? dist.toFixed(3) + ' m'
+            : (dist * 100).toFixed(1) + ' cm';
+
+        if (measureLabel) {
+            measureLabel.textContent = label;
+            updateMeasureLabelPosition();
+        }
+
+        // Reset so the next click starts a fresh measurement
+        measurePoint1 = null;
+        measurePoint2 = null;
+    }
+});
+
+// Update label screen position on every frame
+scene.onBeforeRenderObservable.add(() => {
+    if (measureMidpoint && measureLabel && measureLabel.style.display !== 'none') {
+        updateMeasureLabelPosition();
+    }
+});
+
+
+// ---------------------------------------------------------------------------
+// AREA TOOL (tool-7) — click N points, double-click to close, shows area
+// ---------------------------------------------------------------------------
+let areaPoints = [];    // BABYLON.Vector3[]
+let areaMarkers = [];    // TransformNode[] (one per vertex)
+let areaEdgeLines = [];    // dashed line meshes for each edge
+let areaFillMesh = null;  // unused, kept for reference
+let areaSvgPolygon = null;  // SVG polygon element for the fill
+let areaPreviewLine = null;  // line from last point to cursor
+let areaLabel = null;  // HTML div
+let areaLabelPos = null;  // BABYLON.Vector3 centroid
+
+function initAreaLabel() {
+    if (document.getElementById('area-label')) return;
+    areaLabel = document.createElement('div');
+    areaLabel.id = 'area-label';
+    areaLabel.classList.add('measure-label', 'area-label');
+    areaLabel.style.display = 'none';
+    centralViewport.appendChild(areaLabel);
+}
+initAreaLabel();
+
+function clearArea() {
+    if (_areaSingleClickTimer) { clearTimeout(_areaSingleClickTimer); _areaSingleClickTimer = null; }
+    areaMarkers.forEach(m => disposeMeasureMarker(m));
+    areaMarkers = [];
+    areaEdgeLines.forEach(l => l.dispose());
+    areaEdgeLines = [];
+    if (areaFillMesh) { areaFillMesh.dispose(); areaFillMesh = null; }
+    if (areaSvgPolygon) { areaSvgPolygon.remove(); areaSvgPolygon = null; }
+    if (areaPreviewLine) { areaPreviewLine.dispose(); areaPreviewLine = null; }
+    areaPoints = [];
+    areaLabelPos = null;
+    if (areaLabel) areaLabel.style.display = 'none';
+}
+
+// Build a dashed edge line between two world points
+function createAreaEdge(pA, pB, idx) {
+    const line = BABYLON.MeshBuilder.CreateDashedLines(
+        'areaEdge' + idx,
+        { points: [pA, pB], dashSize: 0.4, gapSize: 0.2, dashNb: 40 },
+        scene
+    );
+    const mat = new BABYLON.StandardMaterial('areaEdgeMat' + idx, scene);
+    mat.emissiveColor = BABYLON.Color3.FromHexString('#22d3ee');  // cyan-400
+    mat.disableLighting = true;
+    line.material = mat;
+    line.isPickable = false;
+    line.renderingGroupId = 1;
+    return line;
+}
+
+// Re-build the SVG fill polygon projected to screen space
+function updateAreaFill() {
+    if (areaSvgPolygon) { areaSvgPolygon.remove(); areaSvgPolygon = null; }
+    if (areaPoints.length < 3 || !lassoOverlay) return;
+
+    const transformMatrix = scene.getTransformMatrix();
+    const vp = camera.viewport.toGlobal(engine.getRenderWidth(), engine.getRenderHeight());
+
+    const ptStr = areaPoints.map(p => {
+        const proj = BABYLON.Vector3.Project(p, BABYLON.Matrix.Identity(), transformMatrix, vp);
+        return proj.x + ',' + proj.y;
+    }).join(' ');
+
+    areaSvgPolygon = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+    areaSvgPolygon.setAttribute('points', ptStr);
+    areaSvgPolygon.setAttribute('class', 'area-fill-polygon');
+    lassoOverlay.appendChild(areaSvgPolygon);
+    lassoOverlay.style.display = 'block';
+}
+
+// Shoelace formula on the 3-D polygon (works for planar polygons)
+function computeArea3D(pts) {
+    if (pts.length < 3) return 0;
+    // Sum of cross products
+    let cross = BABYLON.Vector3.Zero();
+    for (let i = 0; i < pts.length; i++) {
+        const a = pts[i];
+        const b = pts[(i + 1) % pts.length];
+        cross = cross.add(BABYLON.Vector3.Cross(a, b));
+    }
+    return cross.length() * 0.5;
+}
+
+// Centroid of the polygon vertices
+function centroid3D(pts) {
+    const c = BABYLON.Vector3.Zero();
+    pts.forEach(p => c.addInPlace(p));
+    return c.scale(1 / pts.length);
+}
+
+function updateAreaLabelPosition() {
+    if (!areaLabel || !areaLabelPos) return;
+    const projected = BABYLON.Vector3.Project(
+        areaLabelPos,
+        BABYLON.Matrix.Identity(),
+        scene.getTransformMatrix(),
+        camera.viewport.toGlobal(engine.getRenderWidth(), engine.getRenderHeight())
+    );
+    if (projected.z < 0 || projected.z > 1) { areaLabel.style.display = 'none'; return; }
+    areaLabel.style.display = 'block';
+    areaLabel.style.left = projected.x + 'px';
+    areaLabel.style.top = projected.y + 'px';
+}
+
+// Close the polygon, compute and display area
+function closeAreaPolygon() {
+    if (areaPoints.length < 3) return;
+
+    // Close the last edge back to the first point
+    const closingEdge = createAreaEdge(areaPoints[areaPoints.length - 1], areaPoints[0], areaEdgeLines.length);
+    areaEdgeLines.push(closingEdge);
+
+    // Remove preview line
+    if (areaPreviewLine) { areaPreviewLine.dispose(); areaPreviewLine = null; }
+
+    updateAreaFill();
+
+    const area = computeArea3D(areaPoints);
+    areaLabelPos = centroid3D(areaPoints);
+
+    const label = area >= 1
+        ? area.toFixed(3) + ' mq'
+        : (area * 10000).toFixed(1) + ' cmq';
+
+    if (areaLabel) {
+        areaLabel.textContent = label;
+        updateAreaLabelPosition();
+    }
+
+    // Reset points so next click starts fresh
+    areaPoints = [];
+}
+
+// Pointer observer for the area tool
+// State to distinguish single-click from double-click
+let _areaSingleClickTimer = null;
+
+scene.onPointerObservable.add((pointerInfo) => {
+    if (activeTool !== 'tool-7') return;
+
+    const sx = scene.pointerX;
+    const sy = scene.pointerY;
+
+    // POINTERUP left button — handles both single and double click
+    if (pointerInfo.type === BABYLON.PointerEventTypes.POINTERUP &&
+        pointerInfo.event.button === 0) {
+
+        // Double-click detected (detail >= 2 on the native event)
+        if (pointerInfo.event.detail >= 2) {
+            if (_areaSingleClickTimer) { clearTimeout(_areaSingleClickTimer); _areaSingleClickTimer = null; }
+            closeAreaPolygon();
+            return;
+        }
+
+        // Single click — defer slightly to let double-click cancel it
+        if (_areaSingleClickTimer) { clearTimeout(_areaSingleClickTimer); }
+        const capX = sx, capY = sy;
+        _areaSingleClickTimer = setTimeout(() => {
+            _areaSingleClickTimer = null;
+
+            const hit = pickClosestPointInCloud(capX, capY);
+            if (!hit) return;
+
+            // Clicking near first point (≥ 3 pts already) → close polygon
+            if (areaPoints.length >= 3) {
+                const viewport = camera.viewport.toGlobal(engine.getRenderWidth(), engine.getRenderHeight());
+                const proj0 = BABYLON.Vector3.Project(
+                    areaPoints[0], BABYLON.Matrix.Identity(),
+                    scene.getTransformMatrix(), viewport
+                );
+                const dx = proj0.x - capX, dy = proj0.y - capY;
+                if (dx * dx + dy * dy < 400) {  // 20 px snap radius
+                    closeAreaPolygon();
+                    return;
+                }
+            }
+
+            // Add edge from previous point
+            if (areaPoints.length > 0) {
+                const edge = createAreaEdge(areaPoints[areaPoints.length - 1], hit, areaEdgeLines.length);
+                areaEdgeLines.push(edge);
+            }
+
+            // Place marker and record point
+            const marker = createMeasureMarker(hit.clone(), 'areaMark' + areaPoints.length);
+            areaMarkers.push(marker);
+            areaPoints.push(hit.clone());
+
+        }, 220);  // 220 ms window to detect double-click
+    }
+
+    // POINTERMOVE — preview line from last vertex to cursor (no expensive picking)
+    if (pointerInfo.type === BABYLON.PointerEventTypes.POINTERMOVE && areaPoints.length > 0) {
+        // Cast a ray onto the approximate plane of already-placed points
+        const ray = scene.createPickingRay(sx, sy, BABYLON.Matrix.Identity(), camera);
+        // Use the mean Y of existing points as the target plane (good enough for most clouds)
+        const planeY = areaPoints.reduce((s, p) => s + p.y, 0) / areaPoints.length;
+        let cursorPt;
+        if (Math.abs(ray.direction.y) > 1e-4) {
+            const t = (planeY - ray.origin.y) / ray.direction.y;
+            if (t > 0) {
+                cursorPt = ray.origin.add(ray.direction.scale(t));
+            }
+        }
+        if (!cursorPt) return;
+
+        if (areaPreviewLine) { areaPreviewLine.dispose(); areaPreviewLine = null; }
+        areaPreviewLine = BABYLON.MeshBuilder.CreateDashedLines(
+            'areaPreview',
+            { points: [areaPoints[areaPoints.length - 1], cursorPt], dashSize: 0.3, gapSize: 0.3, dashNb: 30 },
+            scene
+        );
+        const pMat = new BABYLON.StandardMaterial('areaPreviewMat', scene);
+        pMat.emissiveColor = BABYLON.Color3.FromHexString('#22d3ee');
+        pMat.alpha = 0.5;
+        pMat.disableLighting = true;
+        areaPreviewLine.material = pMat;
+        areaPreviewLine.isPickable = false;
+        areaPreviewLine.renderingGroupId = 1;
+    }
+});
+
+// Per-frame: reproject SVG fill and keep label pinned
+scene.onBeforeRenderObservable.add(() => {
+    if (areaLabelPos && areaLabel && areaLabel.style.display !== 'none') {
+        updateAreaLabelPosition();
+    }
+    if (areaSvgPolygon && areaPoints.length >= 3) {
+        const tm = scene.getTransformMatrix();
+        const vp = camera.viewport.toGlobal(engine.getRenderWidth(), engine.getRenderHeight());
+        const ptStr = areaPoints.map(p => {
+            const proj = BABYLON.Vector3.Project(p, BABYLON.Matrix.Identity(), tm, vp);
+            return proj.x + ',' + proj.y;
+        }).join(' ');
+        areaSvgPolygon.setAttribute('points', ptStr);
+    }
+});
+
 // --- Helpers: Grid ---
+
 const gridGround = BABYLON.MeshBuilder.CreateGround("gridGround", { width: 10000, height: 10000 }, scene);
 const gridMaterial = new BABYLON.GridMaterial("gridMaterial", scene);
 gridMaterial.mainColor = BABYLON.Color4.FromHexString(bgColor + "FF");
@@ -867,6 +1438,15 @@ window.addEventListener('contextmenu', (e) => {
 }, false);
 
 // --- Keyboard Shortcuts ---
+// Esc cancels a measure in progress
+window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && activeTool === 'tool-6') {
+        clearMeasure();
+    } else if (e.key === 'Escape' && activeTool === 'tool-7') {
+        clearArea();
+    }
+});
+
 // Active only when a selection tool (rect or lasso) is active:
 // I → Invert Selection
 // Escape → Deselect All
@@ -897,6 +1477,52 @@ window.addEventListener('keydown', handleSelectionKeydown, { capture: true });
 initViewMenu();
 initColorMenu();
 initToolbar();
+
+// Inject guide-measure group into the command-guide (hidden by default)
+(function () {
+    const guide = document.getElementById('command-guide');
+    if (!guide) return;
+    const g = document.createElement('div');
+    g.id = 'guide-measure';
+    g.style.display = 'none';
+    g.innerHTML = `
+        <div class="command-item">
+            <div class="mouse-icon left"></div>
+            <span style="font-size:0.75rem;color:var(--text-primary)">1st click — set point A</span>
+        </div>
+        <div class="command-item">
+            <div class="mouse-icon left"></div>
+            <span style="font-size:0.75rem;color:var(--text-primary)">2nd click — set point B &amp; measure</span>
+        </div>
+        <div class="command-item">
+            <div class="command-key-container"><span class="command-key">Esc</span></div>
+            <span style="font-size:0.75rem;color:var(--text-muted)">cancel</span>
+        </div>`;
+    guide.appendChild(g);
+})();
+
+// Inject guide-area group into the command-guide (hidden by default)
+(function () {
+    const guide = document.getElementById('command-guide');
+    if (!guide) return;
+    const g = document.createElement('div');
+    g.id = 'guide-area';
+    g.style.display = 'none';
+    g.innerHTML = `
+        <div class="command-item">
+            <div class="mouse-icon left"></div>
+            <span style="font-size:0.75rem;color:var(--text-primary)">Click — add vertex</span>
+        </div>
+        <div class="command-item">
+            <div class="mouse-icon left"></div>
+            <span style="font-size:0.75rem;color:var(--text-primary)">Double-click — close &amp; compute</span>
+        </div>
+        <div class="command-item">
+            <div class="command-key-container"><span class="command-key">Esc</span></div>
+            <span style="font-size:0.75rem;color:var(--text-muted)">cancel</span>
+        </div>`;
+    guide.appendChild(g);
+})();
 
 // --- Tool Actions ---
 
@@ -1050,8 +1676,8 @@ if (startTrainingButton) {
 
                 // The LAS source is always the processed features file
                 const lasSourcePath = "viewer/static/viewer/data/features.las";
-                // Output dir: same /static/viewer/data/ folder where bin/json were saved
-                const outputDir = "viewer/static/viewer/data";
+                // Output dir: /static/viewer/data/workdir/ folder where bin/json were saved
+                const outputDir = "viewer/static/viewer/data/workdir/";
 
                 const splitResponse = await fetch('/split_las_by_binary/', {
                     method: 'POST',
@@ -1075,8 +1701,43 @@ if (startTrainingButton) {
                 const splitData = await splitResponse.json();
                 console.log("✅ LAS split completed:", splitData);
 
+                // ── STEP 4: Launch RF Training ───────────────────────
+                setStatus("⏳ Training RF Model...");
+                console.log("🤖 Step 4: Launching Random Forest training...");
+
+                const rfParams = params.rf_params;
+                const trainingPayload = {
+                    selected_features: params.features,
+                    training_filepath: `${outputDir}training.las`,
+                    val_filepath: `${outputDir}validation.las`,
+                    n_jobs: rfParams.n_jobs ?? 12,
+                    nr_estimators: rfParams.n_estimators ?? 200,
+                    max_depth: rfParams.max_depth ?? 15,
+                    min_samples_split: rfParams.min_samples_split ?? 20,
+                    max_features: rfParams.max_features ?? 'sqrt',
+                    use_gpu: rfParams.use_gpu ?? false,
+                    output_training_name: `${outputDir}test_predicted.las`,
+                    model_savepath: `${outputDir}rf_model.pkl`
+                };
+
+                const trainResponse = await fetch('/launch_RF_training/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || ''
+                    },
+                    body: JSON.stringify(trainingPayload)
+                });
+
+                if (!trainResponse.ok) {
+                    const errData = await trainResponse.json().catch(() => ({}));
+                    throw new Error(errData.message || errData.error || 'RF training failed');
+                }
+
+                console.log("✅ RF Training completed successfully.");
+
                 // ── Done ─────────────────────────────────────────────────
-                alert(`Training data ready!\n\nBinary:  ${saveData.filename}\nMetadata: ${saveData.labels_filename}\nLAS segments saved in: ${outputDir}`);
+                alert(`✅ Training complete!\n\nModel saved to: ${trainingPayload.model_savepath}`);
 
             } catch (error) {
                 console.error("❌ Training pipeline error:", error);
@@ -1088,3 +1749,57 @@ if (startTrainingButton) {
         });
     });
 }
+
+// ---------------------------------------------------------------------------
+// LAYOUT MODE  (Training ↔ Classify)
+// ---------------------------------------------------------------------------
+let currentLayoutMode = 'training'; // 'training' | 'classify'
+
+// DOM references for the three sidebar-right accordion sections
+const featureSectionEl = featuresSection.content.closest('.accordion-section');
+const trainingSectionEl = trainingSection.content.closest('.accordion-section');
+const classesSectionEl = classesSection.content.closest('.accordion-section');
+// classifySectionEl is already declared above at section-creation time
+
+function setLayoutMode(mode) {
+    if (currentLayoutMode === mode) return;
+    currentLayoutMode = mode;
+
+    const isClassify = (mode === 'classify');
+
+    // --- Sidebar-right sections -----------------------------------------
+    featureSectionEl.style.display = isClassify ? 'none' : '';
+    trainingSectionEl.style.display = isClassify ? 'none' : '';
+    classifySectionEl.style.display = isClassify ? '' : 'none';
+
+    // --- Sidebar-left sections ------------------------------------------
+    classesSectionEl.style.display = isClassify ? 'none' : '';
+
+    // --- Toolbar buttons ------------------------------------------------
+    // toolBtnRect / toolBtnLasso / toolBtnCut are the actual <button> elements
+    // returned by createToolButton and stored at module level.
+    if (toolBtnRect) toolBtnRect.style.display = isClassify ? 'none' : '';
+    if (toolBtnLasso) toolBtnLasso.style.display = isClassify ? 'none' : '';
+    if (toolBtnCut) toolBtnCut.style.display = isClassify ? 'none' : '';
+
+    // If the active tool is one of the hidden ones, snap back to tool-1
+    if (isClassify && (activeTool === 'tool-2' || activeTool === 'tool-3' || activeTool === 'tool-4')) {
+        const defaultBtn = document.getElementById('tool-1');
+        if (defaultBtn) defaultBtn.click();
+    }
+
+    console.log('🔄 Layout mode switched to:', mode);
+}
+
+// Bind nav-mode-btn clicks.
+// Mode is derived from button text (case-insensitive): "training" or "classify".
+// If data-mode is present it takes priority, otherwise falls back to textContent.
+document.querySelectorAll('.nav-mode-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        if (btn.classList.contains('active')) return;
+        document.querySelectorAll('.nav-mode-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        const mode = btn.dataset.mode || btn.textContent.trim().toLowerCase();
+        setLayoutMode(mode);
+    });
+});

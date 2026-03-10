@@ -1531,8 +1531,13 @@ function showLoadModal() {
                 // Track current step for error handling
                 let currentStepIdx = 0;
 
+                // Sentinel error to silently abort the pipeline when user cancels
+                const CANCELLED = Symbol('CANCELLED');
+                const checkCancelled = () => { if (isCancelled) throw CANCELLED; };
+
                 try {
                     // STEP 1: Clear current data directory
+                    checkCancelled();
                     currentStepIdx = 0;
                     activateStep(0);
                     console.log("🧹 Step 1: Clearing /static/viewer/data/...");
@@ -1542,6 +1547,7 @@ function showLoadModal() {
                     console.log("✅ Workspace cleared");
 
                     // STEP 2: Upload the source file
+                    checkCancelled();
                     currentStepIdx = 1;
                     activateStep(1);
                     console.log("📤 Step 2: Uploading file to /static/viewer/data/...");
@@ -1559,6 +1565,7 @@ function showLoadModal() {
                     console.log("✅ File uploaded");
 
                     // STEP 3: Handle conversion based on extension
+                    checkCancelled();
                     currentStepIdx = 2;
                     activateStep(2);
                     const filename = file.name;
@@ -1599,6 +1606,7 @@ function showLoadModal() {
                     completeStep(2);
 
                     // STEP 4: Feature Extraction
+                    checkCancelled();
                     currentStepIdx = 3;
                     activateStep(3);
                     console.log("🧠 Step 4: Starting feature extraction...");
@@ -1625,6 +1633,7 @@ function showLoadModal() {
                     console.log("✅ Features extracted");
 
                     // STEP 5: PotreeConverter
+                    checkCancelled();
                     currentStepIdx = 4;
                     activateStep(4);
                     console.log("🧠 Step 5: Starting Potree conversion...");
@@ -1644,6 +1653,7 @@ function showLoadModal() {
                     console.log("✅ Potree conversion completed");
 
                     // STEP 6: Final Loading in Babylon
+                    checkCancelled();
                     currentStepIdx = 5;
                     activateStep(5);
                     console.log("🏗️ Step 6: Loading Potree data from /data/clusters/...");
@@ -1675,6 +1685,8 @@ function showLoadModal() {
                     }
 
                 } catch (err) {
+                    if (err === CANCELLED) return; // pipeline aborted by user, exit silently
+
                     console.error("❌ Processing Pipeline Error:", err);
 
                     if (isCancelled) return; // pipeline aborted by user, don't show error UI
@@ -2139,10 +2151,16 @@ export function showTrainingModal(scene, onStart) {
                 // Extract RF params directly from named inputs/toggle
                 const algoSec = body.querySelectorAll('.modal-section')[2];
                 const rfInputs = algoSec.querySelectorAll('input[type="number"]');
-                const gpuBtn = algoSec.querySelector('.rf-toggle-btn');
+                const allToggleBtns = algoSec.querySelectorAll('.rf-toggle-btn');
+                const gpuBtn = allToggleBtns[0];
+                const rgbBtn = allToggleBtns[1];
+                const useRgb = rgbBtn?.getAttribute('data-on') === 'true';
+                const finalFeatures = useRgb
+                    ? [...selectedFeatures, 'red', 'green', 'blue']
+                    : selectedFeatures;
                 const params = {
                     split,
-                    features: selectedFeatures,
+                    features: finalFeatures,
                     rf_params: {
                         n_estimators: parseInt(rfInputs[0]?.value) || 200,
                         max_depth: parseInt(rfInputs[1]?.value) || 15,

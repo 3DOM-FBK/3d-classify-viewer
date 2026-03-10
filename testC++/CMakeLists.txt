@@ -70,3 +70,17 @@ set_target_properties(ply2las PROPERTIES
     INSTALL_RPATH "${open3d_lib_dir}"
     INSTALL_RPATH_USE_LINK_PATH TRUE
 )
+
+# --- Split LAS by Binary ---
+add_executable(split_las_by_binary split_las_by_binary.cpp)
+target_include_directories(split_las_by_binary PRIVATE 
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    /app/PDAL/vendor/nlohmann
+)
+target_link_libraries(split_las_by_binary
+    PRIVATE
+        ${PCL_LIBRARIES}
+        ${PDAL_LIBRARIES}
+        OpenMP::OpenMP_CXX
+)
+target_compile_options(split_las_by_binary PRIVATE ${OpenMP_CXX_FLAGS})

@@ -1979,3 +1979,57 @@ input[type="number"].property-input::-webkit-outer-spin-button:active {
     background-color: #2563eb;
     border-color: #2563eb;
 }
+
+/* =========================================================
+   MEASURE TOOL
+   ========================================================= */
+
+.measure-label {
+    position: absolute;
+    background: rgba(18, 18, 20, 0.82);
+    backdrop-filter: blur(8px);
+    border: 1px solid var(--accent-blue);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: #ffffff;
+    pointer-events: none;
+    z-index: 200;
+    white-space: nowrap;
+    box-shadow: 0 2px 12px rgba(59, 130, 246, 0.35);
+    letter-spacing: 0.3px;
+    transform: translate(-50%, -50%);
+    transition: opacity 0.15s ease;
+}
+
+.measure-label::before {
+    content: '';
+    position: absolute;
+    left: -5px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 8px;
+    height: 8px;
+    background: var(--accent-blue);
+    border-radius: 50%;
+    box-shadow: 0 0 6px rgba(59, 130, 246, 0.8);
+}
+
+/* Area label — same pill as measure-label but cyan accent */
+.area-label {
+    border-color: #22d3ee;
+    box-shadow: 0 2px 12px rgba(34, 211, 238, 0.35);
+}
+
+.area-label::before {
+    background: #22d3ee;
+    box-shadow: 0 0 6px rgba(34, 211, 238, 0.8);
+}
+
+/* Area tool: SVG polygon fill */
+.area-fill-polygon {
+    fill: rgba(34, 211, 238, 0.15);
+    stroke: none;
+    pointer-events: none;
+}

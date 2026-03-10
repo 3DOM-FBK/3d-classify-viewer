@@ -238,10 +238,16 @@ def write_classification_las(X, Y, filename, header, source_las_path=None):
         return clean.strip('_')
 
     # Campi built-in LAS: non vanno aggiunti come extra dims
+    # LAS_BUILTIN = {'x', 'y', 'z', 'r', 'red', 'g', 'green', 'b', 'blue',
+    #                'intensity', 'classification', 'return_number', 'number_of_returns',
+    #                'scan_direction_flag', 'edge_of_flight_line', 'synthetic',
+    #                'key_point', 'withheld', 'scan_angle_rank', 'scan_angle', 'user_data', 'point_source_id'}
     LAS_BUILTIN = {'x', 'y', 'z', 'r', 'red', 'g', 'green', 'b', 'blue',
-                   'intensity', 'classification', 'return_number', 'number_of_returns',
-                   'scan_direction_flag', 'edge_of_flight_line', 'synthetic',
-                   'key_point', 'withheld', 'scan_angle_rank', 'user_data', 'point_source_id'}
+               'intensity', 'classification', 'return_number', 'number_of_returns',
+               'scan_direction_flag', 'edge_of_flight_line', 'synthetic',
+               'key_point', 'withheld', 'scan_angle_rank', 'scan_angle', 'user_data', 'point_source_id',
+               'gps_time', 'scanner_channel', 'scan_channel', 'overlap',
+               'classification_flags', 'normal_x', 'normal_y', 'normal_z'}
 
     name_map = {}
     seen = set()
@@ -459,6 +465,11 @@ def main():
 
     print(f'Check the complete report in the folder: {report_fname}')
     ''' ******************************************************************************************** '''
+
+    tot_sec = round(t4 - total_start, 2)
+    tot_min = int(tot_sec // 60)
+    tot_sec = int(tot_sec % 60)
+
     np.set_printoptions(precision=4)
     file = open(report_fname,"w") 
     file.write("Overall Accuracy\n\n")
@@ -530,11 +541,7 @@ def main():
 
     print(f"Model saved on {model_savepath}")
     save_model(model, model_savepath )
-
-
-    tot_sec = round(t4 - total_start, 2)
-    tot_min = int(tot_sec // 60)
-    tot_sec = int(tot_sec % 60)
+    
     if tot_min > 0:
         print(f'---> Total time {tot_min} min {tot_sec} sec')
     else:
