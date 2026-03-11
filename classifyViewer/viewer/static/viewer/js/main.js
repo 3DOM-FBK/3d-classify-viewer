@@ -151,42 +151,45 @@ function initColorMenu() {
 }
 
 /**
- * Called after the point cloud loads to inject attribute entries into the color menu.
- * @param {string[]} attributeNames - list of visualizable attribute names.
+ * Called after loadFeatureBin() completes. Adds/refreshes the Features section
+ * in the color menu. Safe to call multiple times (e.g. after recalculate).
+ * @param {string[]} featureNames
  */
-function addAttributesToColorMenu(attributeNames) {
-    if (!_colorMenuDropdown || attributeNames.length === 0) return;
+function addFeaturesToColorMenu(featureNames) {
+    if (!_colorMenuDropdown || featureNames.length === 0) return;
 
-    // Avoid duplicates if called more than once
-    if (_colorMenuDropdown.querySelector('.dropdown-separator')) return;
+    // Remove previous feature section if present (supports refresh)
+    const existing = _colorMenuDropdown.querySelector('.dropdown-feature-section');
+    if (existing) existing.remove();
+
+    const section = document.createElement('div');
+    section.classList.add('dropdown-feature-section');
 
     const sep = document.createElement('div');
     sep.classList.add('dropdown-separator');
-    _colorMenuDropdown.appendChild(sep);
+    section.appendChild(sep);
 
-    // Scrollable container for attribute entries
     const scrollBox = document.createElement('div');
     scrollBox.classList.add('dropdown-attr-scroll');
-    _colorMenuDropdown.appendChild(scrollBox);
+    section.appendChild(scrollBox);
 
-    attributeNames.forEach(attrName => {
+    featureNames.forEach(featName => {
         const opt = document.createElement('button');
         opt.classList.add('dropdown-option');
-        opt.textContent = `📊 ${attrName}`;
+        opt.textContent = `🔬 ${featName}`;
         opt.onclick = () => {
-            switchColorMode(`attr:${attrName}`);
-            _colorMenuBtn.textContent = attrName;
+            switchColorMode(`feature:${featName}`);
+            _colorMenuBtn.textContent = featName;
             _colorMenuDropdown.classList.remove('show');
         };
         scrollBox.appendChild(opt);
     });
+
+    _colorMenuDropdown.appendChild(section);
 }
 
-// Listen for the event fired by loadPotree2PointCloud (after loader is ready)
-window.addEventListener('potree2-loaded', (e) => {
-    const attrs = e.detail.loader.getAttributeList();
-    console.log('📋 Visualizable attributes:', attrs);
-    addAttributesToColorMenu(attrs);
+window.addEventListener('feature-bin-loaded', (e) => {
+    addFeaturesToColorMenu(e.detail.names);
 });
 
 function closeAllDropdowns() {
@@ -496,6 +499,26 @@ recalculateButton.onclick = () => {
                 throw new Error(errData.message || errData.error || "Feature recalculation failed");
             }
             console.log("✅ Features recalculated successfully");
+
+            // Regenerate feature bin and refresh color menu
+            const featureBinRes = await fetch('/las_to_feature_bin/', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': document.querySelector('meta[name="csrf-token"]').getAttribute('content') },
+                body: JSON.stringify({
+                    las_path: `viewer/static/viewer/data/features.las`,
+                    bin_path: `viewer/static/viewer/data/features.bin`
+                })
+            });
+            if (!featureBinRes.ok) {
+                const errData = await featureBinRes.json().catch(() => ({}));
+                throw new Error(errData.message || errData.error || "Feature bin generation failed");
+            }
+            const recalcLoader = window.__babylonScene?.potree2Loader;
+            if (recalcLoader) {
+                const featureNames = await recalcLoader.loadFeatureBin(`/static/viewer/data/features.bin`);
+                window.dispatchEvent(new CustomEvent('feature-bin-loaded', { detail: { names: featureNames } }));
+            }
+            console.log("✅ Feature bin regenerated");
         } catch (err) {
             console.error("❌ Feature recalculation error:", err);
             alert(`Feature recalculation failed: ${err.message}`);

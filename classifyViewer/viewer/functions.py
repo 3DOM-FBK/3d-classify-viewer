@@ -326,3 +326,27 @@ def split_las_by_binary(las_path: str, bin_path: str, meta_path: str, output_dir
     ]
 
     job.launch_subprocess(command)
+
+def las_to_feature_bin(las_path: str, bin_path: str):
+    """
+    Converts a features.las file into a compact binary (features.bin) for
+    fast per-point feature lookup in the Babylon.js viewer.
+
+    Args:
+        las_path:  Path to the input features.las (with POINT_ID + extra dims)
+        bin_path:  Path for the output .bin file
+    """
+    print("\n[FUNCTION] ---- LAS TO FEATURE BIN -----")
+
+    abs_las = os.path.abspath(os.path.join(settings.BASE_DIR, las_path))
+    abs_bin = os.path.abspath(os.path.join(settings.BASE_DIR, bin_path))
+
+    os.makedirs(os.path.dirname(abs_bin), exist_ok=True)
+
+    command = [
+        "/webapp/opt/las_to_feature_bin",
+        abs_las,
+        abs_bin,
+    ]
+
+    job.launch_subprocess(command)

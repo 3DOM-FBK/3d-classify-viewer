@@ -84,3 +84,16 @@ target_link_libraries(split_las_by_binary
         OpenMP::OpenMP_CXX
 )
 target_compile_options(split_las_by_binary PRIVATE ${OpenMP_CXX_FLAGS})
+
+# --- Las to Feature Bin ---
+add_executable(las_to_feature_bin las_to_feature_bin.cpp)
+target_include_directories(las_to_feature_bin PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    /app/PDAL/vendor/nlohmann
+)
+target_link_libraries(las_to_feature_bin PRIVATE
+    ${PCL_LIBRARIES}
+    ${PDAL_LIBRARIES}
+    OpenMP::OpenMP_CXX
+)
+target_compile_options(las_to_feature_bin PRIVATE ${OpenMP_CXX_FLAGS})

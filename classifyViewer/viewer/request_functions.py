@@ -1,7 +1,7 @@
 from django.shortcuts import render
 from django.http import JsonResponse
 from viewer.functions import launch_training_RF, launch_classify_RF, subsampling_point_cloud, stop_processes
-from viewer.functions import mesh_to_point_cloud, ply_to_las, feature_extraction, Potree, split_las_by_binary
+from viewer.functions import mesh_to_point_cloud, ply_to_las, feature_extraction, Potree, split_las_by_binary, las_to_feature_bin
 from django.views.decorators.csrf import csrf_exempt
 import base64
 import os
@@ -228,6 +228,27 @@ def _split_las_by_binary(request):
 
         except Exception as e:
             print("\n[REQUEST FUNCTION] Split LAS by binary ERROR " + str(e))
+            print(traceback.format_exc())
+            return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+
+    return JsonResponse({'status': 'error', 'message': 'Method not allowed'}, status=405)
+
+def las_to_feature_bin_view(request):
+    if request.method == 'POST':
+        try:
+            print("\n[REQUEST FUNCTION] LAS TO FEATURE BIN:", request.body[:200])
+            data = json.loads(request.body)
+
+            las_path = data['las_path']
+            bin_path = data['bin_path']
+
+            las_to_feature_bin(las_path, bin_path)
+            print("\n")
+
+            return JsonResponse({"status": 'success', "message": "Feature bin generated successfully."})
+
+        except Exception as e:
+            print("\n[REQUEST FUNCTION] LAS TO FEATURE BIN ERROR " + str(e))
             print(traceback.format_exc())
             return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
 

@@ -126,6 +126,7 @@ export class Potree2Loader {
         // _createMeshFromBuffer uses this value to decide which colors to write
         // into the vertex data of newly loaded LOD nodes.
         this.colorMode = "classification";
+        this.featureBin = null;
 
         // ---- CUT / SEGMENT HISTORY ----
         // segmentId 0 = main (uncut) cloud. Each cutSelection() adds an entry.
@@ -350,6 +351,36 @@ export class Potree2Loader {
         }
     }
 
+    async loadFeatureBin(url) {
+        console.log("Loading feature bin: " + url);
+        const response = await fetch(url);
+        if (!response.ok) throw new Error("Failed to fetch feature bin: " + response.status);
+        const buffer = await response.arrayBuffer();
+        const dv = new DataView(buffer);
+        const magic = String.fromCharCode(dv.getUint8(0), dv.getUint8(1), dv.getUint8(2), dv.getUint8(3));
+        if (magic !== 'FEAT') throw new Error("Invalid feature bin magic: " + magic);
+        const N = dv.getUint32(4, true), F = dv.getUint32(8, true);
+        let offset = 12;
+        const decoder = new TextDecoder('utf-8', { fatal: false });
+        const names = [];
+        for (let f = 0; f < F; f++) {
+            const bytes = new Uint8Array(buffer, offset, 32);
+            const end = bytes.indexOf(0);
+            names.push(decoder.decode(bytes.slice(0, end === -1 ? 32 : end)));
+            offset += 32;
+        }
+        const vmin = new Float32Array(buffer.slice(offset, offset + F * 4)); offset += F * 4;
+        const vmax = new Float32Array(buffer.slice(offset, offset + F * 4)); offset += F * 4;
+        const data = new Float32Array(buffer.slice(offset));
+        this.featureBin = { N, F, names, vmin, vmax, data };
+        console.log("Feature bin loaded: " + F + " features, " + N + " points");
+        return names;
+    }
+
+    getFeatureList() {
+        return this.featureBin ? [...this.featureBin.names] : [];
+    }
+
     /**
      * Applies the current colorMode to the vertex colors of a single mesh.
      * Called by setColorMode() and by update() when a node becomes visible.
@@ -367,18 +398,30 @@ export class Potree2Loader {
         const numPoints = colors.length / 4;
         let changed = false;
 
-        // Check for attribute mode (e.g. "attr:intensity")
-        const isAttrMode = this.colorMode.startsWith('attr:');
-        const attrName = isAttrMode ? this.colorMode.slice(5) : null;
-        const attrColors = isAttrMode ? mesh.metadata?.attributeColors?.[attrName] : null;
+        // Feature bin mode (e.g. "feature:planarity_0_8")
+        const isFeatureMode = this.colorMode.startsWith('feature:');
+        const featureName = isFeatureMode ? this.colorMode.slice(8) : null;
+        const featureBin = isFeatureMode ? this.featureBin : null;
+        const featureIdx = (featureBin && featureName !== null) ? featureBin.names.indexOf(featureName) : -1;
+        const pointIds = mesh.metadata?.pointIds;
 
         for (let i = 0; i < numPoints; i++) {
             // 1. Apply base color
-            if (isAttrMode && attrColors) {
-                // Attribute visualization
-                colors[i * 4] = attrColors[i * 4];
-                colors[i * 4 + 1] = attrColors[i * 4 + 1];
-                colors[i * 4 + 2] = attrColors[i * 4 + 2];
+            if (isFeatureMode && featureBin && featureIdx >= 0 && pointIds) {
+                const pid = pointIds[i];
+                let r = 0.3, g = 0.3, b = 0.3;
+                if (pid >= 0 && pid < featureBin.N) {
+                    const val = featureBin.data[pid * featureBin.F + featureIdx];
+                    if (!isNaN(val)) {
+                        const fmin = featureBin.vmin[featureIdx];
+                        const fmax = featureBin.vmax[featureIdx];
+                        const t = (fmax > fmin) ? (val - fmin) / (fmax - fmin) : 0.5;
+                        [r, g, b] = this._colormapViridis(Math.max(0, Math.min(1, t)));
+                    }
+                }
+                colors[i * 4] = r;
+                colors[i * 4 + 1] = g;
+                colors[i * 4 + 2] = b;
                 colors[i * 4 + 3] = 1.0;
             } else {
                 const hasClass = classIds && classIds[i] > 0 && classColors;
@@ -648,82 +691,7 @@ export class Potree2Loader {
         return palette[idx];
     }
 
-    /**
-     * Builds a name -> Float32Array(numPoints*4) map for all
-     * visualizable scalar attributes (excludes position, rgb, point_id).
-     */
-    _buildAttributeColors(view, numPoints, buffer) {
-        // List of standard attributes to skip (normalized without spaces/underscores)
-        const SKIP_NORMALIZED = new Set([
-            'position', 'rgb', 'pointid', 'point_id',
-            'intensity', 'returnnumber', 'numberofreturns',
-            'classificationflags', 'classification', 'userdata',
-            'scanangle', 'pointsourceid', 'gpstime', 'gps-time'
-        ]);
-        const result = {};
 
-        for (const attr of this.attributes) {
-            const lname = attr.name.toLowerCase();
-            const normalized = lname.replace(/[\s_-]/g, '');
-
-            if (SKIP_NORMALIZED.has(normalized)) continue;
-            if (attr.numElements !== 1) continue; // scalars only
-            if (attr.elementSize > 8) continue;   // sanity check
-
-            const isDiscrete = (['int8', 'uint8', 'int16', 'uint16', 'int32', 'uint32'].includes(attr.type)
-                && attr.name !== 'intensity');
-
-            const vmin = Array.isArray(attr.min) ? attr.min[0] : (attr.min ?? 0);
-            const vmax = Array.isArray(attr.max) ? attr.max[0] : (attr.max ?? 1);
-            const range = vmax - vmin || 1;
-
-            const rgba = new Float32Array(numPoints * 4);
-
-            for (let j = 0; j < numPoints; j++) {
-                const pointOffset = j * this.bytesPerPoint;
-                const absOffset = pointOffset + attr.byteOffset;
-                if (absOffset + attr.elementSize > buffer.byteLength) break;
-
-                const val = this._readAttrScalar(view, absOffset, attr);
-                let r, g, b;
-
-                if (isDiscrete) {
-                    [r, g, b] = this._colormapDiscrete(val);
-                } else {
-                    const t = (val - vmin) / range;
-                    [r, g, b] = this._colormapViridis(t);
-                }
-
-                rgba[j * 4] = r;
-                rgba[j * 4 + 1] = g;
-                rgba[j * 4 + 2] = b;
-                rgba[j * 4 + 3] = 1.0;
-            }
-
-            result[attr.name] = rgba;
-        }
-
-        return result;
-    }
-
-    /**
-     * Returns the list of attributes visualizable as colors.
-     * Called by main.js after load to populate the color menu.
-     */
-    getAttributeList() {
-        const SKIP_NORMALIZED = new Set([
-            'position', 'rgb', 'pointid', 'point_id',
-            'intensity', 'returnnumber', 'numberofreturns',
-            'classificationflags', 'classification', 'userdata',
-            'scanangle', 'pointsourceid', 'gpstime', 'gps-time'
-        ]);
-        return this.attributes
-            .filter(a => {
-                const normalized = a.name.toLowerCase().replace(/[\s_-]/g, '');
-                return !SKIP_NORMALIZED.has(normalized) && a.numElements === 1;
-            })
-            .map(a => a.name);
-    }
 
     // ========== MESH CREATION ==========
 
@@ -809,8 +777,6 @@ export class Potree2Loader {
             }
         }
 
-        // Build per-attribute color arrays (stored in metadata, used by color menu)
-        const attributeColors = this._buildAttributeColors(view, numPoints, buffer);
 
         // Save original positions so they can be hidden (by assigning NaN)
         // and restored later, bypassing any bugs/limitations of BabylonJS point
@@ -927,7 +893,6 @@ export class Potree2Loader {
             classColors,
             segmentIds,
             pointIds,
-            attributeColors,
             potree2Node: true
         };
 

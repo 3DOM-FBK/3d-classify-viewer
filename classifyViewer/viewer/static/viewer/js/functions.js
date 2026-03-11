@@ -1468,7 +1468,6 @@ function showLoadModal() {
                     "Clearing Workspace",
                     "Uploading File",
                     "Converting File",
-                    "Extracting Features",
                     "Potree Converter",
                     "Loading Viewer"
                 ];
@@ -1571,7 +1570,7 @@ function showLoadModal() {
                     const filename = file.name;
                     const extension = filename.split('.').pop().toLowerCase();
                     const inputPath = `viewer/static/viewer/data/${filename}`;
-                    let lasPath = `viewer/static/viewer/data/output.las`;
+                    let lasPath = `viewer/static/viewer/data/features.las`;
 
                     if (extension === 'ply') {
                         console.log("🔄 Step 3: Converting PLY to LAS...");
@@ -1605,43 +1604,16 @@ function showLoadModal() {
                     }
                     completeStep(2);
 
-                    // STEP 4: Feature Extraction
+                    // STEP 4: PotreeConverter
                     checkCancelled();
                     currentStepIdx = 3;
                     activateStep(3);
-                    console.log("🧠 Step 4: Starting feature extraction...");
-                    let samplingParam = 0;
-                    if (subToggle.checked) {
-                        samplingParam = parseFloat(voxelInput.value) || 0;
-                    }
-                    const featResponse = await fetch('/feature_extraction/', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
-                        body: JSON.stringify({
-                            input_filepath: lasPath,
-                            output_filepath: `viewer/static/viewer/data/features.las`,
-                            feature_list: ["anisotropy", "height_above", "height_below", "linearity", "planarity", "verticality", "neighbours", "omnivariance", "sphericity", "surface_variation", "vertical_range"],
-                            radius_list: [0.1, 0.2, 0.5],
-                            sampling: samplingParam
-                        })
-                    });
-                    if (!featResponse.ok) {
-                        const errData = await featResponse.json().catch(() => ({}));
-                        throw new Error(errData.message || errData.error || "Feature extraction failed");
-                    }
-                    completeStep(3);
-                    console.log("✅ Features extracted");
-
-                    // STEP 5: PotreeConverter
-                    checkCancelled();
-                    currentStepIdx = 4;
-                    activateStep(4);
-                    console.log("🧠 Step 5: Starting Potree conversion...");
+                    console.log("🧠 Step 4: Starting Potree conversion...");
                     const potreeResponse = await fetch('/potree_converter/', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
                         body: JSON.stringify({
-                            input_filepath: `viewer/static/viewer/data/features.las`,
+                            input_filepath: lasPath,
                             output_filepath: `viewer/static/viewer/data/clusters`
                         })
                     });
@@ -1649,14 +1621,14 @@ function showLoadModal() {
                         const errData = await potreeResponse.json().catch(() => ({}));
                         throw new Error(errData.message || errData.error || "Potree conversion failed");
                     }
-                    completeStep(4);
+                    completeStep(3);
                     console.log("✅ Potree conversion completed");
 
-                    // STEP 6: Final Loading in Babylon
+                    // STEP 5: Final Loading in Babylon
                     checkCancelled();
-                    currentStepIdx = 5;
-                    activateStep(5);
-                    console.log("🏗️ Step 6: Loading Potree data from /data/clusters/...");
+                    currentStepIdx = 4;
+                    activateStep(4);
+                    console.log("🏗️ Step 5: Loading Potree data from /data/clusters/...");
                     const scene = window.__babylonScene;
                     const sceneObjects = window.__sceneObjects;
                     if (sceneObjects && sceneObjects.currentPointCloud) {
@@ -1669,14 +1641,24 @@ function showLoadModal() {
                     const pc = await loadPointCloud(pcPath, scene);
                     if (pc) {
                         if (sceneObjects) sceneObjects.currentPointCloud = pc;
-                        frameCameraOnMesh(scene.activeCamera || scene.cameras[0], pc);
                         const pcLabel = filename || "Point Cloud";
                         if (typeof window.__registerPointCloudInOutline === 'function') {
                             window.__registerPointCloudInOutline(pc, pcLabel);
                         }
                     }
-                    completeStep(5);
+                    completeStep(4);
                     console.log("✅ Process complete. Potree cloud loaded.");
+
+                    // Load feature bin if available (populated by Recalculate Features)
+                    try {
+                        const featureBinLoader = window.__babylonScene?.potree2Loader;
+                        if (featureBinLoader) {
+                            const featureNames = await featureBinLoader.loadFeatureBin(`/static/viewer/data/features.bin`);
+                            window.dispatchEvent(new CustomEvent('feature-bin-loaded', { detail: { names: featureNames } }));
+                        }
+                    } catch (binErr) {
+                        console.warn("⚠️ Feature bin not loaded:", binErr.message);
+                    }
 
                     await new Promise(r => setTimeout(r, 800));
                     if (!isCancelled) {
@@ -1856,7 +1838,7 @@ export function showTrainingModal(scene, onStart) {
             colsContainer.remove();
 
             const loader = scene.potree2Loader;
-            const validFeatures = loader ? loader.getAttributeList() : [];
+            const validFeatures = loader ? loader.getFeatureList() : [];
             const featureSwitches = {};
 
             if (validFeatures.length === 0) {
@@ -2345,25 +2327,18 @@ function isPointInPoly(poly, pt) {
 
 /**
  * Shows a modal for recalculating selected features with custom radii.
- * Features are derived from the currently loaded point cloud attributes,
- * deduplicated (stripping radius suffixes). The user picks which features
- * to include and provides a comma-separated list of radii.
+ * The available features are fixed (matching the C++ feature_extraction tool).
  */
 export function showRecalculateFeaturesModal(scene, onConfirm) {
     const overlay = createModal(
         "Recalculate Features",
         (body) => {
-            // Derive unique feature base names from the loader attribute list
-            const loader = scene && scene.potree2Loader;
-            const allAttrs = loader ? loader.getAttributeList() : [];
-
-            // Extract base names (strip trailing _<digits> or _<digits>_<digits>)
-            const baseNames = [];
-            allAttrs.forEach(attr => {
-                const match = attr.match(/^(.+?)_(\d+(?:_\d+)*)$/);
-                const base = match ? match[1] : attr;
-                if (!baseNames.includes(base)) baseNames.push(base);
-            });
+            // Fixed list of available features (matches AVAILABLE_SCALE_FEATURES in C++)
+            const baseNames = [
+                "anisotropy", "omnivariance", "sphericity",
+                "planarity", "linearity", "verticality", "surface_variation",
+                "neighbours", "vertical_range", "height_above", "height_below", "height"
+            ];
 
             // --- Info text ---
             const info = document.createElement('div');
@@ -2384,7 +2359,7 @@ export function showRecalculateFeaturesModal(scene, onConfirm) {
             if (baseNames.length === 0) {
                 const empty = document.createElement('span');
                 empty.style.cssText = "font-size:0.75rem;color:var(--text-muted);";
-                empty.textContent = "No features found in the current point cloud.";
+                empty.textContent = "No features available.";
                 featSection.appendChild(empty);
             } else {
                 // Select All / None controls

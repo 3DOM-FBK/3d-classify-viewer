@@ -1,7 +1,7 @@
 from django.urls import path
 from . import views
 from .request_functions import save_file, launch_RF_training, launch_RF_classify, subsample_pc, stop_process
-from .request_functions import mesh2pc, ply2las, feat_extraction, potree_converter, _split_las_by_binary
+from .request_functions import mesh2pc, ply2las, feat_extraction, potree_converter, _split_las_by_binary, las_to_feature_bin_view
 
 urlpatterns = [
     # path('', views.home, name='home'),
@@ -21,5 +21,6 @@ urlpatterns = [
     path("feature_extraction/", feat_extraction), 
     path("potree_converter/", potree_converter),
     path("split_las_by_binary/", _split_las_by_binary),
+    path('las_to_feature_bin/', las_to_feature_bin_view),
     path("stop_process/", stop_process)
 ]
