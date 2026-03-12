@@ -93,13 +93,7 @@ export function setLODParameters(scene, params) {
     return true;
 }
 
-// Re-export for compatibility
-export {
-    loadPotree2PointCloud,
-    getPotree2Loader,
-    showDownloadModal,
-    showLoadModal
-};
+// showDownloadModal and showLoadModal exported directly above
 
 // =====================================================================
 // CLASS REGISTRY
@@ -1246,7 +1240,7 @@ export function createModal(title, contentCallback, footerCallback) {
     return overlay;
 }
 
-function showDownloadModal() {
+export function showDownloadModal() {
     createModal(
         "Download Configuration",
         (body) => {
@@ -1286,7 +1280,7 @@ function showDownloadModal() {
     );
 }
 
-function showLoadModal() {
+export function showLoadModal() {
     let fileInputEl = null;
 
     let meshPointsRow = null;
@@ -1649,7 +1643,7 @@ function showLoadModal() {
                     completeStep(4);
                     console.log("✅ Process complete. Potree cloud loaded.");
 
-                    // Load feature bin if available (populated by Recalculate Features)
+                    // Load feature bin if available (populated by Calculate Features)
                     try {
                         const featureBinLoader = window.__babylonScene?.potree2Loader;
                         if (featureBinLoader) {
@@ -2108,11 +2102,33 @@ export function showTrainingModal(scene, onStart) {
             const runBtn = document.createElement('button');
             runBtn.classList.add('btn');
             runBtn.textContent = "Start Training";
-            runBtn.onclick = () => {
+            runBtn.onclick = async () => {
                 const body = overlay.querySelector('.modal-body');
 
                 const trainId = body.querySelector('#train-select').value;
                 const valId = body.querySelector('#val-select').value;
+
+                // Helper: show error above footer, auto-hide after 4s
+                const showError = (msg) => {
+                    const existing = overlay.querySelector('.training-modal-error');
+                    if (existing) existing.remove();
+                    const errorMsg = document.createElement('div');
+                    errorMsg.classList.add('training-modal-error');
+                    errorMsg.style.cssText = 'color:#ff5f5f;font-size:0.75rem;padding:0 4px 10px 4px;text-align:center;width:100%;';
+                    errorMsg.textContent = msg;
+                    footer.insertAdjacentElement('beforebegin', errorMsg);
+                    setTimeout(() => {
+                        errorMsg.style.transition = 'opacity 0.4s ease';
+                        errorMsg.style.opacity = '0';
+                        setTimeout(() => errorMsg.remove(), 400);
+                    }, 4000);
+                };
+
+                // --- Validation: training and validation must differ ---
+                if (trainId !== 'none' && valId !== 'none' && trainId === valId) {
+                    showError('Training and validation segments must be different.');
+                    return;
+                }
 
                 // Reconstruct data map for backend
                 const split = {};
@@ -2140,6 +2156,26 @@ export function showTrainingModal(scene, onStart) {
                 const finalFeatures = useRgb
                     ? [...selectedFeatures, 'red', 'green', 'blue']
                     : selectedFeatures;
+
+                // --- Validation: at least one feature must be selected ---
+                const loader = scene.potree2Loader;
+                const availableFeatures = loader ? loader.getFeatureList() : [];
+                const noFeaturesAvailable = availableFeatures.length === 0;
+                const noFeaturesSelected = selectedFeatures.length === 0 && !useRgb;
+
+                if (noFeaturesAvailable) {
+                    showError('No features available — run Calculate Features first.');
+                    return;
+                }
+                if (noFeaturesSelected) {
+                    showError('Select at least one feature to start training.');
+                    return;
+                }
+
+                // Remove any lingering error before proceeding
+                const existingErr = overlay.querySelector('.training-modal-error');
+                if (existingErr) existingErr.remove();
+
                 const params = {
                     split,
                     features: finalFeatures,
@@ -2152,10 +2188,522 @@ export function showTrainingModal(scene, onStart) {
                     }
                 };
 
-                overlay.classList.remove('active');
-                setTimeout(() => overlay.remove(), 300);
+                // ── Replace modal body with animated pipeline ──
+                body.innerHTML = '';
+                const modalCloseBtn = overlay.querySelector('.modal-close');
+                if (modalCloseBtn) modalCloseBtn.style.display = 'none';
 
-                if (onStart) onStart(params);
+                let isCancelled = false;
+                footer.style.display = '';
+                footer.innerHTML = '';
+                const cancelTrainBtn = document.createElement('button');
+                cancelTrainBtn.classList.add('btn');
+                cancelTrainBtn.style.backgroundColor = 'transparent';
+                cancelTrainBtn.style.border = '1px solid var(--border-color)';
+                cancelTrainBtn.textContent = 'Stop Training';
+                cancelTrainBtn.onclick = async () => {
+                    if (isCancelled) return;
+                    isCancelled = true;
+                    cancelTrainBtn.disabled = true;
+                    cancelTrainBtn.textContent = 'Stopping…';
+                    try {
+                        await fetch('/stop_process/', { method: 'POST', headers: { 'X-CSRFToken': getCSRFToken() } });
+                    } catch (e) { console.warn('Could not stop process:', e); }
+                    overlay.classList.remove('active');
+                    setTimeout(() => overlay.remove(), 300);
+                };
+                footer.appendChild(cancelTrainBtn);
+
+                const STEPS = [
+                    'Extracting Points',
+                    'Saving Training Data',
+                    'Splitting LAS by Labels',
+                    'Training Random Forest'
+                ];
+
+                const stepList = document.createElement('div');
+                stepList.classList.add('pipeline-step-list');
+
+                const stepEls = STEPS.map((label) => {
+                    const item = document.createElement('div');
+                    item.classList.add('pipeline-step-item', 'step-idle');
+                    const iconWrap = document.createElement('div');
+                    iconWrap.classList.add('step-icon-wrap');
+                    iconWrap.innerHTML = `
+                        <svg class="step-svg" viewBox="0 0 32 32">
+                            <circle class="step-track" cx="16" cy="16" r="13" />
+                            <circle class="step-arc"   cx="16" cy="16" r="13" />
+                        </svg>
+                        <div class="step-check">
+                            <svg viewBox="0 0 12 12" fill="none">
+                                <polyline points="2,6 5,9 10,3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                            </svg>
+                        </div>
+                        <div class="step-cross">
+                            <svg viewBox="0 0 12 12" fill="none">
+                                <line x1="2.5" y1="2.5" x2="9.5" y2="9.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                                <line x1="9.5" y1="2.5" x2="2.5" y2="9.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                            </svg>
+                        </div>`;
+                    const labelEl = document.createElement('span');
+                    labelEl.classList.add('step-label');
+                    labelEl.textContent = label;
+                    item.appendChild(iconWrap);
+                    item.appendChild(labelEl);
+                    stepList.appendChild(item);
+                    return item;
+                });
+                body.appendChild(stepList);
+
+                const activateStep = (idx) => {
+                    stepEls[idx].classList.remove('step-idle', 'step-done', 'step-error');
+                    stepEls[idx].classList.add('step-running');
+                };
+                const completeStep = (idx) => {
+                    stepEls[idx].classList.remove('step-running');
+                    stepEls[idx].classList.add('step-done');
+                };
+                const failStep = (idx) => {
+                    stepEls[idx].classList.remove('step-running');
+                    stepEls[idx].classList.add('step-error');
+                };
+
+                let currentStepIdx = 0;
+                const CANCELLED = Symbol('CANCELLED');
+                const checkCancelled = () => { if (isCancelled) throw CANCELLED; };
+
+                try {
+                    // STEP 1: Extract points
+                    checkCancelled();
+                    currentStepIdx = 0;
+                    activateStep(0);
+                    const segmentMap = {};
+                    document.querySelectorAll('.outline-item[data-segment-id]').forEach(item => {
+                        const segId = parseInt(item.dataset.segmentId, 10);
+                        const nameInput = item.querySelector('.outline-name-input');
+                        if (!isNaN(segId) && nameInput) segmentMap[segId] = nameInput.value;
+                    });
+                    const classMap = {};
+                    if (window.classRegistry) {
+                        window.classRegistry.forEach((val, id) => { classMap[id] = val.name; });
+                    }
+                    const exportResult = await loader.exportAllTrainingData(segmentMap);
+                    if (!exportResult || !exportResult.buffer) {
+                        throw new Error('No points were identified in the selected regions.');
+                    }
+                    completeStep(0);
+
+                    // STEP 2: Save training data
+                    checkCancelled();
+                    currentStepIdx = 1;
+                    activateStep(1);
+                    const metadata = {
+                        segments: exportResult.segmentMap,
+                        classes: classMap,
+                        split: params.split,
+                        rf_params: params.rf_params,
+                        features: params.features
+                    };
+                    const formData = new FormData();
+                    formData.append('labels', JSON.stringify(metadata));
+                    formData.append('buffer', new Blob([exportResult.buffer], { type: 'application/octet-stream' }));
+                    const saveResponse = await fetch('/api/start-training/', { method: 'POST', body: formData });
+                    if (!saveResponse.ok) {
+                        const errData = await saveResponse.json().catch(() => ({}));
+                        throw new Error(errData.error || 'Failed to save training data');
+                    }
+                    const saveData = await saveResponse.json();
+                    completeStep(1);
+
+                    // STEP 3: Split LAS by binary labels
+                    checkCancelled();
+                    currentStepIdx = 2;
+                    activateStep(2);
+                    const lasSourcePath = 'viewer/static/viewer/data/features.las';
+                    const outputDir = 'viewer/static/viewer/data/workdir/';
+                    const splitResponse = await fetch('/split_las_by_binary/', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
+                        body: JSON.stringify({
+                            las_path: lasSourcePath,
+                            bin_path: saveData.bin_path,
+                            meta_path: saveData.json_path,
+                            output_dir: outputDir
+                        })
+                    });
+                    if (!splitResponse.ok) {
+                        const errData = await splitResponse.json().catch(() => ({}));
+                        throw new Error(errData.message || errData.error || 'Failed to split LAS file');
+                    }
+                    completeStep(2);
+
+                    // STEP 4: Launch RF Training
+                    checkCancelled();
+                    currentStepIdx = 3;
+                    activateStep(3);
+                    const rfParams = params.rf_params;
+                    const trainingPayload = {
+                        selected_features: params.features,
+                        training_filepath: `${outputDir}training.las`,
+                        val_filepath: `${outputDir}validation.las`,
+                        n_jobs: rfParams.n_jobs ?? 12,
+                        nr_estimators: rfParams.n_estimators ?? 200,
+                        max_depth: rfParams.max_depth ?? 15,
+                        min_samples_split: rfParams.min_samples_split ?? 20,
+                        max_features: rfParams.max_features ?? 'sqrt',
+                        use_gpu: rfParams.use_gpu ?? false,
+                        output_training_name: `${outputDir}test_predicted.las`,
+                        model_savepath: `${outputDir}rf_model.pkl`
+                    };
+                    const trainResponse = await fetch('/launch_RF_training/', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
+                        body: JSON.stringify(trainingPayload)
+                    });
+                    if (!trainResponse.ok) {
+                        const errData = await trainResponse.json().catch(() => ({}));
+                        throw new Error(errData.message || errData.error || 'RF training failed');
+                    }
+                    completeStep(3);
+                    if (onStart) onStart(params);
+
+                    // ── Read report_RF.txt ──
+                    const reportPath = `${outputDir}report_RF.txt`;
+                    let reportContent = null;
+                    try {
+                        const reportRes = await fetch(`/api/read-file/?path=${encodeURIComponent(reportPath)}`);
+                        if (reportRes.ok) {
+                            const rd = await reportRes.json();
+                            reportContent = rd.content || null;
+                        }
+                    } catch (_) { /* file not available */ }
+
+                    // ── Helper: parse a named section ──
+                    const parseSection = (text, heading) => {
+                        const idx = text.indexOf('\n' + heading);
+                        if (idx === -1) return [];
+                        const after = text.slice(idx + heading.length + 1).replace(/^\s*\n/, '');
+                        const lines = [];
+                        for (const line of after.split('\n')) {
+                            if (line.trim() === '' && lines.length) break;
+                            if (line.trim()) lines.push(line.trim());
+                        }
+                        return lines;
+                    };
+
+                    // ── Helper: parse array like [0.98, 0.95, 1.0] or [1.] ──
+                    const parseArray = (lines) => {
+                        const raw = lines.join(' ');
+                        const inner = raw.replace(/[\[\]]/g, '').trim();
+                        return inner.split(/[\s,]+/).map(v => parseFloat(v)).filter(v => !isNaN(v));
+                    };
+
+                    // ── Helper: single scalar value ──
+                    const parseScalar = (lines) => {
+                        const v = parseFloat(lines[0]);
+                        return isNaN(v) ? null : v;
+                    };
+
+                    // ── Helper: metric color ──
+                    const metricColor = (v) => v >= 0.9 ? '#4ade80' : v >= 0.7 ? '#facc15' : '#f87171';
+
+                    // ── Helper: badge element ──
+                    const makeBadge = (val, tooltip) => {
+                        const b = document.createElement('span');
+                        const color = metricColor(val);
+                        b.style.cssText = `
+                            display:inline-flex; align-items:center; justify-content:center;
+                            padding: 2px 7px; border-radius: 4px; font-size: 0.7rem;
+                            font-weight: 600; font-variant-numeric: tabular-nums;
+                            background: ${color}22; color: ${color};
+                            border: 1px solid ${color}44; cursor: default;
+                            white-space: nowrap;
+                        `;
+                        b.textContent = (val * 100).toFixed(1) + '%';
+                        if (tooltip) {
+                            b.title = tooltip;
+                            b.style.cursor = 'help';
+                        }
+                        return b;
+                    };
+
+                    // ── Helper: section title ──
+                    const makeSectionTitle = (text) => {
+                        const el = document.createElement('div');
+                        el.style.cssText = 'font-size:0.65rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.07em; margin-bottom:8px;';
+                        el.textContent = text;
+                        return el;
+                    };
+
+                    // ── Widen modal ──
+                    const container = overlay.querySelector('.modal-container');
+                    if (container) container.style.width = '700px';
+
+                    // ── Clear body ──
+                    body.innerHTML = '';
+                    body.style.cssText = 'padding: 2px 0; display:flex; flex-direction:column; gap:14px; min-height:0;';
+
+                    // ── Success banner ──
+                    const banner = document.createElement('div');
+                    banner.style.cssText = `
+                        display:flex; align-items:center; gap:10px; flex-shrink:0;
+                        padding: 10px 14px;
+                        background: rgba(34,197,94,0.08); border: 1px solid rgba(34,197,94,0.2); border-radius: 8px;
+                    `;
+                    banner.innerHTML = `
+                        <svg width="18" height="18" viewBox="0 0 20 20" fill="none" style="flex-shrink:0">
+                            <circle cx="10" cy="10" r="9" stroke="#4ade80" stroke-width="1.6"/>
+                            <polyline points="6,10 9,13 14,7" stroke="#4ade80" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                        <div>
+                            <div style="font-weight:600; color:#4ade80; font-size:0.82rem;">Training Completed Successfully</div>
+                            <div style="font-size:0.7rem; opacity:0.55; margin-top:1px;">Model saved · Ready for classification</div>
+                        </div>
+                    `;
+                    body.appendChild(banner);
+
+                    if (reportContent) {
+                        // ── Parse all sections ──
+                        const accuracy = parseScalar(parseSection(reportContent, 'Overall Accuracy'));
+                        const precPerClass = parseArray(parseSection(reportContent, 'Precision per class'));
+                        const precAvg = parseScalar(parseSection(reportContent, 'Average Precision'));
+                        const precW = parseScalar(parseSection(reportContent, 'Weighted Precision'));
+                        const recPerClass = parseArray(parseSection(reportContent, 'Recall per class'));
+                        const recAvg = parseScalar(parseSection(reportContent, 'Average Recall'));
+                        const recW = parseScalar(parseSection(reportContent, 'Weighted Recall'));
+                        const f1PerClass = parseArray(parseSection(reportContent, 'F1 Scores per class'));
+                        const f1Avg = parseScalar(parseSection(reportContent, 'Average F1 Score'));
+                        const f1W = parseScalar(parseSection(reportContent, 'Weighted F1 Score'));
+                        const iouPerClass = parseArray(parseSection(reportContent, 'IoU per class'));
+                        const iouAvg = parseScalar(parseSection(reportContent, 'Average IoU'));
+                        const iouW = parseScalar(parseSection(reportContent, 'Weighted IoU'));
+                        const featLines = parseSection(reportContent, 'Feature importance');
+                        const timingLines = parseSection(reportContent, 'Timing');
+
+                        // ── Build tooltip string for per-class values ──
+                        const classTooltip = (vals) => vals.length === 0 ? '' :
+                            'Per class: ' + vals.map((v, i) => `Class ${i}: ${(v * 100).toFixed(1)}%`).join(' · ');
+
+                        // ── Two-column layout ──
+                        const twoCol = document.createElement('div');
+                        twoCol.style.cssText = 'display:grid; grid-template-columns:1fr 1fr; gap:16px; min-height:0;';
+
+                        // ── LEFT: Metrics ──
+                        const leftCol = document.createElement('div');
+                        leftCol.style.cssText = 'display:flex; flex-direction:column; gap:10px; min-width:0;';
+                        leftCol.appendChild(makeSectionTitle('Metrics'));
+
+                        // Accuracy card (big)
+                        if (accuracy !== null) {
+                            const accCard = document.createElement('div');
+                            accCard.style.cssText = `
+                                display:flex; align-items:center; justify-content:space-between;
+                                padding: 8px 12px; border-radius: 8px;
+                                background: ${metricColor(accuracy)}11;
+                                border: 1px solid ${metricColor(accuracy)}33;
+                            `;
+                            accCard.innerHTML = `<span style="font-size:0.75rem; font-weight:600;">Overall Accuracy</span>`;
+                            const accVal = document.createElement('span');
+                            accVal.style.cssText = `font-size:1.1rem; font-weight:700; color:${metricColor(accuracy)};`;
+                            accVal.textContent = (accuracy * 100).toFixed(1) + '%';
+                            accCard.appendChild(accVal);
+                            leftCol.appendChild(accCard);
+                        }
+
+                        // Metrics table
+                        const metricsData = [
+                            { label: 'Precision', avg: precAvg, w: precW, perClass: precPerClass },
+                            { label: 'Recall', avg: recAvg, w: recW, perClass: recPerClass },
+                            { label: 'F1 Score', avg: f1Avg, w: f1W, perClass: f1PerClass },
+                            { label: 'IoU', avg: iouAvg, w: iouW, perClass: iouPerClass },
+                        ];
+
+                        const metricsTable = document.createElement('div');
+                        metricsTable.style.cssText = 'display:flex; flex-direction:column; gap:0; border:1px solid rgba(255,255,255,0.07); border-radius:8px; overflow:hidden;';
+
+                        // Header
+                        const hdr = document.createElement('div');
+                        hdr.style.cssText = 'display:grid; grid-template-columns:80px 1fr 1fr; gap:4px; padding:5px 10px; border-bottom:1px solid rgba(255,255,255,0.07); background:rgba(255,255,255,0.03);';
+                        hdr.innerHTML = `
+                            <span style="font-size:0.62rem; color:var(--text-muted);"></span>
+                            <span style="font-size:0.62rem; color:var(--text-muted); text-align:center;">Average</span>
+                            <span style="font-size:0.62rem; color:var(--text-muted); text-align:center;">Weighted</span>
+                        `;
+                        metricsTable.appendChild(hdr);
+
+                        metricsData.forEach(({ label, avg, w, perClass }, i) => {
+                            const row = document.createElement('div');
+                            row.style.cssText = `display:grid; grid-template-columns:80px 1fr 1fr; gap:4px; align-items:center; padding:6px 10px; border-top:${i > 0 ? '1px solid rgba(255,255,255,0.05)' : 'none'};`;
+                            const lbl = document.createElement('span');
+                            lbl.style.cssText = 'font-size:0.72rem; color:var(--text-muted);';
+                            lbl.textContent = label;
+                            row.appendChild(lbl);
+
+                            const avgCell = document.createElement('div');
+                            avgCell.style.cssText = 'display:flex; justify-content:center;';
+                            if (avg !== null) avgCell.appendChild(makeBadge(avg, classTooltip(perClass)));
+                            row.appendChild(avgCell);
+
+                            const wCell = document.createElement('div');
+                            wCell.style.cssText = 'display:flex; justify-content:center;';
+                            if (w !== null) wCell.appendChild(makeBadge(w, classTooltip(perClass)));
+                            row.appendChild(wCell);
+
+                            metricsTable.appendChild(row);
+                        });
+                        leftCol.appendChild(metricsTable);
+                        twoCol.appendChild(leftCol);
+
+                        // ── RIGHT: Feature Importance ──
+                        const rightCol = document.createElement('div');
+                        rightCol.style.cssText = 'display:flex; flex-direction:column; gap:0; min-width:0;';
+                        rightCol.appendChild(makeSectionTitle('Feature Importance'));
+
+                        if (featLines.length > 0) {
+                            // Parse → sort desc
+                            const allFeats = featLines
+                                .map(l => {
+                                    const ci = l.lastIndexOf(':');
+                                    return { name: l.slice(0, ci).trim(), val: parseFloat(l.slice(ci + 1)) || 0 };
+                                })
+                                .sort((a, b) => b.val - a.val);
+
+                            // Take features until cumulative sum ≥ 0.9
+                            const THRESHOLD = 0.9;
+                            let cumSum = 0;
+                            const topFeats = [];
+                            for (const f of allFeats) {
+                                topFeats.push(f);
+                                cumSum += f.val;
+                                if (cumSum >= THRESHOLD) break;
+                            }
+
+                            const maxVal = Math.max(...topFeats.map(f => f.val), 1e-9);
+                            const chart = document.createElement('div');
+                            chart.style.cssText = 'display:flex; flex-direction:column; gap:5px; flex:1;';
+
+                            topFeats.forEach(({ name, val }, i) => {
+                                const t = topFeats.length > 1 ? i / (topFeats.length - 1) : 0;
+                                const barColor = `rgba(99,179,237,${1 - t * 0.5})`;
+                                const pct = (val / maxVal) * 100;
+
+                                const row = document.createElement('div');
+                                row.style.cssText = 'display:grid; grid-template-columns:110px 1fr 44px; align-items:center; gap:6px;';
+
+                                const lbl = document.createElement('span');
+                                lbl.style.cssText = 'font-size:0.68rem; color:var(--text-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;';
+                                lbl.title = name;
+                                lbl.textContent = name;
+
+                                const track = document.createElement('div');
+                                track.style.cssText = 'height:6px; background:rgba(255,255,255,0.06); border-radius:3px; overflow:hidden;';
+                                const fill = document.createElement('div');
+                                fill.style.cssText = `width:0%; height:100%; border-radius:3px; background:${barColor}; transition:width 0.5s ease ${i * 40}ms;`;
+                                track.appendChild(fill);
+
+                                const valEl = document.createElement('span');
+                                valEl.style.cssText = 'font-size:0.65rem; text-align:right; color:var(--text-muted); font-variant-numeric:tabular-nums;';
+                                valEl.textContent = val.toFixed(4);
+
+                                row.appendChild(lbl);
+                                row.appendChild(track);
+                                row.appendChild(valEl);
+                                chart.appendChild(row);
+
+                                requestAnimationFrame(() => requestAnimationFrame(() => { fill.style.width = `${pct}%`; }));
+                            });
+
+                            rightCol.appendChild(chart);
+
+                            // Summary line
+                            const hidden = allFeats.length - topFeats.length;
+                            const summary = document.createElement('div');
+                            summary.style.cssText = 'font-size:0.65rem; color:var(--text-muted); margin-top:8px; opacity:0.7;';
+                            summary.textContent = `${topFeats.length} feature${topFeats.length !== 1 ? 's' : ''} · ${(cumSum * 100).toFixed(0)}% importance` +
+                                (hidden > 0 ? ` · ${hidden} hidden` : '');
+                            rightCol.appendChild(summary);
+                        } else {
+                            const empty = document.createElement('div');
+                            empty.style.cssText = 'font-size:0.72rem; color:var(--text-muted); opacity:0.5;';
+                            empty.textContent = 'No feature data available.';
+                            rightCol.appendChild(empty);
+                        }
+
+                        twoCol.appendChild(rightCol);
+                        body.appendChild(twoCol);
+
+                        // ── Timing (full width, horizontal) ──
+                        if (timingLines.length > 0) {
+                            const timingRow = document.createElement('div');
+                            timingRow.style.cssText = `
+                                display:flex; gap:0; flex-shrink:0;
+                                border:1px solid rgba(255,255,255,0.07); border-radius:8px; overflow:hidden;
+                            `;
+                            timingLines.forEach((line, i) => {
+                                const ci = line.lastIndexOf(':');
+                                if (ci === -1) return;
+                                const lbl = line.slice(0, ci).trim()
+                                    .replace('Loading time', 'Loading')
+                                    .replace('Training time', 'Training')
+                                    .replace('Prediction + Metrics time', 'Prediction')
+                                    .replace('Total time', 'Total');
+                                const val = line.slice(ci + 1).trim();
+                                const isTotal = lbl === 'Total';
+
+                                const cell = document.createElement('div');
+                                cell.style.cssText = `
+                                    flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center;
+                                    padding: 8px 6px;
+                                    border-left: ${i > 0 ? '1px solid rgba(255,255,255,0.06)' : 'none'};
+                                    background: ${isTotal ? 'rgba(255,255,255,0.04)' : 'transparent'};
+                                `;
+                                cell.innerHTML = `
+                                    <span style="font-size:0.75rem; font-weight:${isTotal ? '700' : '500'};">${val}</span>
+                                    <span style="font-size:0.6rem; color:var(--text-muted); margin-top:2px;">${lbl}</span>
+                                `;
+                                timingRow.appendChild(cell);
+                            });
+                            body.appendChild(timingRow);
+                        }
+                    }
+
+                    if (modalCloseBtn) modalCloseBtn.style.display = '';
+                    footer.style.display = '';
+                    footer.innerHTML = '';
+                    const closeBtn = document.createElement('button');
+                    closeBtn.classList.add('btn');
+                    closeBtn.textContent = 'Close';
+                    closeBtn.onclick = () => {
+                        overlay.classList.remove('active');
+                        setTimeout(() => overlay.remove(), 300);
+                    };
+                    footer.appendChild(closeBtn);
+
+                } catch (err) {
+                    if (err === CANCELLED) return;
+                    if (isCancelled) return;
+                    failStep(currentStepIdx);
+
+                    // ── Show error message + Close button ──
+                    const errorDiv = document.createElement('div');
+                    errorDiv.classList.add('pipeline-error-msg');
+                    errorDiv.innerHTML = `
+                        <div style="font-weight:600;margin-bottom:4px;">⚠️ Training Failed</div>
+                        <div style="font-family:monospace;font-size:0.8em;white-space:pre-wrap;word-break:break-word;opacity:0.8;">${err.message || err.toString()}</div>
+                    `;
+                    body.appendChild(errorDiv);
+                    if (modalCloseBtn) modalCloseBtn.style.display = '';
+                    footer.style.display = '';
+                    footer.innerHTML = '';
+                    const closeBtn = document.createElement('button');
+                    closeBtn.classList.add('btn');
+                    closeBtn.textContent = 'Close';
+                    closeBtn.onclick = () => {
+                        overlay.classList.remove('active');
+                        setTimeout(() => overlay.remove(), 300);
+                    };
+                    footer.appendChild(closeBtn);
+                }
             };
 
             footer.appendChild(cancelBtn);
@@ -2329,9 +2877,9 @@ function isPointInPoly(poly, pt) {
  * Shows a modal for recalculating selected features with custom radii.
  * The available features are fixed (matching the C++ feature_extraction tool).
  */
-export function showRecalculateFeaturesModal(scene, onConfirm) {
+export function showCalculateFeaturesModal(scene, onConfirm) {
     const overlay = createModal(
-        "Recalculate Features",
+        "Calculate Features",
         (body) => {
             // Fixed list of available features (matches AVAILABLE_SCALE_FEATURES in C++)
             const baseNames = [
@@ -2343,7 +2891,7 @@ export function showRecalculateFeaturesModal(scene, onConfirm) {
             // --- Info text ---
             const info = document.createElement('div');
             info.style.cssText = "font-size:0.75rem;color:var(--text-muted);line-height:1.5;margin-bottom:12px;";
-            info.textContent = "Select the features to recalculate and specify the search radius.";
+            info.textContent = "Select the features to calculate and specify the search radius.";
             body.appendChild(info);
 
             // --- Feature list ---
@@ -2446,8 +2994,8 @@ export function showRecalculateFeaturesModal(scene, onConfirm) {
 
             const confirmBtn = document.createElement('button');
             confirmBtn.classList.add('btn');
-            confirmBtn.textContent = "Recalculate";
-            confirmBtn.onclick = () => {
+            confirmBtn.textContent = "Calculate";
+            confirmBtn.onclick = async () => {
                 const body = overlay.querySelector('.modal-body');
                 const featSection = body._getFeatSection();
                 const radiiInput = body._getRadiiInput();
@@ -2472,10 +3020,200 @@ export function showRecalculateFeaturesModal(scene, onConfirm) {
                     return;
                 }
 
-                overlay.classList.remove('active');
-                setTimeout(() => overlay.remove(), 300);
+                // ── Replace modal body with animated pipeline step list ──
+                const container = overlay.querySelector('.modal-container');
+                body.innerHTML = '';
 
-                if (onConfirm) onConfirm({ features: selectedFeatures, radii });
+                // Hide the X close button during pipeline
+                const modalCloseBtn = overlay.querySelector('.modal-close');
+                if (modalCloseBtn) modalCloseBtn.style.display = 'none';
+
+                // Show footer with Cancel button
+                let isCancelled = false;
+                footer.style.display = '';
+                footer.innerHTML = '';
+                const cancelCalcBtn = document.createElement('button');
+                cancelCalcBtn.classList.add('btn');
+                cancelCalcBtn.style.backgroundColor = 'transparent';
+                cancelCalcBtn.style.border = '1px solid var(--border-color)';
+                cancelCalcBtn.textContent = 'Cancel';
+                cancelCalcBtn.onclick = async () => {
+                    if (isCancelled) return;
+                    isCancelled = true;
+                    cancelCalcBtn.disabled = true;
+                    cancelCalcBtn.textContent = 'Cancelling\u2026';
+                    try {
+                        await fetch('/stop_process/', {
+                            method: 'POST',
+                            headers: { 'X-CSRFToken': getCSRFToken() }
+                        });
+                    } catch (e) {
+                        console.warn('\u26a0\ufe0f Could not call stop_process:', e);
+                    }
+                    overlay.classList.remove('active');
+                    setTimeout(() => overlay.remove(), 300);
+                };
+                footer.appendChild(cancelCalcBtn);
+
+                const STEPS = [
+                    "Feature Extraction",
+                    "Generating Feature Bin",
+                    "Loading Features"
+                ];
+
+                // Build step list
+                const stepList = document.createElement('div');
+                stepList.classList.add('pipeline-step-list');
+
+                const stepEls = STEPS.map((label) => {
+                    const item = document.createElement('div');
+                    item.classList.add('pipeline-step-item', 'step-idle');
+
+                    const iconWrap = document.createElement('div');
+                    iconWrap.classList.add('step-icon-wrap');
+                    iconWrap.innerHTML = `
+                        <svg class="step-svg" viewBox="0 0 32 32">
+                            <circle class="step-track" cx="16" cy="16" r="13" />
+                            <circle class="step-arc"   cx="16" cy="16" r="13" />
+                        </svg>
+                        <div class="step-check">
+                            <svg viewBox="0 0 12 12" fill="none">
+                                <polyline points="2,6 5,9 10,3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                            </svg>
+                        </div>
+                        <div class="step-cross">
+                            <svg viewBox="0 0 12 12" fill="none">
+                                <line x1="2.5" y1="2.5" x2="9.5" y2="9.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                                <line x1="9.5" y1="2.5" x2="2.5" y2="9.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                            </svg>
+                        </div>
+                    `;
+
+                    const labelEl = document.createElement('span');
+                    labelEl.classList.add('step-label');
+                    labelEl.textContent = label;
+
+                    item.appendChild(iconWrap);
+                    item.appendChild(labelEl);
+                    stepList.appendChild(item);
+                    return item;
+                });
+
+                body.appendChild(stepList);
+
+                const activateStep = (idx) => {
+                    stepEls[idx].classList.remove('step-idle', 'step-done', 'step-error');
+                    stepEls[idx].classList.add('step-running');
+                };
+                const completeStep = (idx) => {
+                    stepEls[idx].classList.remove('step-running');
+                    stepEls[idx].classList.add('step-done');
+                };
+                const failStep = (idx) => {
+                    stepEls[idx].classList.remove('step-running');
+                    stepEls[idx].classList.add('step-error');
+                };
+
+                let currentStepIdx = 0;
+                const CANCELLED = Symbol('CANCELLED');
+                const checkCancelled = () => { if (isCancelled) throw CANCELLED; };
+
+                try {
+                    // STEP 1: Feature Extraction
+                    checkCancelled();
+                    currentStepIdx = 0;
+                    activateStep(0);
+                    console.log("🔬 Step 1: Extracting features...");
+                    const featResponse = await fetch('/feature_extraction/', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
+                        body: JSON.stringify({
+                            input_filepath: 'viewer/static/viewer/data/features.las',
+                            output_filepath: 'viewer/static/viewer/data/features.las',
+                            feature_list: selectedFeatures,
+                            radius_list: radii
+                        })
+                    });
+                    if (!featResponse.ok) {
+                        const errData = await featResponse.json().catch(() => ({}));
+                        throw new Error(errData.message || errData.error || "Feature extraction failed");
+                    }
+                    completeStep(0);
+                    console.log("✅ Feature extraction completed");
+
+                    // STEP 2: Generate Feature Bin
+                    checkCancelled();
+                    currentStepIdx = 1;
+                    activateStep(1);
+                    console.log("📦 Step 2: Generating feature bin...");
+                    const binResponse = await fetch('/las_to_feature_bin/', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
+                        body: JSON.stringify({
+                            las_path: 'viewer/static/viewer/data/features.las',
+                            bin_path: 'viewer/static/viewer/data/features.bin'
+                        })
+                    });
+                    if (!binResponse.ok) {
+                        const errData = await binResponse.json().catch(() => ({}));
+                        throw new Error(errData.message || errData.error || "Feature bin generation failed");
+                    }
+                    completeStep(1);
+                    console.log("✅ Feature bin generated");
+
+                    // STEP 3: Load Features in Viewer
+                    checkCancelled();
+                    currentStepIdx = 2;
+                    activateStep(2);
+                    console.log("🏗️ Step 3: Loading features in viewer...");
+                    try {
+                        const featureBinLoader = window.__babylonScene?.potree2Loader;
+                        if (featureBinLoader) {
+                            const featureNames = await featureBinLoader.loadFeatureBin(`/static/viewer/data/features.bin`);
+                            window.dispatchEvent(new CustomEvent('feature-bin-loaded', { detail: { names: featureNames } }));
+                        }
+                    } catch (binErr) {
+                        console.warn("⚠️ Feature bin not loaded in viewer:", binErr.message);
+                    }
+                    completeStep(2);
+                    console.log("✅ Features loaded in viewer");
+
+                    if (onConfirm) onConfirm({ features: selectedFeatures, radii });
+
+                    await new Promise(r => setTimeout(r, 800));
+                    if (!isCancelled) {
+                        overlay.classList.remove('active');
+                        setTimeout(() => overlay.remove(), 300);
+                    }
+
+                } catch (err) {
+                    if (err === CANCELLED) return;
+                    console.error("❌ Feature Calculation Error:", err);
+                    if (isCancelled) return;
+
+                    failStep(currentStepIdx);
+
+                    const errorDiv = document.createElement('div');
+                    errorDiv.classList.add('pipeline-error-msg');
+                    errorDiv.innerHTML = `
+                        <div style="font-weight:600;margin-bottom:4px;">⚠️ Calculation Failed</div>
+                        <div style="font-family:monospace;font-size:0.8em;white-space:pre-wrap;word-break:break-word;opacity:0.8;">${err.message || err.toString()}</div>
+                    `;
+                    body.appendChild(errorDiv);
+
+                    if (modalCloseBtn) modalCloseBtn.style.display = '';
+
+                    footer.style.display = '';
+                    footer.innerHTML = '';
+                    const closeBtn = document.createElement('button');
+                    closeBtn.classList.add('btn');
+                    closeBtn.textContent = "Close";
+                    closeBtn.onclick = () => {
+                        overlay.classList.remove('active');
+                        setTimeout(() => overlay.remove(), 300);
+                    };
+                    footer.appendChild(closeBtn);
+                }
             };
 
             footer.appendChild(cancelBtn);

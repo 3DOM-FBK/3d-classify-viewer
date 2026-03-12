@@ -253,3 +253,31 @@ def las_to_feature_bin_view(request):
             return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
 
     return JsonResponse({'status': 'error', 'message': 'Method not allowed'}, status=405)
+
+def read_text_file(request):
+    """Read a text file from the server and return its content."""
+    if request.method == 'GET':
+        try:
+            file_path = request.GET.get('path', '')
+            if not file_path:
+                return JsonResponse({'status': 'error', 'message': 'No path provided'}, status=400)
+
+            # Make absolute path relative to project root
+            if not os.path.isabs(file_path):
+                from django.conf import settings
+                file_path = os.path.join(settings.BASE_DIR, file_path)
+
+            if not os.path.exists(file_path):
+                return JsonResponse({'status': 'error', 'message': 'File not found'}, status=404)
+
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            return JsonResponse({'status': 'success', 'content': content})
+
+        except Exception as e:
+            print("\n[REQUEST FUNCTION] Read text file ERROR " + str(e))
+            print(traceback.format_exc())
+            return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+
+    return JsonResponse({'status': 'error', 'message': 'Method not allowed'}, status=405)

@@ -2033,3 +2033,14 @@ input[type="number"].property-input::-webkit-outer-spin-button:active {
     stroke: none;
     pointer-events: none;
 }
+
+/* ── Axis Orientation Gizmo ── */
+#axis-gizmo {
+    position: absolute;
+    bottom: 16px;
+    left: 16px;
+    width: 100px;
+    height: 100px;
+    pointer-events: none;
+    z-index: 10;
+}

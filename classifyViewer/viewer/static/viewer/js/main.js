@@ -12,7 +12,7 @@ import {
     showDownloadModal,
     showLoadModal,
     showTrainingModal,
-    showRecalculateFeaturesModal,
+    showCalculateFeaturesModal,
     selectPoints,
     deselectPoints,
     clearSelection,
@@ -152,7 +152,7 @@ function initColorMenu() {
 
 /**
  * Called after loadFeatureBin() completes. Adds/refreshes the Features section
- * in the color menu. Safe to call multiple times (e.g. after recalculate).
+ * in the color menu. Safe to call multiple times (e.g. after calculate).
  * @param {string[]} featureNames
  */
 function addFeaturesToColorMenu(featureNames) {
@@ -473,56 +473,15 @@ const featuresInfo = document.createElement('div');
 featuresInfo.style.fontSize = "0.75rem";
 featuresInfo.style.color = "var(--text-muted)";
 featuresInfo.style.lineHeight = "1.4";
-featuresInfo.textContent = "Recalculate one or more geometric or spectral features for the points in the cloud to improve model accuracy.";
+featuresInfo.textContent = "Calculate one or more geometric or spectral features for the points in the cloud to improve model accuracy.";
 featuresContent.appendChild(featuresInfo);
 
-const recalculateButton = createButton("Recalculate Features", "recalculateFeatures", featuresContent);
-recalculateButton.onclick = () => {
+const calculateButton = createButton("Calculate Features", "calculateFeatures", featuresContent);
+calculateButton.onclick = () => {
     const scene = window.__babylonScene;
-    showRecalculateFeaturesModal(scene, async ({ features, radii }) => {
-        console.log("🔄 Recalculate Features:", features, "radii:", radii);
-        try {
-            const lasPath = `viewer/static/viewer/data/features.las`;
-            const featResponse = await fetch('/feature_extraction/', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': document.querySelector('meta[name="csrf-token"]').getAttribute('content') },
-                body: JSON.stringify({
-                    input_filepath: lasPath,
-                    output_filepath: lasPath,
-                    feature_list: features,
-                    radius_list: radii,
-                    sampling: 0
-                })
-            });
-            if (!featResponse.ok) {
-                const errData = await featResponse.json().catch(() => ({}));
-                throw new Error(errData.message || errData.error || "Feature recalculation failed");
-            }
-            console.log("✅ Features recalculated successfully");
-
-            // Regenerate feature bin and refresh color menu
-            const featureBinRes = await fetch('/las_to_feature_bin/', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': document.querySelector('meta[name="csrf-token"]').getAttribute('content') },
-                body: JSON.stringify({
-                    las_path: `viewer/static/viewer/data/features.las`,
-                    bin_path: `viewer/static/viewer/data/features.bin`
-                })
-            });
-            if (!featureBinRes.ok) {
-                const errData = await featureBinRes.json().catch(() => ({}));
-                throw new Error(errData.message || errData.error || "Feature bin generation failed");
-            }
-            const recalcLoader = window.__babylonScene?.potree2Loader;
-            if (recalcLoader) {
-                const featureNames = await recalcLoader.loadFeatureBin(`/static/viewer/data/features.bin`);
-                window.dispatchEvent(new CustomEvent('feature-bin-loaded', { detail: { names: featureNames } }));
-            }
-            console.log("✅ Feature bin regenerated");
-        } catch (err) {
-            console.error("❌ Feature recalculation error:", err);
-            alert(`Feature recalculation failed: ${err.message}`);
-        }
+    showCalculateFeaturesModal(scene, ({ features, radii }) => {
+        // Pipeline is handled entirely inside the modal (functions.js)
+        console.log('✅ Feature calculation pipeline completed:', features, radii);
     });
 };
 
@@ -1296,36 +1255,97 @@ gridMaterial.opacity = 0.98;
 gridGround.material = gridMaterial;
 sceneObjects.grid = gridGround;
 
-const axes = new BABYLON.AxesViewer(scene, 0.15, null, null, null, null, 3);
+// --- SVG Axis Orientation Gizmo ---
+const gizmoEl = document.createElement('div');
+gizmoEl.id = 'axis-gizmo';
+gizmoEl.style.cssText = `
+    position: absolute;
+    bottom: 52px;
+    left: 16px;
+    width: 120px;
+    height: 120px;
+    pointer-events: none;
+    z-index: 10;
+`;
 
-// --- Axes Sphere Wrapper ---
-const axesSphere = BABYLON.MeshBuilder.CreateSphere("axesSphere", { diameter: 0.45 }, scene);
-const sphereMat = new BABYLON.PBRMaterial("sphereMat", scene);
-sphereMat.albedoColor = new BABYLON.Color3(1, 1, 1);
-sphereMat.alpha = 0.025;
-sphereMat.transparencyMode = BABYLON.PBRMaterial.PBRMETHOD_BLEND;
-sphereMat.roughness = 1;
-sphereMat.metallic = 0.0;
+const gizmoSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+gizmoSvg.setAttribute('width', '120');
+gizmoSvg.setAttribute('height', '120');
+gizmoSvg.setAttribute('viewBox', '0 0 120 120');
+gizmoEl.appendChild(gizmoSvg);
 
-// Sheen Effect
-sphereMat.sheen.isEnabled = true;
-sphereMat.sheen.intensity = 5.0;
-sphereMat.sheen.color = new BABYLON.Color3(0.23, 0.51, 0.96);
+canvas.parentElement.style.position = 'relative';
+canvas.parentElement.appendChild(gizmoEl);
 
-axesSphere.material = sphereMat;
-axesSphere.isPickable = false;
+const GIZMO_AXES = [
+    { dir: [1, 0, 0], color: '#e05050', label: 'X' },
+    { dir: [-1, 0, 0], color: '#7a2a2a', label: '' },
+    { dir: [0, 1, 0], color: '#40b060', label: 'Y' },
+    { dir: [0, -1, 0], color: '#1e5c30', label: '' },
+    { dir: [0, 0, 1], color: '#4a80e8', label: 'Z' },
+    { dir: [0, 0, -1], color: '#1e3070', label: '' },
+];
+
+const CX = 60, CY = 60, ARM = 40, R_POS = 11, R_NEG = 7;
 
 scene.registerBeforeRender(() => {
-    const distance = 4;
-    const aspect = engine.getAspectRatio(camera);
-    const viewMatrix = camera.getViewMatrix();
-    const invViewMatrix = BABYLON.Matrix.Invert(viewMatrix);
-    const cornerPos = BABYLON.Vector3.TransformCoordinates(new BABYLON.Vector3(-1.4 * aspect, -1.25, distance), invViewMatrix);
+    const m = camera.getViewMatrix().m;
 
-    axes.xAxis.position.copyFrom(cornerPos);
-    axes.yAxis.position.copyFrom(cornerPos);
-    axes.zAxis.position.copyFrom(cornerPos);
-    axesSphere.position.copyFrom(cornerPos);
+    const projected = GIZMO_AXES.map(({ dir, color, label }) => {
+        const vx = dir[0] * m[0] + dir[1] * m[4] + dir[2] * m[8];
+        const vy = -(dir[0] * m[1] + dir[1] * m[5] + dir[2] * m[9]);
+        const depth = -(dir[0] * m[2] + dir[1] * m[6] + dir[2] * m[10]);
+        return { sx: CX + vx * ARM, sy: CY + vy * ARM, depth, color, label };
+    });
+
+    projected.sort((a, b) => a.depth - b.depth);
+
+    gizmoSvg.innerHTML = '';
+
+    const bg = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    bg.setAttribute('cx', CX); bg.setAttribute('cy', CY); bg.setAttribute('r', 57);
+    bg.setAttribute('fill', 'rgba(0,0,0,0.28)');
+    gizmoSvg.appendChild(bg);
+
+    projected.forEach(({ sx, sy, depth, color, label }) => {
+        const isPositive = label !== '';
+        const r = isPositive ? R_POS : R_NEG;
+        const isFront = depth > 0;
+
+        if (isPositive) {
+            const dx = sx - CX, dy = sy - CY;
+            const len = Math.sqrt(dx * dx + dy * dy) || 1;
+            const ex = sx - (dx / len) * r;
+            const ey = sy - (dy / len) * r;
+            const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+            line.setAttribute('x1', CX); line.setAttribute('y1', CY);
+            line.setAttribute('x2', ex); line.setAttribute('y2', ey);
+            line.setAttribute('stroke', color);
+            line.setAttribute('stroke-width', isFront ? '2.5' : '1.5');
+            line.setAttribute('stroke-opacity', isFront ? '1' : '0.45');
+            gizmoSvg.appendChild(line);
+        }
+
+        const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        circle.setAttribute('cx', sx); circle.setAttribute('cy', sy); circle.setAttribute('r', r);
+        circle.setAttribute('fill', color);
+        circle.setAttribute('fill-opacity', isFront ? '1' : '0.4');
+        gizmoSvg.appendChild(circle);
+
+        if (isPositive) {
+            const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+            text.setAttribute('x', sx); text.setAttribute('y', sy);
+            text.setAttribute('text-anchor', 'middle');
+            text.setAttribute('dominant-baseline', 'central');
+            text.setAttribute('font-size', '12');
+            text.setAttribute('font-weight', '600');
+            text.setAttribute('font-family', 'system-ui, sans-serif');
+            text.setAttribute('fill', '#000');
+            text.setAttribute('fill-opacity', isFront ? '1' : '0.5');
+            text.textContent = label;
+            gizmoSvg.appendChild(text);
+        }
+    });
 });
 
 // --- Actions Logic ---
@@ -1631,144 +1651,9 @@ if (startTrainingButton) {
         }
 
         // Open the modal and pass the execution callback
-        showTrainingModal(scene, async (params) => {
-            console.log("🚀 Starting Training with params:", params);
-
-            startTrainingButton.disabled = true;
-
-            // ── Step feedback helper ──────────────────────────────────────
-            const setStatus = (text) => { startTrainingButton.textContent = text; };
-            // ─────────────────────────────────────────────────────────────
-
-            try {
-                // ── STEP 1: Extract points from the loaded point cloud ────
-                setStatus("Extracting Points...");
-                console.log("📦 Step 1: Extracting training points from scene...");
-
-                const segmentMap = {};
-                document.querySelectorAll('.outline-item[data-segment-id]').forEach(item => {
-                    const segId = parseInt(item.dataset.segmentId, 10);
-                    const nameInput = item.querySelector('.outline-name-input');
-                    if (!isNaN(segId) && nameInput) segmentMap[segId] = nameInput.value;
-                });
-
-                const classMap = {};
-                classRegistry.forEach((val, id) => { classMap[id] = val.name; });
-
-                const exportResult = await loader.exportAllTrainingData(segmentMap);
-
-                if (!exportResult || !exportResult.buffer) {
-                    console.warn("No assigned points found to train on.");
-                    alert("No points were identified in the selected regions.");
-                    return;
-                }
-                console.log(`✅ Extracted ${(exportResult.buffer.byteLength / 1024 / 1024).toFixed(2)} MB of point data`);
-
-                // ── STEP 2: Upload binary buffer + metadata ───────────────
-                setStatus("Saving Training Data...");
-                console.log("📤 Step 2: Uploading binary buffer and metadata...");
-
-                const metadata = {
-                    segments: exportResult.segmentMap,
-                    classes: classMap,
-                    split: params.split,
-                    rf_params: params.rf_params,
-                    features: params.features
-                };
-
-                const formData = new FormData();
-                formData.append('labels', JSON.stringify(metadata));
-                formData.append('buffer', new Blob([exportResult.buffer], { type: 'application/octet-stream' }));
-
-                const saveResponse = await fetch('/api/start-training/', {
-                    method: 'POST',
-                    body: formData
-                });
-
-                if (!saveResponse.ok) {
-                    const errData = await saveResponse.json().catch(() => ({}));
-                    throw new Error(errData.error || "Failed to save training data");
-                }
-
-                const saveData = await saveResponse.json();
-                console.log("✅ Binary + metadata saved:", saveData.filename, saveData.labels_filename);
-
-                // ── STEP 3: Split LAS by binary labels ───────────────────
-                setStatus("Splitting LAS by Labels...");
-                console.log("✂️ Step 3: Splitting LAS file by binary segment labels...");
-
-                // The LAS source is always the processed features file
-                const lasSourcePath = "viewer/static/viewer/data/features.las";
-                // Output dir: /static/viewer/data/workdir/ folder where bin/json were saved
-                const outputDir = "viewer/static/viewer/data/workdir/";
-
-                const splitResponse = await fetch('/split_las_by_binary/', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-CSRFToken': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || ''
-                    },
-                    body: JSON.stringify({
-                        las_path: lasSourcePath,
-                        bin_path: saveData.bin_path,
-                        meta_path: saveData.json_path,
-                        output_dir: outputDir
-                    })
-                });
-
-                if (!splitResponse.ok) {
-                    const errData = await splitResponse.json().catch(() => ({}));
-                    throw new Error(errData.message || errData.error || "Failed to split LAS file");
-                }
-
-                const splitData = await splitResponse.json();
-                console.log("✅ LAS split completed:", splitData);
-
-                // ── STEP 4: Launch RF Training ───────────────────────
-                setStatus("⏳ Training RF Model...");
-                console.log("🤖 Step 4: Launching Random Forest training...");
-
-                const rfParams = params.rf_params;
-                const trainingPayload = {
-                    selected_features: params.features,
-                    training_filepath: `${outputDir}training.las`,
-                    val_filepath: `${outputDir}validation.las`,
-                    n_jobs: rfParams.n_jobs ?? 12,
-                    nr_estimators: rfParams.n_estimators ?? 200,
-                    max_depth: rfParams.max_depth ?? 15,
-                    min_samples_split: rfParams.min_samples_split ?? 20,
-                    max_features: rfParams.max_features ?? 'sqrt',
-                    use_gpu: rfParams.use_gpu ?? false,
-                    output_training_name: `${outputDir}test_predicted.las`,
-                    model_savepath: `${outputDir}rf_model.pkl`
-                };
-
-                const trainResponse = await fetch('/launch_RF_training/', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-CSRFToken': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || ''
-                    },
-                    body: JSON.stringify(trainingPayload)
-                });
-
-                if (!trainResponse.ok) {
-                    const errData = await trainResponse.json().catch(() => ({}));
-                    throw new Error(errData.message || errData.error || 'RF training failed');
-                }
-
-                console.log("✅ RF Training completed successfully.");
-
-                // ── Done ─────────────────────────────────────────────────
-                alert(`✅ Training complete!\n\nModel saved to: ${trainingPayload.model_savepath}`);
-
-            } catch (error) {
-                console.error("❌ Training pipeline error:", error);
-                alert(`Error: ${error.message}`);
-            } finally {
-                setStatus("Start Training");
-                startTrainingButton.disabled = false;
-            }
+        showTrainingModal(scene, (params) => {
+            // Pipeline is handled entirely inside the modal (functions.js)
+            console.log('✅ Training pipeline completed with params:', params);
         });
     });
 }

@@ -14,6 +14,8 @@ def home(request):
 def test_babylon(request):
     return render(request, "viewer/viewer_page.html")
 
+# TODO Add documentation page 
+
 @csrf_exempt
 def clear_data(request):
     """
