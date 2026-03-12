@@ -4,10 +4,10 @@ from .request_functions import save_file, launch_RF_training, launch_RF_classify
 from .request_functions import mesh2pc, ply2las, feat_extraction, potree_converter, _split_las_by_binary, las_to_feature_bin_view, read_text_file
 
 
-# TODO Add documentation page 
 urlpatterns = [
     # path('', views.home, name='home'),
     path('', views.test_babylon, name='test_babylon'),
+    path('documentation/', views.documentation, name='documentation'),
     # Serve point cloud binary files with Range request support
     path('pointcloud-data/<path:filepath>', views.serve_range_file, name='serve_range_file'),
     # Add more path to launch other functions

@@ -1,0 +1,698 @@
+{% load static %}
+
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <title>3DOM Classify — Documentation</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="{% static 'viewer/css/docs_styles.css' %}">
+    <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+
+<body>
+
+    <!-- ══════════════════════════════════════
+         TOP NAVBAR
+    ═══════════════════════════════════════ -->
+    <div class="top-navbar">
+        <div class="navbar-left">
+            <!-- Replace src with your actual logo path -->
+            <!-- <img src="icons/3DClassyViewer_Logo.png" alt="Logo" class="nav-logo"> -->
+            <span class="nav-logo-text">3DOM <span>Classify</span></span>
+            <div class="navbar-separator"></div>
+            <span class="navbar-badge">Docs</span>
+        </div>
+
+        <div class="navbar-right">
+            <!-- Search -->
+            <div class="nav-search-wrap">
+                <span class="nav-search-icon">🔍</span>
+                <input type="text" id="search-input" placeholder="Search documentation…" autocomplete="off">
+                <div id="search-dropdown" class="search-results-dropdown"></div>
+            </div>
+        </div>
+    </div>
+
+
+    <!-- ══════════════════════════════════════
+         APP LAYOUT
+    ═══════════════════════════════════════ -->
+    <div class="app-container">
+
+        <!-- LEFT SIDEBAR — Table of Contents -->
+        <aside id="sidebar-toc">
+            <div class="panel-header">CONTENTS</div>
+            <div class="toc-scroll">
+                <div id="toc-nav"><!-- built by main.js --></div>
+            </div>
+        </aside>
+
+        <div class="resizer" id="resizer-toc"></div>
+
+        <!-- MAIN CONTENT AREA -->
+        <div id="doc-content-area">
+
+            <!-- All pages live here -->
+            <div id="doc-pages">
+
+                <!-- ════════════════════════════════
+                     PAGE: HOME / OVERVIEW
+                ════════════════════════════════ -->
+                <article class="doc-page" id="page-home">
+                    <div class="home-hero">
+                        <div class="version-tag">v1.0.0  ·  Latest</div>
+                        <h1>3DOM Classify Viewer</h1>
+                        <p class="page-subtitle">
+                            A web-based viewer for 3D point cloud classification. Load, inspect, annotate
+                            and export labelled point clouds directly in the browser.
+                        </p>
+                    </div>
+
+                    <!-- Quick-nav cards -->
+                    <h2 id="where-to-start">Where to Start</h2>
+                    <div class="card-grid">
+                        <div class="doc-card" onclick="navigateTo('getting-started')">
+                            <div class="card-icon">▶</div>
+                            <div class="card-title">Getting Started</div>
+                            <div class="card-desc">Installation, requirements and your first point cloud.</div>
+                        </div>
+                        <div class="doc-card" onclick="navigateTo('interface')">
+                            <div class="card-icon">◫</div>
+                            <div class="card-title">Interface Guide</div>
+                            <div class="card-desc">Learn the layout: viewport, sidebars, toolbar and menus.</div>
+                        </div>
+                        <div class="doc-card" onclick="navigateTo('training')">
+                            <div class="card-icon">🎯</div>
+                            <div class="card-title">Training Mode</div>
+                            <div class="card-desc">Label points and train a classifier from scratch.</div>
+                        </div>
+                        <div class="doc-card" onclick="navigateTo('classify')">
+                            <div class="card-icon">🔬</div>
+                            <div class="card-title">Classify Mode</div>
+                            <div class="card-desc">Run inference on unlabelled data with a saved model.</div>
+                        </div>
+                    </div>
+
+                    <h2 id="what-is-3dom">What is 3DOM Classify?</h2>
+                    <p>
+                        3DOM Classify Viewer is an in-browser tool built on <strong>BabylonJS</strong> that lets you
+                        load point clouds (LAS, PLY, XYZ…), visually inspect and label them, train a
+                        Random-Forest classifier and then apply the trained model to new data — all without
+                        leaving the browser tab.
+                    </p>
+                    <p>
+                        The application is served by a Django backend that handles file I/O and model training,
+                        while the frontend provides a real-time 3D viewport and interactive annotation tools.
+                    </p>
+
+                    <!-- Intro video -->
+                    <div class="video-block">
+                        <div class="video-block-label">Introduction Video</div>
+                        <div class="video-wrapper">
+                            <!--
+                                REPLACE THIS PLACEHOLDER with your actual video.
+                                Option A — local file:
+                                    <video src="videos/intro.mp4" controls></video>
+
+                                Option B — YouTube embed:
+                                    <iframe src="https://www.youtube.com/embed/YOUR_ID" allowfullscreen></iframe>
+                            -->
+                            <div class="video-placeholder">
+                                <div class="play-icon">▶</div>
+                                <span>Add your intro video here</span>
+                            </div>
+                        </div>
+                        <div class="video-caption">Overview of the 3DOM Classify Viewer — approx. 3 min.</div>
+                    </div>
+
+                    <h2 id="key-features">Key Features</h2>
+                    <ul>
+                        <li>Real-time 3D point cloud rendering via BabylonJS (WebGL2)</li>
+                        <li>Interactive rectangular and lasso selection tools</li>
+                        <li>Training mode: annotate, configure features, run Random Forest</li>
+                        <li>Classify mode: apply saved model to new point clouds</li>
+                        <li>Measure and area-measure tools with on-screen labels</li>
+                        <li>Multi-attribute coloring (RGB, intensity, classification…)</li>
+                        <li>Export labelled data to LAS / CSV</li>
+                    </ul>
+                </article>
+
+
+                <!-- ════════════════════════════════
+                     PAGE: GETTING STARTED
+                ════════════════════════════════ -->
+                <article class="doc-page" id="page-getting-started">
+                    <div class="page-eyebrow">▶ Getting Started</div>
+                    <h1>Getting Started</h1>
+                    <p class="page-subtitle">Everything you need to run 3DOM Classify for the first time.</p>
+
+                    <h2 id="prerequisites">Prerequisites</h2>
+                    <p>Before installing, make sure your environment has:</p>
+                    <ul>
+                        <li>Python ≥ 3.10</li>
+                        <li>Django ≥ 4.2</li>
+                        <li>A modern browser with WebGL2 support (Chrome 90+, Firefox 90+, Edge 90+)</li>
+                        <li>At least 4 GB RAM (8 GB recommended for large point clouds)</li>
+                    </ul>
+
+                    <h2 id="installation-overview">Installation Overview</h2>
+                    <div class="steps-list">
+                        <div class="step-item">
+                            <div class="step-number">1</div>
+                            <div class="step-body">
+                                <strong>Clone the repository</strong>
+                                <p>Download or clone the source code from your repository host.</p>
+                            </div>
+                        </div>
+                        <div class="step-item">
+                            <div class="step-number">2</div>
+                            <div class="step-body">
+                                <strong>Install Python dependencies</strong>
+                                <p>Create a virtual environment and install requirements with pip.</p>
+                            </div>
+                        </div>
+                        <div class="step-item">
+                            <div class="step-number">3</div>
+                            <div class="step-body">
+                                <strong>Run database migrations</strong>
+                                <p>Apply Django migrations to set up the local SQLite database.</p>
+                            </div>
+                        </div>
+                        <div class="step-item">
+                            <div class="step-number">4</div>
+                            <div class="step-body">
+                                <strong>Start the development server</strong>
+                                <p>Run <code>python manage.py runserver</code> and open <code>localhost:8000</code>.</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="callout">
+                        <span class="callout-icon">ℹ️</span>
+                        For detailed installation steps see the <strong>Installation</strong> page.
+                    </div>
+
+                    <!-- Video: getting started walkthrough -->
+                    <div class="video-block">
+                        <div class="video-block-label">Getting Started Walkthrough</div>
+                        <div class="video-wrapper">
+                            <!-- <video src="videos/getting-started.mp4" controls></video> -->
+                            <div class="video-placeholder">
+                                <div class="play-icon">▶</div>
+                                <span>Add your getting-started video here</span>
+                            </div>
+                        </div>
+                        <div class="video-caption">Setting up 3DOM Classify from scratch — approx. 5 min.</div>
+                    </div>
+                </article>
+
+
+                <!-- ════════════════════════════════
+                     PAGE: INSTALLATION
+                ════════════════════════════════ -->
+                <article class="doc-page" id="page-installation">
+                    <div class="page-eyebrow">⬇ Installation</div>
+                    <h1>Installation</h1>
+                    <p class="page-subtitle">Step-by-step guide to installing the application on your machine.</p>
+
+                    <h2 id="clone">1 · Clone the Repository</h2>
+                    <div class="code-block">
+                        <span class="code-lang">bash</span>
+git clone https://github.com/your-org/3dom-classify.git
+cd 3dom-classify
+                    </div>
+
+                    <h2 id="virtualenv">2 · Create a Virtual Environment</h2>
+                    <div class="code-block">
+                        <span class="code-lang">bash</span>
+python -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+                    </div>
+
+                    <h2 id="static-files">3 · Collect Static Files</h2>
+                    <p>BabylonJS and other static assets need to be placed in the correct directory:</p>
+                    <div class="code-block">
+                        <span class="code-lang">bash</span>
+python manage.py collectstatic
+                    </div>
+
+                    <h2 id="migrate">4 · Database Migrations</h2>
+                    <div class="code-block">
+                        <span class="code-lang">bash</span>
+python manage.py migrate
+                    </div>
+
+                    <h2 id="runserver">5 · Run the Server</h2>
+                    <div class="code-block">
+                        <span class="code-lang">bash</span>
+python manage.py runserver
+# → Open http://localhost:8000 in your browser
+                    </div>
+
+                    <div class="callout warning">
+                        <span class="callout-icon">⚠️</span>
+                        Do not use <code>runserver</code> in production. Use Gunicorn + Nginx instead.
+                    </div>
+                </article>
+
+
+                <!-- ════════════════════════════════
+                     PAGE: QUICK START
+                ════════════════════════════════ -->
+                <article class="doc-page" id="page-quickstart">
+                    <div class="page-eyebrow">⚡ Quick Start</div>
+                    <h1>Quick Start</h1>
+                    <p class="page-subtitle">Load a point cloud and classify your first data in under 10 minutes.</p>
+
+                    <h2 id="qs-load">Step 1 — Load a Point Cloud</h2>
+                    <p>
+                        Click <strong>File → Load Data</strong> in the top navbar, or press <code>Ctrl+O</code>.
+                        Select a supported file (LAS, PLY, XYZ). The processing pipeline will run and the
+                        point cloud will appear in the viewport.
+                    </p>
+
+                    <h2 id="qs-annotate">Step 2 — Annotate in Training Mode</h2>
+                    <p>
+                        Switch to <strong>Training mode</strong> using the navbar toggle.
+                        Use the rectangle or lasso selection tool to select groups of points, then assign
+                        a class label from the right sidebar.
+                    </p>
+
+                    <h2 id="qs-train">Step 3 — Train the Classifier</h2>
+                    <p>
+                        Once you have labelled points in at least two classes, open the
+                        <strong>Train</strong> section in the right sidebar, choose your features and click
+                        <strong>Run Training</strong>.
+                    </p>
+
+                    <h2 id="qs-classify">Step 4 — Classify</h2>
+                    <p>
+                        Switch to <strong>Classify mode</strong>. Load unlabelled data and click
+                        <strong>Run Classification</strong>. Results are coloured by predicted class
+                        in the viewport.
+                    </p>
+
+                    <div class="video-block">
+                        <div class="video-block-label">Quick Start Demo</div>
+                        <div class="video-wrapper">
+                            <!-- <video src="videos/quickstart.mp4" controls></video> -->
+                            <div class="video-placeholder">
+                                <div class="play-icon">▶</div>
+                                <span>Add your quick start demo video here</span>
+                            </div>
+                        </div>
+                        <div class="video-caption">Complete workflow from load to classification — approx. 8 min.</div>
+                    </div>
+                </article>
+
+
+                <!-- ════════════════════════════════
+                     PAGE: INTERFACE
+                ════════════════════════════════ -->
+                <article class="doc-page" id="page-interface">
+                    <div class="page-eyebrow">◫ User Guide</div>
+                    <h1>Interface Overview</h1>
+                    <p class="page-subtitle">Learn each area of the application UI.</p>
+
+                    <h2 id="layout">Layout</h2>
+                    <p>
+                        The UI is split into four main areas: the <strong>Top Navbar</strong>,
+                        the <strong>Left Inspector</strong> panel, the <strong>Central Viewport</strong>,
+                        and the <strong>Right Tools</strong> panel. Each sidebar can be resized by dragging
+                        the divider between it and the viewport.
+                    </p>
+
+                    <h2 id="navbar">Top Navbar</h2>
+                    <p>
+                        The navbar contains the application logo, the <strong>File</strong> dropdown menu
+                        (Load / Download Data), and the <strong>Training / Classify</strong> mode toggle.
+                    </p>
+
+                    <h2 id="viewport">Central Viewport</h2>
+                    <p>
+                        The viewport renders the point cloud using BabylonJS. Controls:
+                    </p>
+                    <ul>
+                        <li><strong>Left click + drag</strong> — Rotate</li>
+                        <li><strong>Right click + drag</strong> — Pan</li>
+                        <li><strong>Scroll wheel</strong> — Zoom</li>
+                    </ul>
+                    <p>
+                        The bottom info bar shows total point count, visible points, and current FPS.
+                        The top-left controls let you switch View and Color modes.
+                        The right floating toolbar holds the selection and measurement tools.
+                    </p>
+
+                    <h2 id="left-panel">Left Panel — Inspector</h2>
+                    <p>
+                        The Inspector shows metadata about the loaded point cloud: point count, bounding box,
+                        available attributes, and active selection statistics.
+                    </p>
+
+                    <h2 id="right-panel">Right Panel — Tools</h2>
+                    <p>
+                        Context-sensitive: in <strong>Training</strong> mode it shows class management
+                        and training configuration; in <strong>Classify</strong> mode it shows
+                        model selection and classification results.
+                    </p>
+
+                    <div class="video-block">
+                        <div class="video-block-label">Interface Tour</div>
+                        <div class="video-wrapper">
+                            <!-- <video src="videos/interface.mp4" controls></video> -->
+                            <div class="video-placeholder">
+                                <div class="play-icon">▶</div>
+                                <span>Add your interface tour video here</span>
+                            </div>
+                        </div>
+                        <div class="video-caption">Complete UI walkthrough — approx. 4 min.</div>
+                    </div>
+                </article>
+
+
+                <!-- ════════════════════════════════
+                     PAGE: LOAD DATA
+                ════════════════════════════════ -->
+                <article class="doc-page" id="page-load-data">
+                    <div class="page-eyebrow">📂 Load Data</div>
+                    <h1>Load Data</h1>
+                    <p class="page-subtitle">Supported file formats and how the loading pipeline works.</p>
+
+                    <h2 id="supported-formats">Supported Formats</h2>
+                    <ul>
+                        <li><code>.las</code> / <code>.laz</code> — LiDAR industry standard</li>
+                        <li><code>.ply</code> — Stanford Polygon format</li>
+                        <li><code>.xyz</code> / <code>.txt</code> — plain-text ASCII point lists</li>
+                    </ul>
+
+                    <h2 id="loading-pipeline">Loading Pipeline</h2>
+                    <p>
+                        When you load a file, a multi-step pipeline runs on the backend and
+                        reports progress in real time:
+                    </p>
+                    <div class="steps-list">
+                        <div class="step-item">
+                            <div class="step-number">1</div>
+                            <div class="step-body"><strong>Parse file</strong><p>Read raw binary or ASCII data.</p></div>
+                        </div>
+                        <div class="step-item">
+                            <div class="step-number">2</div>
+                            <div class="step-body"><strong>Extract attributes</strong><p>XYZ, RGB, intensity, return number…</p></div>
+                        </div>
+                        <div class="step-item">
+                            <div class="step-number">3</div>
+                            <div class="step-body"><strong>Compute features</strong><p>Normals, local geometry descriptors.</p></div>
+                        </div>
+                        <div class="step-item">
+                            <div class="step-number">4</div>
+                            <div class="step-body"><strong>Transfer to GPU</strong><p>Upload vertex buffer to WebGL.</p></div>
+                        </div>
+                    </div>
+
+                    <div class="callout">
+                        <span class="callout-icon">ℹ️</span>
+                        Files larger than 50 M points may take several minutes to load and require at least 8 GB RAM.
+                    </div>
+                </article>
+
+
+                <!-- ════════════════════════════════
+                     PAGE: TRAINING MODE
+                ════════════════════════════════ -->
+                <article class="doc-page" id="page-training">
+                    <div class="page-eyebrow">🎯 User Guide</div>
+                    <h1>Training Mode</h1>
+                    <p class="page-subtitle">Annotate point cloud data and train a Random Forest classifier.</p>
+
+                    <h2 id="classes">Managing Classes</h2>
+                    <p>
+                        Open the right panel in Training mode. Use the <strong>+ Add Class</strong> button to
+                        create labelled categories (e.g. Ground, Vegetation, Building). Each class gets a
+                        unique colour displayed in the viewport.
+                    </p>
+
+                    <h2 id="selection-tools">Selecting Points</h2>
+                    <p>
+                        Activate the <strong>Rectangle</strong> or <strong>Lasso</strong> tool from the
+                        floating right toolbar. Draw a selection on the viewport to highlight points.
+                        Hold <code>Ctrl</code> and draw to <em>deselect</em> points. Press <code>I</code>
+                        to invert the selection, <code>Esc</code> to clear it.
+                    </p>
+
+                    <h2 id="assigning-labels">Assigning Labels</h2>
+                    <p>
+                        With a selection active, click a class badge in the right panel to assign
+                        that label to the selected points.
+                    </p>
+
+                    <h2 id="feature-matrix">Feature Matrix</h2>
+                    <p>
+                        The Feature Matrix lets you choose which geometric features and at which
+                        neighbourhood radii are used during training. Toggle each cell to include
+                        or exclude a feature–radius combination.
+                    </p>
+
+                    <h2 id="running-training">Running Training</h2>
+                    <p>
+                        Click <strong>Run Training</strong>. A progress dialog shows pipeline steps.
+                        When complete, the model is saved automatically and becomes available in
+                        Classify mode.
+                    </p>
+
+                    <div class="video-block">
+                        <div class="video-block-label">Training Mode Tutorial</div>
+                        <div class="video-wrapper">
+                            <!-- <video src="videos/training.mp4" controls></video> -->
+                            <div class="video-placeholder">
+                                <div class="play-icon">▶</div>
+                                <span>Add your training mode video here</span>
+                            </div>
+                        </div>
+                        <div class="video-caption">From annotation to trained model — approx. 10 min.</div>
+                    </div>
+                </article>
+
+
+                <!-- ════════════════════════════════
+                     PAGE: CLASSIFY MODE
+                ════════════════════════════════ -->
+                <article class="doc-page" id="page-classify">
+                    <div class="page-eyebrow">🔬 User Guide</div>
+                    <h1>Classify Mode</h1>
+                    <p class="page-subtitle">Apply a trained model to new, unlabelled point cloud data.</p>
+
+                    <h2 id="select-model">Select a Model</h2>
+                    <p>
+                        Switch to <strong>Classify</strong> in the navbar toggle. The right panel will
+                        list all previously trained models. Select the one you want to use.
+                    </p>
+
+                    <h2 id="run-classification">Run Classification</h2>
+                    <p>
+                        Load your unlabelled point cloud via <strong>File → Load Data</strong>, then
+                        click <strong>Run Classification</strong>. Each point is assigned a class label
+                        and coloured accordingly in the viewport.
+                    </p>
+
+                    <h2 id="review-results">Review Results</h2>
+                    <p>
+                        Use the Color menu (top-left of viewport) to switch between
+                        <em>Classification</em> and other colour modes to compare results against
+                        raw attributes like RGB or intensity.
+                    </p>
+
+                    <h2 id="export-classify">Export Results</h2>
+                    <p>
+                        See the <strong>Export Data</strong> page for how to save classified results.
+                    </p>
+
+                    <div class="video-block">
+                        <div class="video-block-label">Classify Mode Demo</div>
+                        <div class="video-wrapper">
+                            <!-- <video src="videos/classify.mp4" controls></video> -->
+                            <div class="video-placeholder">
+                                <div class="play-icon">▶</div>
+                                <span>Add your classify mode video here</span>
+                            </div>
+                        </div>
+                        <div class="video-caption">Running inference on a new point cloud — approx. 5 min.</div>
+                    </div>
+                </article>
+
+
+                <!-- ════════════════════════════════
+                     PAGE: TOOLS & SELECTION
+                ════════════════════════════════ -->
+                <article class="doc-page" id="page-tools">
+                    <div class="page-eyebrow">🛠 User Guide</div>
+                    <h1>Tools &amp; Selection</h1>
+                    <p class="page-subtitle">All available viewport tools and how to use them.</p>
+
+                    <h2 id="navigation-tool">Navigation (Default)</h2>
+                    <p>The default mode: rotate, pan and zoom the camera. No points are selected.</p>
+
+                    <h2 id="rect-tool">Rectangle Selection</h2>
+                    <p>
+                        Click and drag to draw a rectangle on screen. All visible points within the
+                        rectangle are selected. Hold <code>Ctrl</code> to deselect within the region.
+                    </p>
+
+                    <h2 id="lasso-tool">Lasso Selection</h2>
+                    <p>
+                        Freehand selection. Click and drag to draw an irregular polygon.
+                        Useful for selecting complex-shaped regions.
+                    </p>
+
+                    <h2 id="measure-tool">Measure Tool</h2>
+                    <p>
+                        Click two points in the viewport to measure the 3D distance between them.
+                        The distance is displayed as an on-screen label.
+                    </p>
+
+                    <h2 id="area-tool">Area Tool</h2>
+                    <p>
+                        Click multiple points to define a polygon. The computed planar area is
+                        shown in a cyan label. Double-click to close the polygon.
+                    </p>
+                </article>
+
+
+                <!-- ════════════════════════════════
+                     PAGE: EXPORT
+                ════════════════════════════════ -->
+                <article class="doc-page" id="page-export">
+                    <div class="page-eyebrow">⬆ Reference</div>
+                    <h1>Export Data</h1>
+                    <p class="page-subtitle">Save your classified or annotated point clouds.</p>
+
+                    <h2 id="export-formats">Export Formats</h2>
+                    <ul>
+                        <li><code>.las</code> — preserves all attributes including the classification field</li>
+                        <li><code>.csv</code> — comma-separated X, Y, Z + class label per point</li>
+                    </ul>
+
+                    <h2 id="how-to-export">How to Export</h2>
+                    <p>
+                        Click <strong>File → Download Data</strong> in the top navbar.
+                        A dialog will ask you to choose the format and which attributes to include.
+                        Click <strong>Download</strong> to save the file to your machine.
+                    </p>
+
+                    <div class="callout warning">
+                        <span class="callout-icon">⚠️</span>
+                        Exporting very large files may take a moment. Do not close the browser tab while the download is in progress.
+                    </div>
+                </article>
+
+
+                <!-- ════════════════════════════════
+                     PAGE: KEYBOARD SHORTCUTS
+                ════════════════════════════════ -->
+                <article class="doc-page" id="page-shortcuts">
+                    <div class="page-eyebrow">⌨ Reference</div>
+                    <h1>Keyboard Shortcuts</h1>
+                    <p class="page-subtitle">Speed up your workflow with these keyboard commands.</p>
+
+                    <h2 id="general-shortcuts">General</h2>
+                    <ul>
+                        <li><code>Ctrl + O</code> — Load Data</li>
+                        <li><code>Ctrl + S</code> — Download Data</li>
+                        <li><code>F</code> — Focus camera on selected / all points</li>
+                        <li><code>H</code> — Toggle command guide overlay</li>
+                    </ul>
+
+                    <h2 id="selection-shortcuts">Selection (Rect / Lasso mode)</h2>
+                    <ul>
+                        <li><code>Left click + drag</code> — Select region</li>
+                        <li><code>Ctrl + Left click + drag</code> — Deselect region</li>
+                        <li><code>I</code> — Invert selection</li>
+                        <li><code>Esc</code> — Deselect all</li>
+                    </ul>
+
+                    <h2 id="viewport-shortcuts">Viewport Navigation</h2>
+                    <ul>
+                        <li><code>Left mouse + drag</code> — Rotate</li>
+                        <li><code>Right mouse + drag</code> — Pan</li>
+                        <li><code>Scroll</code> — Zoom</li>
+                        <li><code>Numpad 1</code> — Front view</li>
+                        <li><code>Numpad 3</code> — Side view</li>
+                        <li><code>Numpad 7</code> — Top view</li>
+                    </ul>
+                </article>
+
+
+                <!-- ════════════════════════════════
+                     PAGE: FAQ
+                ════════════════════════════════ -->
+                <article class="doc-page" id="page-faq">
+                    <div class="page-eyebrow">❓ Reference</div>
+                    <h1>FAQ</h1>
+                    <p class="page-subtitle">Frequently asked questions and troubleshooting tips.</p>
+
+                    <h2 id="faq-browser">The viewer is blank / black screen</h2>
+                    <p>
+                        Make sure your browser supports <strong>WebGL2</strong>. Visit
+                        <code>chrome://gpu</code> (Chrome) or <code>about:support</code> (Firefox)
+                        to verify hardware acceleration is enabled.
+                    </p>
+
+                    <h2 id="faq-large-files">Loading large files is very slow</h2>
+                    <p>
+                        Files with tens of millions of points require significant processing time.
+                        Consider sub-sampling the cloud to a manageable density (e.g. 5 M points)
+                        before loading. Future versions will support progressive loading.
+                    </p>
+
+                    <h2 id="faq-no-model">I can't find my trained model in Classify mode</h2>
+                    <p>
+                        Models are stored per-session. Make sure you haven't cleared your browser
+                        data or restarted the server. Models are saved to the <code>media/models/</code>
+                        directory on the server.
+                    </p>
+
+                    <h2 id="faq-low-fps">The FPS counter shows very low values</h2>
+                    <p>
+                        High point counts stress the GPU. Try reducing the point size, hiding
+                        non-essential classes, or using the visibility filter to render only a
+                        subset of points.
+                    </p>
+
+                    <h2 id="faq-contact">How do I report a bug?</h2>
+                    <p>
+                        Open an issue on the project repository with a description of the problem,
+                        the browser and OS version, and the browser console output (<code>F12</code>).
+                    </p>
+                </article>
+
+            </div><!-- #doc-pages -->
+
+            <!-- ── Bottom Pagination Bar ── -->
+            <div id="doc-pagination">
+                <button class="pag-btn" id="pag-prev" onclick="pagePrev()">← Prev</button>
+                <span id="pag-info" class="pag-info"></span>
+                <button class="pag-btn" id="pag-next" onclick="pageNext()">Next →</button>
+                <div class="pag-progress" id="pag-dots"></div>
+            </div>
+
+        </div><!-- #doc-content-area -->
+
+        <div class="resizer" id="resizer-outline"></div>
+
+        <!-- RIGHT SIDEBAR — On This Page -->
+        <aside id="sidebar-outline">
+            <div class="panel-header">ON THIS PAGE</div>
+            <div class="outline-scroll">
+                <div id="outline-list"><!-- built by main.js --></div>
+            </div>
+        </aside>
+
+    </div><!-- .app-container -->
+
+    <script type="module" src="{% static 'viewer/js/docs_main.js' %}"></script>
+</body>
+</html>
