@@ -1,19 +1,12 @@
 import numpy as np
-import csv
 import os
-import argparse
-from tqdm import tqdm 
-import open3d as o3d
-from dataclasses import dataclass
-from typing import List, Tuple
-from .utils_functions.RF_training import main as training
-from .utils_functions.RF_classify import main as classification
-from .utils_functions.mesh2pc import main as mesh2pc
-from .utils_functions.ply2las import main as ply2las
-from .utils_functions.subsample_pc import main as subsampling_pc
-import sys
-import time
 import subprocess
+import signal
+import threading
+import time
+from tqdm import tqdm 
+from django.conf import settings
+
 
 import laspy
 import json
@@ -24,11 +17,13 @@ from django.conf import settings
 
 
 def launch_subprocess(command):
-
+    """
+    Standalone helper to launch a subprocess and return its last line of output.
+    """
     process = subprocess.Popen(
         command,
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
         text=True
     )
 
@@ -41,11 +36,10 @@ def launch_subprocess(command):
 
     if process.returncode != 0:
         raise RuntimeError(
-            f"C++ process failed (code {process.returncode})\nSTDERR:\n{process.stderr.read()}"
+            f"Process failed (code {process.returncode})"
         )
 
-    output_file_path = stdout_lines[-1].strip()
-    return output_file_path
+    return stdout_lines[-1].strip() if stdout_lines else ""
 
 class JobManager:
     def __init__(self):
@@ -65,22 +59,29 @@ class JobManager:
         self.error = None
         self.result = None
 
-        # Crea il processo localmente prima di salvarlo
-        process = subprocess.Popen(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,  # stderr già mergiato in stdout
-            text=True,
-            preexec_fn=os.setsid,
-            bufsize=1,
-            env={**os.environ, "PYTHONUNBUFFERED": "1"}
-        )
+        # Convert all command arguments to strings
+        command = [str(arg) for arg in command]
+
+        # Prepare Popen arguments based on OS
+        popen_kwargs = {
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.STDOUT,
+            "text": True,
+            "bufsize": 1,
+            "env": {**os.environ, "PYTHONUNBUFFERED": "1"}
+        }
+        
+        if os.name != 'nt':
+            # Linux-specific extra params to allow terminating process groups
+            popen_kwargs["preexec_fn"] = os.setsid
+
+        process = subprocess.Popen(command, **popen_kwargs)
 
         with self._lock:
             self._process = process  # ← salva riferimento per stop()
 
         try:
-            for line in process.stdout:  # ← usa variabile locale, non self._process
+            for line in process.stdout:
                 if '\r' in line:
                     parts = line.split('\r')
                     print('\r' + parts[-1], end="", flush=True)
@@ -88,11 +89,13 @@ class JobManager:
                     print(line, end="", flush=True)
                 stdout_lines.append(line)
 
-            process.wait()  # ← variabile locale
+            process.wait()
 
-            if process.returncode not in (0, -signal.SIGTERM):
-                self.error = f"Process failed (code {process.returncode})"
-                raise RuntimeError(self.error)
+            if process.returncode not in (0, -signal.SIGTERM if os.name != 'nt' else 0):
+                # On Windows, SIGTERM might not be defined or returned this way
+                if process.returncode != 0:
+                    self.error = f"Process failed (code {process.returncode})"
+                    raise RuntimeError(self.error)
 
             if stdout_lines:
                 self.result = stdout_lines[-1].strip()
@@ -100,7 +103,7 @@ class JobManager:
 
         finally:
             with self._lock:
-                if self._process is process:  # ← rimuovi solo se è ancora il nostro
+                if self._process is process:
                     self._process = None
 
     def launch_subprocess_async(self, command):
@@ -118,13 +121,15 @@ class JobManager:
     # ─────────────────────────────────────────
     def stop(self):
         """Ferma qualsiasi job in esecuzione."""
-        # 1. Ferma subprocess C++
         with self._lock:
             if self._process is not None:
                 try:
-                    os.killpg(os.getpgid(self._process.pid), signal.SIGTERM)
+                    if os.name == 'nt':
+                        self._process.terminate()
+                    else:
+                        os.killpg(os.getpgid(self._process.pid), signal.SIGTERM)
                     print("PROCESS TERMINATED\n")
-                except ProcessLookupError:
+                except (ProcessLookupError, AttributeError, PermissionError):
                     pass
 
 
@@ -208,17 +213,18 @@ def Potree(input_filepath, output_filepath):
 def launch_training_RF(data):
     print("\n[FUNCTION] ---- TRAINING RANDOM FOREST -----")
 
-    selected_features = data['selected_features']
-    training_filepath = data['training_filepath']
-    val_filepath = data['val_filepath']
-    n_jobs = data['n_jobs']
-    n_estimators = data['nr_estimators']
-    max_depth = data['max_depth']
-    min_samples_split = data['min_samples_split']
-    max_features = data['max_features']
-    use_gpu = data['use_gpu']
-    output_training_name = data['output_training_name']
-    model_savepath = data['model_savepath']
+    selected_features = data.get('selected_features', [])
+    training_filepath = data.get('training_filepath', '')
+    val_filepath = data.get('val_filepath', '')
+    n_jobs = data.get('n_jobs', -1)
+    n_estimators = data.get('n_estimators', data.get('nr_estimators', 100))
+    max_depth = data.get('max_depth', None)
+    min_samples_split = data.get('min_samples_split', 2)
+    max_features = data.get('max_features', 'sqrt')
+    use_gpu = data.get('use_gpu', False)
+    output_training_name = data.get('output_training_name', 'model')
+    model_savepath = data.get('model_savepath', '')
+    report_savepath = data.get('report_savepath', os.path.join(os.path.dirname(model_savepath), 'report_RF.txt') if model_savepath else '')
 
     script_path = os.path.abspath(os.path.join(settings.BASE_DIR, "viewer/utils_functions/RF_training.py"))
 
@@ -234,6 +240,7 @@ def launch_training_RF(data):
         "--max_features", str(max_features),
         "--output_training_name", output_training_name,
         "--model_savepath", model_savepath,
+        "--report_savepath", report_savepath,
     ]
     if use_gpu:
         command.append("--use_gpu")

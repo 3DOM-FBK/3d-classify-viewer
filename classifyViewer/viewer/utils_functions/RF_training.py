@@ -342,6 +342,7 @@ def main():
     parser.add_argument('--use_gpu', help='Try to use GPU-accelerated training (cuML)', action='store_true')
     parser.add_argument('--output_training_name', required = True, help='Name of the predicted test file')
     parser.add_argument('--model_savepath', help='Path to save the model')
+    parser.add_argument('--report_savepath', help='Path to save the training report')
     args= parser.parse_args()
 
     # PARAMETERS 
@@ -356,6 +357,7 @@ def main():
     use_gpu = args.use_gpu
     output_training_name = args.output_training_name
     model_savepath = args.model_savepath
+    report_savepath = args.report_savepath if args.report_savepath else os.path.join(os.path.dirname(output_training_name), 'report_RF.txt')
     class_las_index = "labels"
 
     feat_to_use = []
@@ -461,7 +463,7 @@ def main():
         print(f'{name}: {importance:.4f}')
 
     #Print report with results
-    report_fname = os.path.dirname(output_training_name) + "/report_RF.txt"
+    report_fname = report_savepath
 
     print(f'Check the complete report in the folder: {report_fname}')
     ''' ******************************************************************************************** '''

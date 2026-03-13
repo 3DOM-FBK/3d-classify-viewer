@@ -20,30 +20,21 @@ def documentation(request):
 @csrf_exempt
 def clear_data(request):
     """
-    Clears all files and subdirectories in static/viewer/data/
+    Clears all files and subdirectories in static/viewer/data/working/
+    leaving static/viewer/data/models/ untouched.
     """
     if request.method == 'POST':
         try:
-            data_dir = os.path.join(
+            import shutil
+            working_dir = os.path.join(
                 os.path.dirname(os.path.abspath(__file__)),
-                'static', 'viewer', 'data'
+                'static', 'viewer', 'data', 'working'
             )
-            
-            if os.path.exists(data_dir):
-                import shutil
-                for filename in os.listdir(data_dir):
-                    # Keep 'clusters' folder if you want, but user said "eliminate all files and folders"
-                    # User: "eliminare tutti i file e cartelle se ne esistono"
-                    file_path = os.path.join(data_dir, filename)
-                    try:
-                        if os.path.isfile(file_path) or os.path.islink(file_path):
-                            os.unlink(file_path)
-                        elif os.path.isdir(file_path):
-                            shutil.rmtree(file_path)
-                    except Exception as e:
-                        print(f'Failed to delete {file_path}. Reason: {e}')
+            if os.path.exists(working_dir):
+                shutil.rmtree(working_dir)
+            os.makedirs(working_dir, exist_ok=True)
 
-            return JsonResponse({"message": "Data directory cleared successfully"}, status=200)
+            return JsonResponse({"message": "Working directory cleared successfully"}, status=200)
         except Exception as e:
             return JsonResponse({"error": str(e)}, status=500)
             
@@ -62,10 +53,10 @@ def upload_data(request):
             if not uploaded_file:
                 return JsonResponse({"error": "No file provided"}, status=400)
 
-            # Define static data directory
+            # Define working data directory
             data_dir = os.path.join(
                 os.path.dirname(os.path.abspath(__file__)),
-                'static', 'viewer', 'data'
+                'static', 'viewer', 'data', 'working'
             )
             os.makedirs(data_dir, exist_ok=True)
 
@@ -107,10 +98,10 @@ def start_training(request):
             if not buffer_file:
                 return JsonResponse({"error": "Missing 'buffer' binary data"}, status=400)
 
-            # Save in the same data directory used by the pipeline
+            # Save in the working directory used by the pipeline
             training_dir = os.path.join(
                 os.path.dirname(os.path.abspath(__file__)),
-                'static', 'viewer', 'data'
+                'static', 'viewer', 'data', 'working'
             )
             os.makedirs(training_dir, exist_ok=True)
 

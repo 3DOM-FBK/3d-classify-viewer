@@ -1,14 +1,15 @@
 from django.shortcuts import render
 from django.http import JsonResponse
-from viewer.functions import launch_training_RF, launch_classify_RF, subsampling_point_cloud, stop_processes
-from viewer.functions import mesh_to_point_cloud, ply_to_las, feature_extraction, Potree, split_las_by_binary, las_to_feature_bin
 from django.views.decorators.csrf import csrf_exempt
+from .functions import launch_training_RF, launch_classify_RF, subsampling_point_cloud, stop_processes
+from .functions import mesh_to_point_cloud, ply_to_las, feature_extraction, Potree, split_las_by_binary, las_to_feature_bin
 import base64
 import os
 import json
 import traceback
 
 
+@csrf_exempt
 def launch_RF_training(request):
     if request.method == 'POST':
         try:
@@ -25,6 +26,7 @@ def launch_RF_training(request):
 
     return JsonResponse({'status': 'error', 'message': 'Method not allowed'}, status=405)
 
+@csrf_exempt
 def launch_RF_classify(request):
     if request.method == 'POST':
         try:
@@ -41,6 +43,7 @@ def launch_RF_classify(request):
 
     return JsonResponse({'status': 'error', 'message': 'Method not allowed'}, status=405)
 
+@csrf_exempt
 def subsample_pc(request):
     if request.method == 'POST':
         try:
@@ -62,6 +65,7 @@ def subsample_pc(request):
 
     return JsonResponse({'status': 'error', 'message': 'Method not allowed'}, status=405) 
 
+@csrf_exempt
 def mesh2pc(request):
     if request.method == 'POST':
         try:
@@ -85,6 +89,7 @@ def mesh2pc(request):
 
     return JsonResponse({'status': 'error', 'message': 'Method not allowed'}, status=405) 
 
+@csrf_exempt
 def ply2las(request):
     if request.method == 'POST':
         try:
@@ -106,6 +111,7 @@ def ply2las(request):
 
     return JsonResponse({'status': 'error', 'message': 'Method not allowed'}, status=405) 
 
+@csrf_exempt
 def feat_extraction(request):
     if request.method == 'POST':
         try:
@@ -130,6 +136,7 @@ def feat_extraction(request):
 
     return JsonResponse({'status': 'error', 'message': 'Method not allowed'}, status=405)
 
+@csrf_exempt
 def potree_converter(request):
     if request.method == 'POST':
         try:
@@ -151,6 +158,7 @@ def potree_converter(request):
 
     return JsonResponse({'status': 'error', 'message': 'Method not allowed'}, status=405)
 
+@csrf_exempt
 def stop_process(request):
     if request.method == 'POST':
         try:
@@ -167,6 +175,7 @@ def stop_process(request):
 
     return JsonResponse({'status': 'error', 'message': 'Method not allowed'}, status=405)
 
+@csrf_exempt
 def save_file(request):
     if request.method == 'POST':
         try:
@@ -207,6 +216,7 @@ def save_file(request):
     return JsonResponse({'status': 'error', 'message': 'Method not allowed'}, status=405)
 
 
+@csrf_exempt
 def _split_las_by_binary(request):
     if request.method == 'POST':
         try:
@@ -218,9 +228,6 @@ def _split_las_by_binary(request):
             meta_path = data['meta_path']
             output_dir = data['output_dir']
 
-            # Create folder if it doesn't exist
-            os.makedirs(os.path.dirname(output_dir), exist_ok=True)
-        
             split_las_by_binary(las_path, bin_path, meta_path, output_dir)
             print("\n")
 
@@ -233,6 +240,7 @@ def _split_las_by_binary(request):
 
     return JsonResponse({'status': 'error', 'message': 'Method not allowed'}, status=405)
 
+@csrf_exempt
 def las_to_feature_bin_view(request):
     if request.method == 'POST':
         try:
@@ -253,6 +261,99 @@ def las_to_feature_bin_view(request):
             return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
 
     return JsonResponse({'status': 'error', 'message': 'Method not allowed'}, status=405)
+
+def models_list(request):
+    """Return a list of all trained models found in viewer/static/viewer/data/models/."""
+    if request.method == 'GET':
+        try:
+            from django.conf import settings
+            models_root = os.path.join(settings.BASE_DIR, 'viewer', 'static', 'viewer', 'data', 'models')
+            result = []
+
+            if os.path.isdir(models_root):
+                for name in sorted(os.listdir(models_root)):
+                    model_dir = os.path.join(models_root, name)
+                    pkl_path  = os.path.join(model_dir, 'model.pkl')
+                    if not os.path.isdir(model_dir) or not os.path.isfile(pkl_path):
+                        continue
+                    stat = os.stat(pkl_path)
+                    import datetime
+                    created = datetime.datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M')
+                    size_mb = round(stat.st_size / (1024 * 1024), 2)
+                    result.append({
+                        'name': name,
+                        'path': f'viewer/static/viewer/data/models/{name}/model.pkl',
+                        'created': created,
+                        'size_mb': size_mb,
+                    })
+
+            return JsonResponse({'status': 'success', 'models': result})
+
+        except Exception as e:
+            print("\n[REQUEST FUNCTION] models_list ERROR " + str(e))
+            print(traceback.format_exc())
+            return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+
+    return JsonResponse({'status': 'error', 'message': 'Method not allowed'}, status=405)
+
+
+def model_exists(request):
+    """Check whether a model folder already exists under /data/models/{name}/."""
+    if request.method == 'GET':
+        try:
+            name = request.GET.get('name', '').strip()
+            if not name:
+                return JsonResponse({'exists': False})
+
+            from django.conf import settings
+            model_dir = os.path.join(settings.BASE_DIR, 'viewer', 'static', 'viewer', 'data', 'models', name)
+            exists = os.path.isdir(model_dir) and os.path.isfile(os.path.join(model_dir, 'model.pkl'))
+
+            return JsonResponse({'exists': exists})
+
+        except Exception as e:
+            print("\n[REQUEST FUNCTION] model_exists ERROR " + str(e))
+            return JsonResponse({'exists': False})
+
+    return JsonResponse({'status': 'error', 'message': 'Method not allowed'}, status=405)
+
+
+@csrf_exempt
+def delete_model(request):
+    """Delete a trained model folder from /data/models/{name}/."""
+    if request.method == 'POST':
+        try:
+            import shutil
+            data = json.loads(request.body)
+            name = data.get('name', '').strip()
+
+            if not name:
+                return JsonResponse({'status': 'error', 'message': 'No model name provided'}, status=400)
+
+            # Prevent path traversal
+            if '/' in name or '\\' in name or '..' in name:
+                return JsonResponse({'status': 'error', 'message': 'Invalid model name'}, status=400)
+
+            from django.conf import settings
+            model_dir = os.path.join(
+                settings.BASE_DIR, 'viewer', 'static', 'viewer', 'data', 'models', name
+            )
+
+            if not os.path.isdir(model_dir):
+                return JsonResponse({'status': 'error', 'message': 'Model not found'}, status=404)
+
+            shutil.rmtree(model_dir)
+            print(f"\n[REQUEST FUNCTION] Model '{name}' deleted: {model_dir}")
+
+            return JsonResponse({'status': 'success', 'message': f"Model '{name}' deleted successfully."})
+
+        except Exception as e:
+            print("\n[REQUEST FUNCTION] delete_model ERROR " + str(e))
+            print(traceback.format_exc())
+            return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+
+    return JsonResponse({'status': 'error', 'message': 'Method not allowed'}, status=405)
+
 
 def read_text_file(request):
     """Read a text file from the server and return its content."""

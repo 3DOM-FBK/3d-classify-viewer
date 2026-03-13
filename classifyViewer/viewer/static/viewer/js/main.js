@@ -18,7 +18,9 @@ import {
     clearSelection,
     invertSelection,
     applyClassToSelection,
-    classRegistry
+    classRegistry,
+    showModelReportModal,
+    showContextMenu
 } from "./functions.js";
 
 // --- UI Elements ---
@@ -156,6 +158,8 @@ function initColorMenu() {
  * @param {string[]} featureNames
  */
 function addFeaturesToColorMenu(featureNames) {
+    // Skip empty or whitespace-only names (can appear after re-calculation)
+    featureNames = featureNames.filter(n => n && n.trim().length > 0);
     if (!_colorMenuDropdown || featureNames.length === 0) return;
 
     // Remove previous feature section if present (supports refresh)
@@ -186,6 +190,45 @@ function addFeaturesToColorMenu(featureNames) {
     });
 
     _colorMenuDropdown.appendChild(section);
+
+    // Measure the longest label and set the dropdown min-width dynamically
+    // so every option fits on one line aligned with the icon.
+    _measureAndSetDropdownWidth(_colorMenuDropdown, featureNames.map(n => `🔬 ${n}`));
+}
+
+/**
+ * Measures the pixel width of the longest text in `labels` using a hidden
+ * canvas context (no DOM reflow), then sets `dropdown.style.minWidth` so
+ * every option fits on a single line.
+ *
+ * @param {HTMLElement}  dropdown  - The .dropdown-content element to resize
+ * @param {string[]}     labels    - Feature option texts to measure
+ */
+function _measureAndSetDropdownWidth(dropdown, labels) {
+    // Also include any already-rendered static options (Color View, Classification View…)
+    const allLabels = [...labels];
+    dropdown.querySelectorAll('.dropdown-option').forEach(el => {
+        allLabels.push(el.textContent);
+    });
+
+    // Derive the font from a sample option (fallback to the dropdown itself)
+    const sampleEl = dropdown.querySelector('.dropdown-option') || dropdown;
+    const cs = window.getComputedStyle(sampleEl);
+    const font = `${cs.fontStyle} ${cs.fontVariant} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    ctx.font = font;
+
+    let maxTextWidth = 0;
+    allLabels.forEach(label => {
+        const w = ctx.measureText(label).width;
+        if (w > maxTextWidth) maxTextWidth = w;
+    });
+
+    // Add horizontal padding (left + right inside the button) plus a safety margin
+    const PADDING = 52;
+    dropdown.style.minWidth = `${Math.ceil(maxTextWidth) + PADDING}px`;
 }
 
 window.addEventListener('feature-bin-loaded', (e) => {
@@ -454,8 +497,148 @@ export function registerPointCloudInOutline(pc, label = "Point Cloud") {
     });
 }
 
-// Expose via window so functions.js can call it without a circular import
-window.__registerPointCloudInOutline = registerPointCloudInOutline;
+// --- Sidebar Left: Models Section (visible only in Classify mode) ---
+const modelsSection = createAccordionSection("Models", "sidebar-left-content");
+const modelsSectionEl = modelsSection.content.closest('.accordion-section');
+const modelsContent = modelsSection.content;
+modelsContent.style.padding = "6px 0";
+modelsSectionEl.style.display = 'none'; // hidden until Classify mode
+
+let selectedModelPath = null;
+
+const modelsListEl = document.createElement('div');
+modelsListEl.style.cssText = 'display:flex; flex-direction:column; gap:2px;';
+modelsContent.appendChild(modelsListEl);
+
+const modelsEmptyMsg = document.createElement('div');
+modelsEmptyMsg.style.cssText = 'font-size:0.72rem; color:var(--text-muted); padding:6px 10px;';
+modelsEmptyMsg.textContent = 'No trained models found.';
+
+// Refresh button — uses refresh.png icon
+const modelsRefreshBtn = document.createElement('button');
+modelsRefreshBtn.title = 'Refresh model list';
+modelsRefreshBtn.style.cssText = 'background:none; border:none; cursor:pointer; padding:2px 4px; display:flex; align-items:center;';
+modelsRefreshBtn.innerHTML = `<img src="/static/viewer/icons/refresh.png" alt="Refresh" style="width:13px; height:13px; opacity:0.6;">`;
+modelsSection.headerActions.appendChild(modelsRefreshBtn);
+
+async function refreshModelsList() {
+    modelsListEl.innerHTML = '';
+    try {
+        const res = await fetch('/api/models-list/');
+        if (!res.ok) throw new Error('Failed to fetch models');
+        const data = await res.json();
+        const models = data.models || [];
+
+        if (models.length === 0) {
+            modelsListEl.appendChild(modelsEmptyMsg);
+            return;
+        }
+
+        models.forEach(model => {
+            const item = document.createElement('div');
+            item.style.cssText = `
+                display:flex; align-items:center; gap:8px;
+                padding:6px 10px; border-radius:5px; cursor:pointer;
+                transition:background 0.15s; border:1px solid transparent;
+            `;
+            item.title = `Created: ${model.created} · ${model.size_mb} MB`;
+            item.setAttribute('data-model-item', model.name);
+
+            const icon = document.createElement('span');
+            icon.textContent = '🤖';
+            icon.style.cssText = 'font-size:0.85rem; flex-shrink:0;';
+
+            const info = document.createElement('div');
+            info.style.cssText = 'display:flex; flex-direction:column; gap:1px; min-width:0; flex:1;';
+
+            const nameEl = document.createElement('span');
+            nameEl.style.cssText = 'font-size:0.75rem; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;';
+            nameEl.textContent = model.name;
+
+            const metaEl = document.createElement('span');
+            metaEl.style.cssText = 'font-size:0.65rem; color:var(--text-muted);';
+            metaEl.textContent = `${model.created} · ${model.size_mb} MB`;
+
+            info.appendChild(nameEl);
+            info.appendChild(metaEl);
+
+            // Note button — opens the training report popup
+            const noteBtn = document.createElement('button');
+            noteBtn.title = 'View training report';
+            noteBtn.style.cssText = 'background:none; border:none; cursor:pointer; padding:2px 4px; flex-shrink:0; display:flex; align-items:center; opacity:0.5; transition:opacity 0.15s;';
+            noteBtn.innerHTML = `<img src="/static/viewer/icons/note.png" alt="Report" style="width:14px; height:14px;">`;
+            noteBtn.addEventListener('mouseenter', () => noteBtn.style.opacity = '1');
+            noteBtn.addEventListener('mouseleave', () => noteBtn.style.opacity = '0.5');
+            noteBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const reportPath = `viewer/static/viewer/data/models/${model.name}/report_RF.txt`;
+                const metaPath = `viewer/static/viewer/data/models/${model.name}/metadata.json`;
+                showModelReportModal(model.name, reportPath, metaPath);
+            });
+
+            item.appendChild(icon);
+            item.appendChild(info);
+            item.appendChild(noteBtn);
+
+            item.addEventListener('click', () => {
+                modelsListEl.querySelectorAll('[data-model-item]').forEach(el => {
+                    el.style.background = '';
+                    el.style.borderColor = 'transparent';
+                });
+                item.style.background = 'rgba(59,130,246,0.12)';
+                item.style.borderColor = 'rgba(59,130,246,0.35)';
+                selectedModelPath = model.path;
+                window.__selectedModelPath = selectedModelPath;
+                console.log('📦 Model selected:', model.name, '->', selectedModelPath);
+            });
+
+            // Right-click context menu
+            item.addEventListener('contextmenu', (e) => {
+                e.preventDefault();
+                const iconBase = "/static/viewer/icons/";
+                showContextMenu(e.clientX, e.clientY, [
+                    {
+                        label: `Delete model "${model.name}"`,
+                        icon: `${iconBase}trash.png`,
+                        action: async () => {
+                            if (!confirm(`Are you sure you want to permanently delete the model "${model.name}"?\nThis action cannot be undone.`)) return;
+                            try {
+                                const res = await fetch('/api/delete-model/', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ name: model.name })
+                                });
+                                const data = await res.json();
+                                if (res.ok && data.status === 'success') {
+                                    console.log(`🗑️ Model "${model.name}" deleted.`);
+                                    // If the deleted model was selected, clear the selection
+                                    if (selectedModelPath === model.path) {
+                                        selectedModelPath = null;
+                                        window.__selectedModelPath = null;
+                                    }
+                                    await refreshModelsList();
+                                } else {
+                                    alert(`Failed to delete model: ${data.message || 'Unknown error'}`);
+                                }
+                            } catch (err) {
+                                console.error('Error deleting model:', err);
+                                alert('Error deleting model. See console for details.');
+                            }
+                        }
+                    }
+                ]);
+            });
+
+            modelsListEl.appendChild(item);
+        });
+
+    } catch (err) {
+        console.warn('Could not load models list:', err);
+        modelsListEl.appendChild(modelsEmptyMsg);
+    }
+}
+
+modelsRefreshBtn.addEventListener('click', refreshModelsList);
 
 // --- Sidebar Right: State & Objects ---
 export const sceneObjects = {
@@ -1682,6 +1865,10 @@ function setLayoutMode(mode) {
 
     // --- Sidebar-left sections ------------------------------------------
     classesSectionEl.style.display = isClassify ? 'none' : '';
+    modelsSectionEl.style.display = isClassify ? '' : 'none';
+
+    // Auto-refresh the models list every time classify mode is entered
+    if (isClassify) refreshModelsList();
 
     // --- Toolbar buttons ------------------------------------------------
     // toolBtnRect / toolBtnLasso / toolBtnCut are the actual <button> elements

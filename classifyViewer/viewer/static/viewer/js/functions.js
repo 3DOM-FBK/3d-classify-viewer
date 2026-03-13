@@ -1533,7 +1533,7 @@ export function showLoadModal() {
                     checkCancelled();
                     currentStepIdx = 0;
                     activateStep(0);
-                    console.log("🧹 Step 1: Clearing /static/viewer/data/...");
+                    console.log("🧹 Step 1: Clearing /static/viewer/data/working/...");
                     const clearResponse = await fetch('/api/clear-data/', { method: 'POST' });
                     if (!clearResponse.ok) throw new Error("Failed to clear data directory");
                     completeStep(0);
@@ -1543,7 +1543,7 @@ export function showLoadModal() {
                     checkCancelled();
                     currentStepIdx = 1;
                     activateStep(1);
-                    console.log("📤 Step 2: Uploading file to /static/viewer/data/...");
+                    console.log("📤 Step 2: Uploading file to /static/viewer/data/working/...");
                     const formData = new FormData();
                     formData.append('file', file);
                     const uploadResponse = await fetch('/api/upload-data/', {
@@ -1563,8 +1563,8 @@ export function showLoadModal() {
                     activateStep(2);
                     const filename = file.name;
                     const extension = filename.split('.').pop().toLowerCase();
-                    const inputPath = `viewer/static/viewer/data/${filename}`;
-                    let lasPath = `viewer/static/viewer/data/features.las`;
+                    const inputPath = `viewer/static/viewer/data/working/${filename}`;
+                    let lasPath = `viewer/static/viewer/data/working/features.las`;
 
                     if (extension === 'ply') {
                         console.log("🔄 Step 3: Converting PLY to LAS...");
@@ -1608,7 +1608,7 @@ export function showLoadModal() {
                         headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
                         body: JSON.stringify({
                             input_filepath: lasPath,
-                            output_filepath: `viewer/static/viewer/data/clusters`
+                            output_filepath: `viewer/static/viewer/data/working/clusters`
                         })
                     });
                     if (!potreeResponse.ok) {
@@ -1631,7 +1631,7 @@ export function showLoadModal() {
                         }
                         sceneObjects.currentPointCloud = null;
                     }
-                    const pcPath = "/static/viewer/data/clusters";
+                    const pcPath = "/static/viewer/data/working/clusters";
                     const pc = await loadPointCloud(pcPath, scene);
                     if (pc) {
                         if (sceneObjects) sceneObjects.currentPointCloud = pc;
@@ -1647,7 +1647,7 @@ export function showLoadModal() {
                     try {
                         const featureBinLoader = window.__babylonScene?.potree2Loader;
                         if (featureBinLoader) {
-                            const featureNames = await featureBinLoader.loadFeatureBin(`/static/viewer/data/features.bin`);
+                            const featureNames = await featureBinLoader.loadFeatureBin(`/static/viewer/data/working/features.bin`);
                             window.dispatchEvent(new CustomEvent('feature-bin-loaded', { detail: { names: featureNames } }));
                         }
                     } catch (binErr) {
@@ -1706,10 +1706,382 @@ export function showLoadModal() {
 /**
  * Shows a modal for configuring Random Forest training parameters.
  */
+// ─────────────────────────────────────────────────────────────────────────────
+//  showModelReportModal
+//  Opens a standalone modal showing the RF training report for a saved model.
+//  @param {string} modelName   - Display name (folder name)
+//  @param {string} reportPath  - Relative path to report_RF.txt
+//  @param {string} [metaPath]  - Optional relative path to metadata JSON (for class names)
+// ─────────────────────────────────────────────────────────────────────────────
+export async function showModelReportModal(modelName, reportPath, metaPath) {
+
+    // ── Helpers ──────────────────────────────────────────────────────────────
+    const parseSection = (text, heading) => {
+        let idx = text.indexOf('\n' + heading);
+        const atStart = text.startsWith(heading);
+        if (idx === -1 && !atStart) return [];
+        idx = atStart ? 0 : idx + 1;
+        const after = text.slice(idx + heading.length).replace(/^\s*\n/, '');
+        const lines = [];
+        for (const line of after.split('\n')) {
+            if (line.trim() === '' && lines.length) break;
+            if (line.trim()) lines.push(line.trim());
+        }
+        return lines;
+    };
+    const parseArray = (lines) => {
+        const raw = lines.join(' ');
+        const inner = raw.replace(/[\[\]]/g, '').trim();
+        return inner.split(/[\s,]+/).map(v => parseFloat(v)).filter(v => !isNaN(v));
+    };
+    const parseScalar = (lines) => { const v = parseFloat(lines[0]); return isNaN(v) ? null : v; };
+    const metricColor = (v) => v >= 0.9 ? '#4ade80' : v >= 0.7 ? '#facc15' : '#f87171';
+    const makeBadge = (val, tooltip) => {
+        const b = document.createElement('span');
+        const color = metricColor(val);
+        b.style.cssText = `
+            display:inline-flex; align-items:center; justify-content:center;
+            width:46px; padding:2px 0; border-radius:4px;
+            font-size:0.6rem; font-weight:700; font-variant-numeric:tabular-nums;
+            background:${color}22; color:${color}; border:1px solid ${color}44;
+            cursor:${tooltip ? 'help' : 'default'}; white-space:nowrap;
+        `;
+        b.textContent = (val * 100).toFixed(1) + '%';
+        if (tooltip) b.title = tooltip;
+        return b;
+    };
+    const makeSectionTitle = (text) => {
+        const el = document.createElement('div');
+        el.style.cssText = 'font-size:0.65rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.07em; margin-bottom:8px;';
+        el.textContent = text;
+        return el;
+    };
+
+    // ── Fetch data ────────────────────────────────────────────────────────────
+    let reportContent = null;
+    let classNames = [];
+
+    try {
+        const r = await fetch(`/api/read-file/?path=${encodeURIComponent(reportPath)}`);
+        if (r.ok) { const d = await r.json(); reportContent = d.content || null; }
+    } catch (_) { }
+
+    if (metaPath) {
+        try {
+            const r = await fetch(`/api/read-file/?path=${encodeURIComponent(metaPath)}`);
+            if (r.ok) {
+                const d = await r.json();
+                const meta = JSON.parse(d.content || '{}');
+                const entries = Object.entries(meta.classes || {}).sort((a, b) => Number(a[0]) - Number(b[0]));
+                classNames = ['Unclassified', ...entries.map(([, name]) => name)];
+            }
+        } catch (_) { }
+    }
+
+    // ── Build modal ───────────────────────────────────────────────────────────
+    const overlay = createModal(
+        `Report — ${modelName}`,
+        (body) => {
+            body.style.cssText = 'display:flex; flex-direction:column; gap:14px; flex:1; min-height:0; overflow:hidden;';
+
+            if (!reportContent) {
+                const msg = document.createElement('div');
+                msg.style.cssText = 'font-size:0.8rem; color:var(--text-muted); padding:20px; text-align:center;';
+                msg.textContent = 'Report file not found for this model.';
+                body.appendChild(msg);
+                return;
+            }
+
+            // Parse
+            const accuracy = parseScalar(parseSection(reportContent, 'Overall Accuracy'));
+            const precPerClass = parseArray(parseSection(reportContent, 'Precision per class'));
+            const precAvg = parseScalar(parseSection(reportContent, 'Average Precision'));
+            const precW = parseScalar(parseSection(reportContent, 'Weighted Precision'));
+            const recPerClass = parseArray(parseSection(reportContent, 'Recall per class'));
+            const recAvg = parseScalar(parseSection(reportContent, 'Average Recall'));
+            const recW = parseScalar(parseSection(reportContent, 'Weighted Recall'));
+            const f1PerClass = parseArray(parseSection(reportContent, 'F1 Scores per class'));
+            const f1Avg = parseScalar(parseSection(reportContent, 'Average F1 Score'));
+            const f1W = parseScalar(parseSection(reportContent, 'Weighted F1 Score'));
+            const iouPerClass = parseArray(parseSection(reportContent, 'IoU per class'));
+            const iouAvg = parseScalar(parseSection(reportContent, 'Average IoU'));
+            const iouW = parseScalar(parseSection(reportContent, 'Weighted IoU'));
+            const featLines = parseSection(reportContent, 'Feature importance');
+            const timingLines = parseSection(reportContent, 'Timing');
+
+            // Three-column layout
+            const twoCol = document.createElement('div');
+            twoCol.style.cssText = 'display:grid; grid-template-columns:200px fit-content(360px) 1fr; gap:14px; align-items:stretch; flex:1; min-height:0; overflow:hidden;';
+
+            // ── LEFT: Metrics ──
+            const leftCol = document.createElement('div');
+            leftCol.style.cssText = 'display:flex; flex-direction:column; gap:0; min-width:0; min-height:0; overflow:hidden;';
+            leftCol.appendChild(makeSectionTitle('Metrics'));
+            const leftScroll = document.createElement('div');
+            leftScroll.style.cssText = 'flex:1; min-height:0; overflow-y:auto; display:flex; flex-direction:column; gap:10px;';
+
+            if (accuracy !== null) {
+                const accColor = metricColor(accuracy);
+                const accCard = document.createElement('div');
+                accCard.style.cssText = `display:flex; align-items:center; justify-content:space-between; padding:10px 14px; border-radius:8px; background:${accColor}14; border:1px solid ${accColor}40;`;
+                const accLeft = document.createElement('div');
+                const accLabel = document.createElement('div');
+                accLabel.style.cssText = 'font-size:0.62rem; text-transform:uppercase; letter-spacing:0.06em; color:var(--text-muted); margin-bottom:3px;';
+                accLabel.textContent = 'Overall Accuracy';
+                const accNum = document.createElement('div');
+                accNum.style.cssText = `font-size:1.6rem; font-weight:700; line-height:1; color:${accColor};`;
+                accNum.textContent = (accuracy * 100).toFixed(1) + '%';
+                accLeft.appendChild(accLabel); accLeft.appendChild(accNum);
+                accCard.appendChild(accLeft);
+                const accR = 18, accCirc = 2 * Math.PI * accR, accDash = accuracy * accCirc;
+                const arcSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                arcSvg.setAttribute('width', '48'); arcSvg.setAttribute('height', '48'); arcSvg.setAttribute('viewBox', '0 0 48 48');
+                arcSvg.style.cssText = 'flex-shrink:0; transform:rotate(-90deg);';
+                arcSvg.innerHTML = `<circle cx="24" cy="24" r="${accR}" fill="none" stroke="rgba(255,255,255,0.07)" stroke-width="4"/>
+                    <circle cx="24" cy="24" r="${accR}" fill="none" stroke="${accColor}" stroke-width="4"
+                        stroke-dasharray="${accDash.toFixed(2)} ${accCirc.toFixed(2)}" stroke-linecap="round"/>`;
+                accCard.appendChild(arcSvg);
+                leftScroll.appendChild(accCard);
+            }
+
+            const metricsData = [
+                { label: 'Precision', avg: precAvg, w: precW },
+                { label: 'Recall', avg: recAvg, w: recW },
+                { label: 'F1 Score', avg: f1Avg, w: f1W },
+                { label: 'IoU', avg: iouAvg, w: iouW },
+            ];
+            const metricsTable = document.createElement('div');
+            metricsTable.style.cssText = 'display:flex; flex-direction:column; gap:0; border:1px solid rgba(255,255,255,0.07); border-radius:8px; overflow:hidden;';
+            const hdr = document.createElement('div');
+            hdr.style.cssText = 'display:grid; grid-template-columns:1fr 1fr 1fr; gap:4px; padding:5px 12px; border-bottom:1px solid rgba(255,255,255,0.07); background:rgba(255,255,255,0.03);';
+            hdr.innerHTML = `<span style="font-size:0.62rem;color:var(--text-muted);"></span>
+                <span style="font-size:0.62rem;color:var(--text-muted);text-align:center;">Average</span>
+                <span style="font-size:0.62rem;color:var(--text-muted);text-align:center;">Weighted</span>`;
+            metricsTable.appendChild(hdr);
+            metricsData.forEach(({ label, avg, w }, i) => {
+                const row = document.createElement('div');
+                row.style.cssText = `display:grid; grid-template-columns:1fr 1fr 1fr; gap:4px; align-items:center; padding:7px 12px; border-top:${i > 0 ? '1px solid rgba(255,255,255,0.05)' : 'none'};`;
+                const lbl = document.createElement('span');
+                lbl.style.cssText = 'font-size:0.73rem; color:var(--text-muted);';
+                lbl.textContent = label;
+                row.appendChild(lbl);
+                const avgCell = document.createElement('div'); avgCell.style.cssText = 'display:flex;justify-content:center;';
+                if (avg !== null) avgCell.appendChild(makeBadge(avg));
+                row.appendChild(avgCell);
+                const wCell = document.createElement('div'); wCell.style.cssText = 'display:flex;justify-content:center;';
+                if (w !== null) wCell.appendChild(makeBadge(w));
+                row.appendChild(wCell);
+                metricsTable.appendChild(row);
+            });
+            leftScroll.appendChild(metricsTable);
+            leftCol.appendChild(leftScroll);
+            twoCol.appendChild(leftCol);
+
+            // ── CENTER: Per-class ──
+            const centerCol = document.createElement('div');
+            centerCol.style.cssText = 'display:flex; flex-direction:column; gap:0; min-width:0; min-height:0; overflow:hidden;';
+            centerCol.appendChild(makeSectionTitle('Per Class'));
+            const numClasses = precPerClass.length;
+            if (numClasses > 0) {
+                const PC_COLS = '80px repeat(4, 46px)';
+                const perClassTable = document.createElement('div');
+                perClassTable.style.cssText = 'display:flex; flex-direction:column; border:1px solid rgba(255,255,255,0.07); border-radius:8px; overflow:hidden; flex:1; min-height:0;';
+                const pcHdr = document.createElement('div');
+                pcHdr.style.cssText = `display:grid; grid-template-columns:${PC_COLS}; gap:4px; padding:4px 8px; border-bottom:1px solid rgba(255,255,255,0.07); background:rgba(255,255,255,0.03);`;
+                pcHdr.innerHTML = `<span style="font-size:0.6rem;color:var(--text-muted);">Class</span>
+                    <span style="font-size:0.6rem;color:var(--text-muted);text-align:center;">Prec</span>
+                    <span style="font-size:0.6rem;color:var(--text-muted);text-align:center;">Rec</span>
+                    <span style="font-size:0.6rem;color:var(--text-muted);text-align:center;">F1</span>
+                    <span style="font-size:0.6rem;color:var(--text-muted);text-align:center;">IoU</span>`;
+                perClassTable.appendChild(pcHdr);
+                const pcScroll = document.createElement('div');
+                pcScroll.style.cssText = 'flex:1; min-height:0; overflow-y:auto;';
+                const pcMetrics = [precPerClass, recPerClass, f1PerClass, iouPerClass];
+                for (let ci = 0; ci < numClasses; ci++) {
+                    const row = document.createElement('div');
+                    row.style.cssText = `display:grid; grid-template-columns:${PC_COLS}; gap:4px; align-items:center; padding:4px 8px; border-top:${ci > 0 ? '1px solid rgba(255,255,255,0.05)' : 'none'};`;
+                    const lblWrap = document.createElement('div'); lblWrap.style.cssText = 'min-width:0; overflow:hidden;';
+                    const lblEl = document.createElement('span');
+                    const cName = classNames[ci] || String(ci);
+                    lblEl.style.cssText = 'display:block; font-size:0.62rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;';
+                    lblEl.textContent = cName; lblEl.title = cName;
+                    lblWrap.appendChild(lblEl); row.appendChild(lblWrap);
+                    pcMetrics.forEach(arr => {
+                        const cell = document.createElement('div'); cell.style.cssText = 'display:flex;justify-content:center;';
+                        if (arr[ci] !== undefined) cell.appendChild(makeBadge(arr[ci]));
+                        row.appendChild(cell);
+                    });
+                    pcScroll.appendChild(row);
+                }
+                perClassTable.appendChild(pcScroll);
+                centerCol.appendChild(perClassTable);
+            } else {
+                const empty = document.createElement('div');
+                empty.style.cssText = 'font-size:0.72rem; color:var(--text-muted); opacity:0.5;';
+                empty.textContent = 'No per-class data.';
+                centerCol.appendChild(empty);
+            }
+            twoCol.appendChild(centerCol);
+
+            // ── RIGHT: Feature Importance ──
+            const rightCol = document.createElement('div');
+            rightCol.style.cssText = 'display:flex; flex-direction:column; gap:0; min-width:0; min-height:0; overflow:hidden;';
+            rightCol.appendChild(makeSectionTitle('Feature Importance'));
+            if (featLines.length > 0) {
+                const allFeats = featLines
+                    .map(l => { const ci = l.lastIndexOf(':'); return { name: l.slice(0, ci).trim(), val: parseFloat(l.slice(ci + 1)) || 0 }; })
+                    .sort((a, b) => b.val - a.val);
+                let cumSum = 0; const topFeats = [];
+                for (const f of allFeats) { topFeats.push(f); cumSum += f.val; if (cumSum >= 0.9) break; }
+                const maxVal = Math.max(...topFeats.map(f => f.val), 1e-9);
+                const featScroll = document.createElement('div');
+                featScroll.style.cssText = 'flex:1; min-height:0; overflow-y:auto; padding-right:4px;';
+                const chart = document.createElement('div');
+                chart.style.cssText = 'display:flex; flex-direction:column; gap:5px;';
+                topFeats.forEach(({ name, val }, i) => {
+                    const t = topFeats.length > 1 ? i / (topFeats.length - 1) : 0;
+                    const barColor = `rgba(99,179,237,${1 - t * 0.5})`;
+                    const pct = (val / maxVal) * 100;
+                    const row = document.createElement('div');
+                    row.style.cssText = 'display:grid; grid-template-columns:110px 1fr 44px; align-items:center; gap:6px;';
+                    const lbl = document.createElement('span');
+                    lbl.style.cssText = 'font-size:0.68rem; color:var(--text-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;';
+                    lbl.title = name; lbl.textContent = name;
+                    const track = document.createElement('div');
+                    track.style.cssText = 'height:6px; background:rgba(255,255,255,0.06); border-radius:3px; overflow:hidden;';
+                    const fill = document.createElement('div');
+                    fill.style.cssText = `width:0%; height:100%; border-radius:3px; background:${barColor}; transition:width 0.5s ease ${i * 40}ms;`;
+                    track.appendChild(fill);
+                    const valEl = document.createElement('span');
+                    valEl.style.cssText = 'font-size:0.65rem; text-align:right; color:var(--text-muted); font-variant-numeric:tabular-nums;';
+                    valEl.textContent = val.toFixed(4);
+                    row.appendChild(lbl); row.appendChild(track); row.appendChild(valEl);
+                    chart.appendChild(row);
+                    requestAnimationFrame(() => requestAnimationFrame(() => { fill.style.width = `${pct}%`; }));
+                });
+                featScroll.appendChild(chart);
+                rightCol.appendChild(featScroll);
+                const hidden = allFeats.length - topFeats.length;
+                const summary = document.createElement('div');
+                summary.style.cssText = 'font-size:0.65rem; color:var(--text-muted); margin-top:8px; opacity:0.7; flex-shrink:0;';
+                summary.textContent = `${topFeats.length} feature${topFeats.length !== 1 ? 's' : ''} · ${(cumSum * 100).toFixed(0)}% importance` + (hidden > 0 ? ` · ${hidden} hidden` : '');
+                rightCol.appendChild(summary);
+            } else {
+                const empty = document.createElement('div');
+                empty.style.cssText = 'font-size:0.72rem; color:var(--text-muted); opacity:0.5;';
+                empty.textContent = 'No feature data available.';
+                rightCol.appendChild(empty);
+            }
+            twoCol.appendChild(rightCol);
+            body.appendChild(twoCol);
+
+            // ── Timing ──
+            if (timingLines.length > 0) {
+                const timingRow = document.createElement('div');
+                timingRow.style.cssText = 'display:flex; gap:0; flex-shrink:0; border:1px solid rgba(255,255,255,0.07); border-radius:8px; overflow:hidden; margin-top:auto;';
+                timingLines.forEach((line, i) => {
+                    const ci = line.lastIndexOf(':');
+                    if (ci === -1) return;
+                    const lbl = line.slice(0, ci).trim()
+                        .replace('Loading time', 'Loading').replace('Training time', 'Training')
+                        .replace('Prediction + Metrics time', 'Prediction').replace('Total time', 'Total');
+                    const val = line.slice(ci + 1).trim();
+                    const isTotal = lbl === 'Total';
+                    const cell = document.createElement('div');
+                    cell.style.cssText = `flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:8px 6px; border-left:${i > 0 ? '1px solid rgba(255,255,255,0.06)' : 'none'}; background:${isTotal ? 'rgba(255,255,255,0.04)' : 'transparent'};`;
+                    cell.innerHTML = `<span style="font-size:0.75rem;font-weight:${isTotal ? '700' : '500'};">${val}</span>
+                        <span style="font-size:0.6rem;color:var(--text-muted);margin-top:2px;">${lbl}</span>`;
+                    timingRow.appendChild(cell);
+                });
+                body.appendChild(timingRow);
+            }
+        },
+        (footer, overlay) => {
+            const closeBtn = document.createElement('button');
+            closeBtn.classList.add('btn');
+            closeBtn.textContent = 'Close';
+            closeBtn.onclick = () => { overlay.classList.remove('active'); setTimeout(() => overlay.remove(), 300); };
+            footer.appendChild(closeBtn);
+        }
+    );
+
+    // Resize container now that it's in the DOM
+    const container = overlay.querySelector('.modal-container');
+    if (container) {
+        container.style.width = '1020px';
+        container.style.maxWidth = 'none';
+        container.style.maxHeight = '75vh';
+        container.style.display = 'flex';
+        container.style.flexDirection = 'column';
+    }
+    // Also fix body flex so it fills the resized container
+    const body = overlay.querySelector('.modal-body');
+    if (body) {
+        body.style.flex = '1';
+        body.style.minHeight = '0';
+        body.style.overflow = 'hidden';
+    }
+
+    return overlay;
+}
+
 export function showTrainingModal(scene, onStart) {
     const overlay = createModal(
         "Training Configuration",
         (body) => {
+            // --- SECTION 0: MODEL NAME ---
+            const nameTitle = document.createElement('div');
+            nameTitle.classList.add('modal-section-title');
+            nameTitle.textContent = "Model Name";
+            body.appendChild(nameTitle);
+
+            const nameSection = document.createElement('div');
+            nameSection.classList.add('modal-section');
+
+            const nameRow = document.createElement('div');
+            nameRow.classList.add('property-row');
+            nameRow.style.alignItems = 'center';
+
+            const nameLabel = document.createElement('span');
+            nameLabel.classList.add('property-label');
+            nameLabel.style.width = '100px';
+            nameLabel.textContent = 'Name:';
+            nameRow.appendChild(nameLabel);
+
+            const nameInputWrap = document.createElement('div');
+            nameInputWrap.style.cssText = 'flex:1; display:flex; flex-direction:column; gap:4px;';
+
+            const nameInput = document.createElement('input');
+            nameInput.type = 'text';
+            nameInput.id = 'model-name-input';
+            nameInput.classList.add('property-input');
+            nameInput.placeholder = 'e.g. facade_segmentation';
+            nameInput.value = 'my_model';
+            nameInput.style.fontFamily = 'monospace';
+
+            const nameWarning = document.createElement('div');
+            nameWarning.id = 'model-name-warning';
+            nameWarning.style.cssText = 'font-size:0.7rem; color:#facc15; display:none; padding-left:2px;';
+            nameWarning.textContent = '⚠ A model with this name already exists and will be overwritten.';
+
+            nameInput.addEventListener('input', async () => {
+                const val = nameInput.value.trim();
+                if (!val) { nameWarning.style.display = 'none'; return; }
+                try {
+                    const res = await fetch(`/api/model-exists/?name=${encodeURIComponent(val)}`);
+                    if (res.ok) {
+                        const data = await res.json();
+                        nameWarning.style.display = data.exists ? 'block' : 'none';
+                    }
+                } catch (_) { nameWarning.style.display = 'none'; }
+            });
+
+            nameInputWrap.appendChild(nameInput);
+            nameInputWrap.appendChild(nameWarning);
+            nameRow.appendChild(nameInputWrap);
+            nameSection.appendChild(nameRow);
+            body.appendChild(nameSection);
+
             // --- SECTION 1: DATA SPLIT ---
             const splitTitle = document.createElement('div');
             splitTitle.classList.add('modal-section-title');
@@ -2108,6 +2480,13 @@ export function showTrainingModal(scene, onStart) {
                 const trainId = body.querySelector('#train-select').value;
                 const valId = body.querySelector('#val-select').value;
 
+                // --- Validate model name ---
+                const modelNameRaw = (body.querySelector('#model-name-input')?.value || '').trim();
+                // Sanitize: keep only alphanumeric, dash, underscore
+                const modelName = modelNameRaw.replace(/[^a-zA-Z0-9_\-]/g, '_').replace(/^_+|_+$/g, '') || 'my_model';
+                const modelDir = `viewer/static/viewer/data/models/${modelName}/`;
+                const workingDir = `${modelDir}working/`;
+
                 // Helper: show error above footer, auto-hide after 4s
                 const showError = (msg) => {
                     const existing = overlay.querySelector('.training-modal-error');
@@ -2313,12 +2692,29 @@ export function showTrainingModal(scene, onStart) {
                     const saveData = await saveResponse.json();
                     completeStep(1);
 
+                    // ── Persist a copy of metadata.json in modelDir so the report
+                    //    popup can always find class names next to the model ──
+                    if (saveData && saveData.json_path) {
+                        try {
+                            const metaReadRes = await fetch(`/api/read-file/?path=${encodeURIComponent(saveData.json_path)}`);
+                            if (metaReadRes.ok) {
+                                const metaRd = await metaReadRes.json();
+                                const metaBytes = new TextEncoder().encode(metaRd.content || '{}');
+                                const metaB64 = btoa(String.fromCharCode(...metaBytes));
+                                await fetch('/save_file/', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
+                                    body: JSON.stringify({ filepath: `${modelDir}metadata.json`, data: metaB64 })
+                                });
+                            }
+                        } catch (_) { /* non-fatal */ }
+                    }
+
                     // STEP 3: Split LAS by binary labels
                     checkCancelled();
                     currentStepIdx = 2;
                     activateStep(2);
-                    const lasSourcePath = 'viewer/static/viewer/data/features.las';
-                    const outputDir = 'viewer/static/viewer/data/workdir/';
+                    const lasSourcePath = 'viewer/static/viewer/data/working/features.las';
                     const splitResponse = await fetch('/split_las_by_binary/', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
@@ -2326,7 +2722,7 @@ export function showTrainingModal(scene, onStart) {
                             las_path: lasSourcePath,
                             bin_path: saveData.bin_path,
                             meta_path: saveData.json_path,
-                            output_dir: outputDir
+                            output_dir: workingDir
                         })
                     });
                     if (!splitResponse.ok) {
@@ -2342,16 +2738,17 @@ export function showTrainingModal(scene, onStart) {
                     const rfParams = params.rf_params;
                     const trainingPayload = {
                         selected_features: params.features,
-                        training_filepath: `${outputDir}training.las`,
-                        val_filepath: `${outputDir}validation.las`,
+                        training_filepath: `${workingDir}training.las`,
+                        val_filepath: `${workingDir}validation.las`,
                         n_jobs: rfParams.n_jobs ?? 12,
                         nr_estimators: rfParams.n_estimators ?? 200,
                         max_depth: rfParams.max_depth ?? 15,
                         min_samples_split: rfParams.min_samples_split ?? 20,
                         max_features: rfParams.max_features ?? 'sqrt',
                         use_gpu: rfParams.use_gpu ?? false,
-                        output_training_name: `${outputDir}test_predicted.las`,
-                        model_savepath: `${outputDir}rf_model.pkl`
+                        output_training_name: `${workingDir}test_predicted.las`,
+                        model_savepath: `${modelDir}model.pkl`,
+                        report_savepath: `${modelDir}report_RF.txt`
                     };
                     const trainResponse = await fetch('/launch_RF_training/', {
                         method: 'POST',
@@ -2387,7 +2784,7 @@ export function showTrainingModal(scene, onStart) {
                     } catch (e) { console.warn('[Report] Could not load class names:', e); }
 
                     // ── Read report_RF.txt ──
-                    const reportPath = `${outputDir}report_RF.txt`;
+                    const reportPath = `${modelDir}report_RF.txt`;
                     let reportContent = null;
                     try {
                         const reportRes = await fetch(`/api/read-file/?path=${encodeURIComponent(reportPath)}`);
@@ -3265,8 +3662,8 @@ export function showCalculateFeaturesModal(scene, onConfirm) {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
                         body: JSON.stringify({
-                            input_filepath: 'viewer/static/viewer/data/features.las',
-                            output_filepath: 'viewer/static/viewer/data/features.las',
+                            input_filepath: 'viewer/static/viewer/data/working/features.las',
+                            output_filepath: 'viewer/static/viewer/data/working/features.las',
                             feature_list: selectedFeatures,
                             radius_list: radii
                         })
@@ -3287,8 +3684,8 @@ export function showCalculateFeaturesModal(scene, onConfirm) {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
                         body: JSON.stringify({
-                            las_path: 'viewer/static/viewer/data/features.las',
-                            bin_path: 'viewer/static/viewer/data/features.bin'
+                            las_path: 'viewer/static/viewer/data/working/features.las',
+                            bin_path: 'viewer/static/viewer/data/working/features.bin'
                         })
                     });
                     if (!binResponse.ok) {
@@ -3306,7 +3703,7 @@ export function showCalculateFeaturesModal(scene, onConfirm) {
                     try {
                         const featureBinLoader = window.__babylonScene?.potree2Loader;
                         if (featureBinLoader) {
-                            const featureNames = await featureBinLoader.loadFeatureBin(`/static/viewer/data/features.bin`);
+                            const featureNames = await featureBinLoader.loadFeatureBin(`/static/viewer/data/working/features.bin`);
                             window.dispatchEvent(new CustomEvent('feature-bin-loaded', { detail: { names: featureNames } }));
                         }
                     } catch (binErr) {

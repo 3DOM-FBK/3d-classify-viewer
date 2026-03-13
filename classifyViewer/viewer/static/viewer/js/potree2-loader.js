@@ -366,7 +366,8 @@ export class Potree2Loader {
         for (let f = 0; f < F; f++) {
             const bytes = new Uint8Array(buffer, offset, 32);
             const end = bytes.indexOf(0);
-            names.push(decoder.decode(bytes.slice(0, end === -1 ? 32 : end)));
+            const name = decoder.decode(bytes.slice(0, end === -1 ? 32 : end)).trim();
+            if (name.length > 0) names.push(name);
             offset += 32;
         }
         const vmin = new Float32Array(buffer.slice(offset, offset + F * 4)); offset += F * 4;
