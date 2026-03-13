@@ -2284,9 +2284,7 @@ export function showTrainingModal(scene, onStart) {
                         if (!isNaN(segId) && nameInput) segmentMap[segId] = nameInput.value;
                     });
                     const classMap = {};
-                    if (window.classRegistry) {
-                        window.classRegistry.forEach((val, id) => { classMap[id] = val.name; });
-                    }
+                    classRegistry.forEach((val, id) => { classMap[id] = val.name; });
                     const exportResult = await loader.exportAllTrainingData(segmentMap);
                     if (!exportResult || !exportResult.buffer) {
                         throw new Error('No points were identified in the selected regions.');
@@ -2367,6 +2365,27 @@ export function showTrainingModal(scene, onStart) {
                     completeStep(3);
                     if (onStart) onStart(params);
 
+                    // ── Read class names from metadata JSON ──
+                    // classNames: ordered array matching report class indices 0,1,2,...
+                    let classNames = [];
+                    try {
+                        if (saveData && saveData.json_path) {
+                            const metaRes = await fetch(`/api/read-file/?path=${encodeURIComponent(saveData.json_path)}`);
+                            if (metaRes.ok) {
+                                const metaData = await metaRes.json();
+                                const meta = JSON.parse(metaData.content || '{}');
+                                const rawClasses = meta.classes || {};
+                                console.log('[Report] raw classes from JSON:', rawClasses);
+                                // rawClasses keys start from 1 (user-defined classes).
+                                // The RF report uses class 0 = unclassified points, class 1 = first user class.
+                                // Prepend 'Unclassified' so indices align correctly.
+                                const entries = Object.entries(rawClasses).sort((a, b) => Number(a[0]) - Number(b[0]));
+                                classNames = ['Unclassified', ...entries.map(([, name]) => name)];
+                                console.log('[Report] ordered classNames (with Unclassified at 0):', classNames);
+                            }
+                        }
+                    } catch (e) { console.warn('[Report] Could not load class names:', e); }
+
                     // ── Read report_RF.txt ──
                     const reportPath = `${outputDir}report_RF.txt`;
                     let reportContent = null;
@@ -2380,9 +2399,12 @@ export function showTrainingModal(scene, onStart) {
 
                     // ── Helper: parse a named section ──
                     const parseSection = (text, heading) => {
-                        const idx = text.indexOf('\n' + heading);
-                        if (idx === -1) return [];
-                        const after = text.slice(idx + heading.length + 1).replace(/^\s*\n/, '');
+                        // Match at start of file OR after a newline
+                        let idx = text.indexOf('\n' + heading);
+                        const atStart = text.startsWith(heading);
+                        if (idx === -1 && !atStart) return [];
+                        idx = atStart ? 0 : idx + 1;
+                        const after = text.slice(idx + heading.length).replace(/^\s*\n/, '');
                         const lines = [];
                         for (const line of after.split('\n')) {
                             if (line.trim() === '' && lines.length) break;
@@ -2413,8 +2435,9 @@ export function showTrainingModal(scene, onStart) {
                         const color = metricColor(val);
                         b.style.cssText = `
                             display:inline-flex; align-items:center; justify-content:center;
-                            padding: 2px 7px; border-radius: 4px; font-size: 0.7rem;
-                            font-weight: 600; font-variant-numeric: tabular-nums;
+                            width: 46px; padding: 2px 0; border-radius: 4px;
+                            font-size: 0.6rem; font-weight: 700;
+                            font-variant-numeric: tabular-nums;
                             background: ${color}22; color: ${color};
                             border: 1px solid ${color}44; cursor: default;
                             white-space: nowrap;
@@ -2435,13 +2458,23 @@ export function showTrainingModal(scene, onStart) {
                         return el;
                     };
 
-                    // ── Widen modal ──
+                    // ── Widen modal & fix height ──
                     const container = overlay.querySelector('.modal-container');
-                    if (container) container.style.width = '700px';
+                    if (container) {
+                        container.style.width = '1020px';
+                        container.style.maxHeight = '75vh';
+                        container.style.display = 'flex';
+                        container.style.flexDirection = 'column';
+                    }
 
-                    // ── Clear body ──
+                    // ── Clear body — flex column, fills remaining space ──
                     body.innerHTML = '';
-                    body.style.cssText = 'padding: 2px 0; display:flex; flex-direction:column; gap:14px; min-height:0;';
+                    body.style.display = 'flex';
+                    body.style.flexDirection = 'column';
+                    body.style.gap = '14px';
+                    body.style.flex = '1';
+                    body.style.minHeight = '0';
+                    body.style.overflow = 'hidden';
 
                     // ── Success banner ──
                     const banner = document.createElement('div');
@@ -2480,34 +2513,57 @@ export function showTrainingModal(scene, onStart) {
                         const featLines = parseSection(reportContent, 'Feature importance');
                         const timingLines = parseSection(reportContent, 'Timing');
 
-                        // ── Build tooltip string for per-class values ──
-                        const classTooltip = (vals) => vals.length === 0 ? '' :
-                            'Per class: ' + vals.map((v, i) => `Class ${i}: ${(v * 100).toFixed(1)}%`).join(' · ');
-
-                        // ── Two-column layout ──
+                        // ── Three-column layout — flex:1 so it fills the body; all columns scroll independently ──
                         const twoCol = document.createElement('div');
-                        twoCol.style.cssText = 'display:grid; grid-template-columns:1fr 1fr; gap:16px; min-height:0;';
+                        twoCol.style.cssText = 'display:grid; grid-template-columns:200px fit-content(360px) 1fr; gap:14px; align-items:stretch; flex:1; min-height:0; overflow:hidden;';
 
                         // ── LEFT: Metrics ──
                         const leftCol = document.createElement('div');
-                        leftCol.style.cssText = 'display:flex; flex-direction:column; gap:10px; min-width:0;';
+                        leftCol.style.cssText = 'display:flex; flex-direction:column; gap:0; min-width:0; min-height:0; overflow:hidden;';
                         leftCol.appendChild(makeSectionTitle('Metrics'));
 
-                        // Accuracy card (big)
+                        // Scrollable wrapper for left column content
+                        const leftScroll = document.createElement('div');
+                        leftScroll.style.cssText = 'flex:1; min-height:0; overflow-y:auto; display:flex; flex-direction:column; gap:10px;';
+
+                        // Accuracy — prominent card above the table
                         if (accuracy !== null) {
+                            const accColor = metricColor(accuracy);
                             const accCard = document.createElement('div');
                             accCard.style.cssText = `
                                 display:flex; align-items:center; justify-content:space-between;
-                                padding: 8px 12px; border-radius: 8px;
-                                background: ${metricColor(accuracy)}11;
-                                border: 1px solid ${metricColor(accuracy)}33;
+                                padding: 10px 14px; border-radius: 8px;
+                                background: ${accColor}14;
+                                border: 1px solid ${accColor}40;
                             `;
-                            accCard.innerHTML = `<span style="font-size:0.75rem; font-weight:600;">Overall Accuracy</span>`;
-                            const accVal = document.createElement('span');
-                            accVal.style.cssText = `font-size:1.1rem; font-weight:700; color:${metricColor(accuracy)};`;
-                            accVal.textContent = (accuracy * 100).toFixed(1) + '%';
-                            accCard.appendChild(accVal);
-                            leftCol.appendChild(accCard);
+
+                            // Left: label + big number
+                            const accLeft = document.createElement('div');
+                            const accLabel = document.createElement('div');
+                            accLabel.style.cssText = 'font-size:0.62rem; text-transform:uppercase; letter-spacing:0.06em; color:var(--text-muted); margin-bottom:3px;';
+                            accLabel.textContent = 'Overall Accuracy';
+                            const accNum = document.createElement('div');
+                            accNum.style.cssText = `font-size:1.6rem; font-weight:700; line-height:1; color:${accColor};`;
+                            accNum.textContent = (accuracy * 100).toFixed(1) + '%';
+                            accLeft.appendChild(accLabel);
+                            accLeft.appendChild(accNum);
+                            accCard.appendChild(accLeft);
+
+                            // Right: donut arc SVG
+                            const accR = 18, accCirc = 2 * Math.PI * accR;
+                            const accDash = accuracy * accCirc;
+                            const arcSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                            arcSvg.setAttribute('width', '48'); arcSvg.setAttribute('height', '48');
+                            arcSvg.setAttribute('viewBox', '0 0 48 48');
+                            arcSvg.style.cssText = 'flex-shrink:0; transform:rotate(-90deg);';
+                            arcSvg.innerHTML = `
+                                <circle cx="24" cy="24" r="${accR}" fill="none" stroke="rgba(255,255,255,0.07)" stroke-width="4"/>
+                                <circle cx="24" cy="24" r="${accR}" fill="none" stroke="${accColor}" stroke-width="4"
+                                    stroke-dasharray="${accDash.toFixed(2)} ${accCirc.toFixed(2)}"
+                                    stroke-linecap="round"/>
+                            `;
+                            accCard.appendChild(arcSvg);
+                            leftScroll.appendChild(accCard);
                         }
 
                         // Metrics table
@@ -2521,9 +2577,9 @@ export function showTrainingModal(scene, onStart) {
                         const metricsTable = document.createElement('div');
                         metricsTable.style.cssText = 'display:flex; flex-direction:column; gap:0; border:1px solid rgba(255,255,255,0.07); border-radius:8px; overflow:hidden;';
 
-                        // Header
+                        // Header: metric | Average | Weighted
                         const hdr = document.createElement('div');
-                        hdr.style.cssText = 'display:grid; grid-template-columns:80px 1fr 1fr; gap:4px; padding:5px 10px; border-bottom:1px solid rgba(255,255,255,0.07); background:rgba(255,255,255,0.03);';
+                        hdr.style.cssText = 'display:grid; grid-template-columns:1fr 1fr 1fr; gap:4px; padding:5px 12px; border-bottom:1px solid rgba(255,255,255,0.07); background:rgba(255,255,255,0.03);';
                         hdr.innerHTML = `
                             <span style="font-size:0.62rem; color:var(--text-muted);"></span>
                             <span style="font-size:0.62rem; color:var(--text-muted); text-align:center;">Average</span>
@@ -2531,32 +2587,108 @@ export function showTrainingModal(scene, onStart) {
                         `;
                         metricsTable.appendChild(hdr);
 
-                        metricsData.forEach(({ label, avg, w, perClass }, i) => {
+                        metricsData.forEach(({ label, avg, w }, i) => {
                             const row = document.createElement('div');
-                            row.style.cssText = `display:grid; grid-template-columns:80px 1fr 1fr; gap:4px; align-items:center; padding:6px 10px; border-top:${i > 0 ? '1px solid rgba(255,255,255,0.05)' : 'none'};`;
+                            row.style.cssText = `
+                                display:grid; grid-template-columns:1fr 1fr 1fr;
+                                gap:4px; align-items:center; padding:7px 12px;
+                                border-top:${i > 0 ? '1px solid rgba(255,255,255,0.05)' : 'none'};
+                            `;
+
                             const lbl = document.createElement('span');
-                            lbl.style.cssText = 'font-size:0.72rem; color:var(--text-muted);';
+                            lbl.style.cssText = 'font-size:0.73rem; color:var(--text-muted);';
                             lbl.textContent = label;
                             row.appendChild(lbl);
 
                             const avgCell = document.createElement('div');
                             avgCell.style.cssText = 'display:flex; justify-content:center;';
-                            if (avg !== null) avgCell.appendChild(makeBadge(avg, classTooltip(perClass)));
+                            if (avg !== null) avgCell.appendChild(makeBadge(avg));
                             row.appendChild(avgCell);
 
                             const wCell = document.createElement('div');
                             wCell.style.cssText = 'display:flex; justify-content:center;';
-                            if (w !== null) wCell.appendChild(makeBadge(w, classTooltip(perClass)));
+                            if (w !== null) wCell.appendChild(makeBadge(w));
                             row.appendChild(wCell);
 
                             metricsTable.appendChild(row);
                         });
-                        leftCol.appendChild(metricsTable);
+                        leftScroll.appendChild(metricsTable);
+                        leftCol.appendChild(leftScroll);
                         twoCol.appendChild(leftCol);
 
-                        // ── RIGHT: Feature Importance ──
+                        // ── CENTER: Per-class metrics ──
+                        const centerCol = document.createElement('div');
+                        centerCol.style.cssText = 'display:flex; flex-direction:column; gap:0; min-width:0; min-height:0; overflow:hidden;';
+                        centerCol.appendChild(makeSectionTitle('Per Class'));
+
+                        const numClasses = precPerClass.length;
+                        if (numClasses > 0) {
+                            // col widths: class label + 4 fixed badge columns
+                            const PC_COLS = '80px repeat(4, 46px)';
+                            const PC_HDR_PAD = '4px 8px';
+                            const PC_ROW_PAD = '4px 8px';
+
+                            const perClassTable = document.createElement('div');
+                            perClassTable.style.cssText = 'display:flex; flex-direction:column; border:1px solid rgba(255,255,255,0.07); border-radius:8px; overflow:hidden; flex:1; min-height:0;';
+
+                            // Header (sticky)
+                            const pcHdr = document.createElement('div');
+                            pcHdr.style.cssText = `display:grid; grid-template-columns:${PC_COLS}; gap:4px; padding:${PC_HDR_PAD}; border-bottom:1px solid rgba(255,255,255,0.07); background:rgba(255,255,255,0.03);`;
+                            pcHdr.innerHTML = `
+                                <span style="font-size:0.6rem; color:var(--text-muted);">Class</span>
+                                <span style="font-size:0.6rem; color:var(--text-muted); text-align:center;">Prec</span>
+                                <span style="font-size:0.6rem; color:var(--text-muted); text-align:center;">Rec</span>
+                                <span style="font-size:0.6rem; color:var(--text-muted); text-align:center;">F1</span>
+                                <span style="font-size:0.6rem; color:var(--text-muted); text-align:center;">IoU</span>
+                            `;
+                            perClassTable.appendChild(pcHdr);
+
+                            // Scrollable body — fills remaining space in the table
+                            const pcScroll = document.createElement('div');
+                            pcScroll.style.cssText = 'flex:1; min-height:0; overflow-y:auto;';
+
+                            const pcMetrics = [precPerClass, recPerClass, f1PerClass, iouPerClass];
+                            for (let ci = 0; ci < numClasses; ci++) {
+                                const row = document.createElement('div');
+                                row.style.cssText = `display:grid; grid-template-columns:${PC_COLS}; gap:4px; align-items:center; padding:${PC_ROW_PAD}; border-top:${ci > 0 ? '1px solid rgba(255,255,255,0.05)' : 'none'};`;
+
+                                // Wrap in a div so min-width:0 constrains the grid cell and ellipsis works
+                                const classLblWrap = document.createElement('div');
+                                classLblWrap.style.cssText = 'min-width:0; overflow:hidden;';
+                                const classLbl = document.createElement('span');
+                                const cName = classNames[ci] || String(ci);
+                                classLbl.style.cssText = 'display:block; font-size:0.62rem; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;';
+                                classLbl.textContent = cName;
+                                // Native browser title shows full name on hover after ~0.7s — no custom JS needed
+                                classLbl.title = cName;
+                                classLblWrap.appendChild(classLbl);
+                                row.appendChild(classLblWrap);
+
+                                pcMetrics.forEach(arr => {
+                                    const cell = document.createElement('div');
+                                    cell.style.cssText = 'display:flex; justify-content:center;';
+                                    const v = arr[ci];
+                                    if (v !== undefined) cell.appendChild(makeBadge(v));
+                                    row.appendChild(cell);
+                                });
+
+                                pcScroll.appendChild(row);
+                            }
+
+                            perClassTable.appendChild(pcScroll);
+                            centerCol.appendChild(perClassTable);
+                        } else {
+                            const empty = document.createElement('div');
+                            empty.style.cssText = 'font-size:0.72rem; color:var(--text-muted); opacity:0.5;';
+                            empty.textContent = 'No per-class data.';
+                            centerCol.appendChild(empty);
+                        }
+
+                        twoCol.appendChild(centerCol);
+
+                        // ── RIGHT: Feature Importance — this column scrolls internally ──
                         const rightCol = document.createElement('div');
-                        rightCol.style.cssText = 'display:flex; flex-direction:column; gap:0; min-width:0;';
+                        rightCol.style.cssText = 'display:flex; flex-direction:column; gap:0; min-width:0; min-height:0; overflow:hidden;';
                         rightCol.appendChild(makeSectionTitle('Feature Importance'));
 
                         if (featLines.length > 0) {
@@ -2579,8 +2711,11 @@ export function showTrainingModal(scene, onStart) {
                             }
 
                             const maxVal = Math.max(...topFeats.map(f => f.val), 1e-9);
+                            // Scrollable wrapper — only this column scrolls
+                            const featScroll = document.createElement('div');
+                            featScroll.style.cssText = 'flex:1; min-height:0; overflow-y:auto; padding-right:4px;';
                             const chart = document.createElement('div');
-                            chart.style.cssText = 'display:flex; flex-direction:column; gap:5px; flex:1;';
+                            chart.style.cssText = 'display:flex; flex-direction:column; gap:5px;';
 
                             topFeats.forEach(({ name, val }, i) => {
                                 const t = topFeats.length > 1 ? i / (topFeats.length - 1) : 0;
@@ -2613,12 +2748,13 @@ export function showTrainingModal(scene, onStart) {
                                 requestAnimationFrame(() => requestAnimationFrame(() => { fill.style.width = `${pct}%`; }));
                             });
 
-                            rightCol.appendChild(chart);
+                            featScroll.appendChild(chart);
+                            rightCol.appendChild(featScroll);
 
-                            // Summary line
+                            // Summary line (outside scroll, always visible)
                             const hidden = allFeats.length - topFeats.length;
                             const summary = document.createElement('div');
-                            summary.style.cssText = 'font-size:0.65rem; color:var(--text-muted); margin-top:8px; opacity:0.7;';
+                            summary.style.cssText = 'font-size:0.65rem; color:var(--text-muted); margin-top:8px; opacity:0.7; flex-shrink:0;';
                             summary.textContent = `${topFeats.length} feature${topFeats.length !== 1 ? 's' : ''} · ${(cumSum * 100).toFixed(0)}% importance` +
                                 (hidden > 0 ? ` · ${hidden} hidden` : '');
                             rightCol.appendChild(summary);
@@ -2632,12 +2768,13 @@ export function showTrainingModal(scene, onStart) {
                         twoCol.appendChild(rightCol);
                         body.appendChild(twoCol);
 
-                        // ── Timing (full width, horizontal) ──
+                        // ── Timing (full width, horizontal) — always visible at the bottom ──
                         if (timingLines.length > 0) {
                             const timingRow = document.createElement('div');
                             timingRow.style.cssText = `
                                 display:flex; gap:0; flex-shrink:0;
                                 border:1px solid rgba(255,255,255,0.07); border-radius:8px; overflow:hidden;
+                                margin-top:auto;
                             `;
                             timingLines.forEach((line, i) => {
                                 const ci = line.lastIndexOf(':');
