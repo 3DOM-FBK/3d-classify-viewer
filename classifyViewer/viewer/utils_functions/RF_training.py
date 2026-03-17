@@ -421,8 +421,8 @@ def main():
     else:
         Y_test_pred = model.predict(X_test[:, feat_to_use])             # Test the model, using only the specified features
 
-    print(f'\nSaving {output_training_name}')
-    write_classification_las(X_test, Y_test_pred, output_training_name, header)
+    # print(f'\nSaving {output_training_name}')
+    # write_classification_las(X_test, Y_test_pred, output_training_name, header)
 
     # Compute metrics
     Precision_pc = precision_score(Y_test, Y_test_pred, average=None)
