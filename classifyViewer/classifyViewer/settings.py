@@ -127,3 +127,28 @@ DATA_UPLOAD_MAX_MEMORY_SIZE = 5242880000  # 5GB in bytes
 
 # 🔧 Optional: also increase the limit for files
 FILE_UPLOAD_MAX_MEMORY_SIZE = 5242880000  # 5GB
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'filters': {
+        'ignore_octree': {
+            '()': 'django.utils.log.CallbackFilter',
+            'callback': lambda record: 'octree.bin' not in record.getMessage()
+        }
+    },
+    'handlers': {
+        'console': {
+            'level': 'INFO',
+            'filters': ['ignore_octree'],
+            'class': 'logging.StreamHandler',
+        },
+    },
+    'loggers': {
+        'django.server': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+    },
+}

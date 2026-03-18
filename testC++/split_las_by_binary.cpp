@@ -318,6 +318,165 @@ static void write_segment(const fs::path&              las_path,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+//  write_segment_for_classify
+//
+//  Same as write_segment but does NOT add the "labels" extra dim.
+//  Used when extracting a single segment to classify — we only need the
+//  feature dims, not the training label.
+// ─────────────────────────────────────────────────────────────────────────────
+
+static void write_segment_for_classify(const fs::path&              las_path,
+                                       const pdal::PointViewPtr&     srcView,
+                                       const std::vector<uint8_t>&   raw,
+                                       const std::vector<ExtraBytesEntry>& vlrExtras,
+                                       int                           seg_id,
+                                       const fs::path&               out_path)
+{
+    const size_t n_valid = std::min(srcView->size(), raw.size() / 2);
+
+    static const std::set<std::string> kStandardDimNames = {
+        "X","Y","Z","Intensity","ReturnNumber","NumberOfReturns",
+        "ScanDirectionFlag","EdgeOfFlightLine","Classification",
+        "ScanAngleRank","UserData","PointSourceId",
+        "GpsTime","Red","Green","Blue",
+        "ScannerChannel","ScanChannel","ClassificationFlags","ScanAngle",
+        "NormalX","NormalY","NormalZ","Synthetic","KeyPoint","Withheld","Overlap"
+    };
+
+    // ── Collect PDAL extra dim IDs (positional — same order as VLR) ──────────
+    std::vector<pdal::Dimension::Id> srcExtraIds;
+    for (const auto& dimId : srcView->dims()) {
+        std::string dname = pdal::Dimension::name(dimId);
+        if (!kStandardDimNames.count(dname))
+            srcExtraIds.push_back(dimId);
+    }
+
+    size_t nExtra = std::min(srcExtraIds.size(), vlrExtras.size());
+    if (srcExtraIds.size() != vlrExtras.size())
+        std::cerr << "  WARNING: VLR extra count (" << vlrExtras.size()
+                  << ") != PDAL extra count (" << srcExtraIds.size()
+                  << ") — using first " << nExtra << "\n";
+
+    // ── Build fresh output PointTable — no "labels" dim ──────────────────────
+    pdal::PointTable table;
+    pdal::PointLayoutPtr layout = table.layout();
+
+    layout->registerDim(pdal::Dimension::Id::X);
+    layout->registerDim(pdal::Dimension::Id::Y);
+    layout->registerDim(pdal::Dimension::Id::Z);
+    layout->registerDim(pdal::Dimension::Id::Classification);
+    layout->registerDim(pdal::Dimension::Id::Intensity);
+    layout->registerDim(pdal::Dimension::Id::ScanAngleRank);
+    layout->registerDim(pdal::Dimension::Id::NumberOfReturns);
+    layout->registerDim(pdal::Dimension::Id::ReturnNumber);
+    layout->registerDim(pdal::Dimension::Id::Red);
+    layout->registerDim(pdal::Dimension::Id::Green);
+    layout->registerDim(pdal::Dimension::Id::Blue);
+    layout->registerDim(pdal::Dimension::Id::GpsTime);
+    layout->registerDim(pdal::Dimension::Id::PointSourceId);
+    layout->registerDim(pdal::Dimension::Id::UserData);
+    layout->registerDim(pdal::Dimension::Id::ScanDirectionFlag);
+    layout->registerDim(pdal::Dimension::Id::EdgeOfFlightLine);
+
+    std::vector<pdal::Dimension::Id> dstExtraIds(nExtra);
+    for (size_t k = 0; k < nExtra; ++k)
+        dstExtraIds[k] = layout->registerOrAssignDim(vlrExtras[k].name, vlrExtras[k].type);
+
+    // ── Populate PointView — keep all points that belong to seg_id ────────────
+    pdal::PointViewPtr view(new pdal::PointView(table));
+
+    pdal::PointId out_idx = 0;
+    for (pdal::PointId i = 0; i < static_cast<pdal::PointId>(srcView->size()); ++i) {
+        uint8_t s_id = (i < static_cast<pdal::PointId>(n_valid)) ? raw[i * 2] : 0;
+        if (static_cast<int>(s_id) != seg_id) continue;
+
+        view->setField(pdal::Dimension::Id::X,                out_idx, srcView->getFieldAs<double>  (pdal::Dimension::Id::X,               i));
+        view->setField(pdal::Dimension::Id::Y,                out_idx, srcView->getFieldAs<double>  (pdal::Dimension::Id::Y,               i));
+        view->setField(pdal::Dimension::Id::Z,                out_idx, srcView->getFieldAs<double>  (pdal::Dimension::Id::Z,               i));
+        view->setField(pdal::Dimension::Id::Classification,   out_idx, srcView->getFieldAs<uint8_t> (pdal::Dimension::Id::Classification,  i));
+        view->setField(pdal::Dimension::Id::Intensity,        out_idx, srcView->getFieldAs<uint16_t>(pdal::Dimension::Id::Intensity,       i));
+        view->setField(pdal::Dimension::Id::ScanAngleRank,    out_idx, srcView->getFieldAs<float>   (pdal::Dimension::Id::ScanAngleRank,   i));
+        view->setField(pdal::Dimension::Id::NumberOfReturns,  out_idx, srcView->getFieldAs<uint8_t> (pdal::Dimension::Id::NumberOfReturns, i));
+        view->setField(pdal::Dimension::Id::ReturnNumber,     out_idx, srcView->getFieldAs<uint8_t> (pdal::Dimension::Id::ReturnNumber,    i));
+        view->setField(pdal::Dimension::Id::Red,              out_idx, srcView->getFieldAs<uint16_t>(pdal::Dimension::Id::Red,             i));
+        view->setField(pdal::Dimension::Id::Green,            out_idx, srcView->getFieldAs<uint16_t>(pdal::Dimension::Id::Green,           i));
+        view->setField(pdal::Dimension::Id::Blue,             out_idx, srcView->getFieldAs<uint16_t>(pdal::Dimension::Id::Blue,            i));
+        view->setField(pdal::Dimension::Id::GpsTime,          out_idx, srcView->getFieldAs<double>  (pdal::Dimension::Id::GpsTime,         i));
+        view->setField(pdal::Dimension::Id::PointSourceId,    out_idx, srcView->getFieldAs<uint16_t>(pdal::Dimension::Id::PointSourceId,   i));
+        view->setField(pdal::Dimension::Id::UserData,         out_idx, srcView->getFieldAs<uint8_t> (pdal::Dimension::Id::UserData,        i));
+        view->setField(pdal::Dimension::Id::ScanDirectionFlag,out_idx, srcView->getFieldAs<uint8_t> (pdal::Dimension::Id::ScanDirectionFlag, i));
+        view->setField(pdal::Dimension::Id::EdgeOfFlightLine, out_idx, srcView->getFieldAs<uint8_t> (pdal::Dimension::Id::EdgeOfFlightLine, i));
+
+        for (size_t k = 0; k < nExtra; ++k)
+            view->setField(dstExtraIds[k], out_idx,
+                           srcView->getFieldAs<double>(srcExtraIds[k], i));
+
+        ++out_idx;
+    }
+
+    if (out_idx == 0) { std::cout << "  No points found for segment " << seg_id << ", skipping.\n"; return; }
+    std::cout << "  Found " << out_idx << " points.\n";
+
+    // ── Write ─────────────────────────────────────────────────────────────────
+    pdal::BufferReader reader;
+    reader.addView(view);
+
+    pdal::Options writerOpts;
+    writerOpts.add("filename",      out_path.string());
+    writerOpts.add("extra_dims",    "all");
+    writerOpts.add("minor_version", 4);
+    writerOpts.add("dataformat_id", 7);
+
+    pdal::LasWriter writer;
+    writer.setOptions(writerOpts);
+    writer.setInput(reader);
+    writer.prepare(table);
+    writer.execute(table);
+
+    std::cout << "  Saved: " << out_path << "\n";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  extract_segment — single-segment extraction mode for classify
+// ─────────────────────────────────────────────────────────────────────────────
+
+static void extract_segment(const fs::path& las_path,
+                             const fs::path& bin_path,
+                             int             seg_id,
+                             const fs::path& out_path)
+{
+    std::cout << "Mode: extract single segment " << seg_id << " for classify\n";
+
+    std::cout << "Loading binary: " << bin_path << "\n";
+    auto raw = read_binary(bin_path);
+    if (raw.size() % 2 != 0) throw std::runtime_error("Binary buffer not multiple of 2.");
+    std::cout << "  " << (raw.size()/2) << " label pairs found.\n";
+
+    std::cout << "Loading LAS: " << las_path << "\n";
+    pdal::PointTable srcTable;
+    pdal::LasReader  srcReader;
+    {
+        pdal::Options opts; opts.add("filename", las_path.string());
+        srcReader.setOptions(opts);
+        srcReader.prepare(srcTable);
+    }
+    pdal::PointViewPtr srcView = *srcReader.execute(srcTable).begin();
+    std::cout << "  Total points: " << srcView->size() << "\n";
+
+    auto vlrExtras = readExtraBytesVLR(las_path);
+
+    if (raw.size()/2 < srcView->size())
+        std::cerr << "WARNING: buffer fewer entries (" << raw.size()/2
+                  << ") than points (" << srcView->size() << ").\n";
+
+    fs::create_directories(out_path.parent_path());
+
+    write_segment_for_classify(las_path, srcView, raw, vlrExtras, seg_id, out_path);
+
+    std::cout << "\nExtraction completed!\n";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 static void split_las(const fs::path& las_path,
                       const fs::path& bin_path,
@@ -381,11 +540,31 @@ static void split_las(const fs::path& las_path,
 
 int main(int argc, char* argv[])
 {
+    // ── Mode 1 (training split):
+    //   split_las_by_binary <las_path> <bin_path> <meta_path> <output_dir>
+    //
+    // ── Mode 2 (classify extract):
+    //   split_las_by_binary <las_path> <bin_path> --extract-segment <seg_id> <out_path>
+
+    if (argc >= 6 && std::string(argv[3]) == "--extract-segment") {
+        try {
+            int seg_id = std::stoi(argv[4]);
+            extract_segment(argv[1], argv[2], seg_id, argv[5]);
+        } catch (const std::exception& e) {
+            std::cerr << "ERROR: " << e.what() << "\n";
+            return 1;
+        }
+        return 0;
+    }
+
     if (argc < 5) {
-        std::cerr << "Usage: " << argv[0]
-                  << " <las_path> <bin_path> <meta_path> <output_dir>\n";
+        std::cerr << "Usage (training split):\n"
+                  << "  " << argv[0] << " <las_path> <bin_path> <meta_path> <output_dir>\n\n"
+                  << "Usage (classify extract):\n"
+                  << "  " << argv[0] << " <las_path> <bin_path> --extract-segment <seg_id> <out_path>\n";
         return 1;
     }
+
     try {
         split_las(argv[1], argv[2], argv[3], argv[4]);
     } catch (const std::exception& e) {

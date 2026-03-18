@@ -20,7 +20,8 @@ import {
     applyClassToSelection,
     classRegistry,
     showModelReportModal,
-    showContextMenu
+    showContextMenu,
+    showClassifyModal
 } from "./functions.js";
 
 // --- UI Elements ---
@@ -496,6 +497,9 @@ export function registerPointCloudInOutline(pc, label = "Point Cloud") {
         if (loader) loader.setSegmentVisible(0, visible);
     });
 }
+// Expose on window so potree2-loader.js (loaded as a separate module) can call it
+// after the point cloud finishes loading.
+window.__registerPointCloudInOutline = registerPointCloudInOutline;
 
 // --- Sidebar Left: Models Section (visible only in Classify mode) ---
 const modelsSection = createAccordionSection("Models", "sidebar-left-content");
@@ -1838,6 +1842,13 @@ if (startTrainingButton) {
             // Pipeline is handled entirely inside the modal (functions.js)
             console.log('✅ Training pipeline completed with params:', params);
         });
+    });
+}
+
+// --- Classify Logic ---
+if (startClassifyButton) {
+    startClassifyButton.addEventListener("click", () => {
+        showClassifyModal(scene);
     });
 }
 

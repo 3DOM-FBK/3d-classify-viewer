@@ -2,7 +2,7 @@ from django.shortcuts import render
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from .functions import launch_training_RF, launch_classify_RF, subsampling_point_cloud, stop_processes
-from .functions import mesh_to_point_cloud, ply_to_las, feature_extraction, Potree, split_las_by_binary, las_to_feature_bin
+from .functions import mesh_to_point_cloud, ply_to_las, feature_extraction, Potree, split_las_by_binary, las_to_feature_bin, extract_segment_las
 import base64
 import os
 import json
@@ -349,6 +349,41 @@ def delete_model(request):
 
         except Exception as e:
             print("\n[REQUEST FUNCTION] delete_model ERROR " + str(e))
+            print(traceback.format_exc())
+            return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+
+    return JsonResponse({'status': 'error', 'message': 'Method not allowed'}, status=405)
+
+
+@csrf_exempt
+def extract_segment_las_view(request):
+    """
+    Extract all points for a single segment from features.las into a new .las
+    file suitable for classification (no 'labels' dim added).
+
+    POST body (JSON):
+        las_path  - path to features.las
+        bin_path  - path to the .bin buffer (2 bytes/point: [seg_id, class_id])
+        seg_id    - integer segment ID to extract
+        out_path  - destination .las path
+    """
+    if request.method == 'POST':
+        try:
+            print("\n[REQUEST FUNCTION] EXTRACT SEGMENT LAS:", request.body[:200])
+            data = json.loads(request.body)
+
+            las_path = data['las_path']
+            bin_path = data['bin_path']
+            seg_id   = int(data['seg_id'])
+            out_path = data['out_path']
+
+            extract_segment_las(las_path, bin_path, seg_id, out_path)
+            print("\n")
+
+            return JsonResponse({"status": 'success', "message": "Segment extraction completed."})
+
+        except Exception as e:
+            print("\n[REQUEST FUNCTION] EXTRACT SEGMENT LAS ERROR " + str(e))
             print(traceback.format_exc())
             return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
 

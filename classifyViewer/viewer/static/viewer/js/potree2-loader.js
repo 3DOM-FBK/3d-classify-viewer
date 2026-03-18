@@ -314,16 +314,19 @@ export class Potree2Loader {
             const shouldShow = nodesToShow.has(name);
             const wasHidden = !mesh.isVisible;
 
-            if (mesh.isVisible !== shouldShow) mesh.isVisible = shouldShow;
+            // Respect the outline hide/show state: if nothing is visible at all,
+            // keep the mesh hidden so the GPU skips it.
+            const anySegmentVisible = this.mainCloudVisible || this.cutHistory.some(e => e.visible);
+            const targetVisible = shouldShow && anySegmentVisible;
 
-            // When a node becomes visible, update its vertex colors
-            // according to the current colorMode. Necessary because the node may
-            // have been loaded or modified while hidden.
-            if (shouldShow && wasHidden) {
+            if (mesh.isVisible !== targetVisible) mesh.isVisible = targetVisible;
+
+            if (targetVisible && wasHidden) {
                 this._applyColorModeToMesh(mesh);
+                this._applySegmentVisibilityToMesh(mesh);
             }
 
-            if (shouldShow) { this.activeNodes.add(name); } else { this.activeNodes.delete(name); }
+            if (targetVisible) { this.activeNodes.add(name); } else { this.activeNodes.delete(name); }
         }
 
         this.stats.visibleNodes = this.activeNodes.size;
@@ -1435,6 +1438,11 @@ export class Potree2Loader {
             if (entry.segmentId === segmentId) entry.visible = visible;
         });
 
+        // After updating the flags, recompute isVisible for every loaded node.
+        // A node should be visible as long as at least one of its points is visible
+        // (i.e. mainCloudVisible OR any cut segment is visible).
+        const anySegmentVisible = this.mainCloudVisible || this.cutHistory.some(e => e.visible);
+
         this.loadedNodes.forEach((mesh) => {
             const segmentIds = mesh.metadata?.segmentIds;
             const originalPositions = mesh.metadata?.originalPositions;
@@ -1447,7 +1455,6 @@ export class Potree2Loader {
             let modified = false;
 
             for (let i = 0; i < numPoints; i++) {
-                // For segmentId 0: target points that are NOT assigned to any cut segment
                 const pointSeg = segmentIds[i] || 0;
                 if (pointSeg !== segmentId) continue;
 
@@ -1464,9 +1471,59 @@ export class Potree2Loader {
             }
 
             if (modified) mesh.setVerticesData(BABYLON.VertexBuffer.PositionKind, positions);
+
+            // Keep mesh.isVisible in sync: hide entirely only when nothing is visible,
+            // show immediately when at least one segment becomes visible again.
+            if (this.activeNodes.has(mesh.metadata?.nodeInfo?.name)) {
+                mesh.isVisible = anySegmentVisible;
+            }
         });
 
         // console.log(`👁️ Segment ${segmentId} → ${visible ? "visible" : "hidden"}`);
+    }
+
+    /**
+     * Re-applies NaN / position-restore to a single mesh based on the current
+     * mainCloudVisible and cutHistory states.  Called when a node re-enters
+     * the LOD view so the outline hide/show state is honoured on fresh nodes.
+     */
+    _applySegmentVisibilityToMesh(mesh) {
+        if (this.mainCloudVisible && this.cutHistory.every(e => e.visible)) return;
+
+        const segmentIds = mesh.metadata?.segmentIds;
+        const originalPositions = mesh.metadata?.originalPositions;
+        if (!segmentIds || !originalPositions) return;
+
+        const positions = mesh.getVerticesData(BABYLON.VertexBuffer.PositionKind);
+        if (!positions) return;
+
+        const numPoints = positions.length / 3;
+        let modified = false;
+
+        for (let i = 0; i < numPoints; i++) {
+            const pointSeg = segmentIds[i] || 0;
+            let shouldHide;
+
+            if (pointSeg === 0) {
+                shouldHide = !this.mainCloudVisible;
+            } else {
+                const entry = this.cutHistory.find(e => e.segmentId === pointSeg);
+                shouldHide = entry ? !entry.visible : false;
+            }
+
+            if (shouldHide) {
+                positions[i * 3] = NaN;
+                positions[i * 3 + 1] = NaN;
+                positions[i * 3 + 2] = NaN;
+            } else {
+                positions[i * 3] = originalPositions[i * 3];
+                positions[i * 3 + 1] = originalPositions[i * 3 + 1];
+                positions[i * 3 + 2] = originalPositions[i * 3 + 2];
+            }
+            modified = true;
+        }
+
+        if (modified) mesh.setVerticesData(BABYLON.VertexBuffer.PositionKind, positions);
     }
 
     /**
@@ -1523,9 +1580,34 @@ export class Potree2Loader {
         this.deselectionHistory = [];
         this.selectionInverted = false;
         this.loadedNodes.forEach((mesh) => {
-            if (mesh.metadata && mesh.metadata.originalColors) {
-                mesh.setVerticesData(BABYLON.VertexBuffer.ColorKind, new Float32Array(mesh.metadata.originalColors));
+            const colors = mesh.getVerticesData(BABYLON.VertexBuffer.ColorKind);
+            const originalColors = mesh.metadata?.originalColors;
+            const classIds = mesh.metadata?.classIds;
+            const classColors = mesh.metadata?.classColors;
+            if (!colors || !originalColors) return;
+
+            const numPoints = colors.length / 4;
+            for (let i = 0; i < numPoints; i++) {
+                const isRed = (
+                    colors[i * 4] > 0.9 &&
+                    colors[i * 4 + 1] < 0.1 &&
+                    colors[i * 4 + 2] < 0.1
+                );
+                if (!isRed) continue;
+
+                if (classIds && classIds[i] > 0 && classColors) {
+                    colors[i * 4] = classColors[i * 4];
+                    colors[i * 4 + 1] = classColors[i * 4 + 1];
+                    colors[i * 4 + 2] = classColors[i * 4 + 2];
+                    colors[i * 4 + 3] = 1.0;
+                } else {
+                    colors[i * 4] = originalColors[i * 4];
+                    colors[i * 4 + 1] = originalColors[i * 4 + 1];
+                    colors[i * 4 + 2] = originalColors[i * 4 + 2];
+                    colors[i * 4 + 3] = originalColors[i * 4 + 3];
+                }
             }
+            mesh.setVerticesData(BABYLON.VertexBuffer.ColorKind, colors);
         });
         // console.log("🧹 Selection cleared.");
     }

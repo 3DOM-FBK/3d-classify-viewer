@@ -1,7 +1,7 @@
 from django.urls import path
 from . import views
 from .request_functions import save_file, launch_RF_training, launch_RF_classify, subsample_pc, stop_process
-from .request_functions import mesh2pc, ply2las, feat_extraction, potree_converter, _split_las_by_binary, las_to_feature_bin_view, read_text_file, model_exists, models_list, delete_model
+from .request_functions import mesh2pc, ply2las, feat_extraction, potree_converter, _split_las_by_binary, las_to_feature_bin_view, read_text_file, model_exists, models_list, delete_model, extract_segment_las_view
 
 
 urlpatterns = [
@@ -29,4 +29,5 @@ urlpatterns = [
     path('api/model-exists/', model_exists, name='model_exists'),
     path('api/models-list/', models_list, name='models_list'),
     path('api/delete-model/', delete_model, name='delete_model'),
+    path('api/extract-segment-las/', extract_segment_las_view, name='extract_segment_las'),
 ]

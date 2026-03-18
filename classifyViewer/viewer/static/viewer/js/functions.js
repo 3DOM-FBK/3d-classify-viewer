@@ -3761,3 +3761,513 @@ export function showCalculateFeaturesModal(scene, onConfirm) {
 function getCSRFToken() {
     return document.querySelector('meta[name="csrf-token"]').getAttribute('content');
 }
+
+// =====================================================================
+// CLASSIFY MODAL
+// =====================================================================
+/**
+ * showClassifyModal(scene)
+ *
+ * Opens a modal to configure and launch RF classification.
+ * Sections:
+ *   1. Data Split — select which LAS to classify (full cloud or segment)
+ *   2. Model      — pick a trained model from /api/models-list/
+ *   3. Options    — Use GPU toggle
+ */
+export async function showClassifyModal(scene) {
+    const overlay = createModal(
+        "Classify Configuration",
+        (body) => {
+            // ── SECTION 1: DATA SPLIT ─────────────────────────────────────────
+            const splitTitle = document.createElement('div');
+            splitTitle.classList.add('modal-section-title');
+            splitTitle.textContent = "Data Split";
+            body.appendChild(splitTitle);
+
+            const splitSection = document.createElement('div');
+            splitSection.classList.add('modal-section');
+            body.appendChild(splitSection);
+
+            const makeSelectRow = (labelStr, selectId) => {
+                const row = document.createElement('div');
+                row.classList.add('property-row');
+                row.style.alignItems = 'center';
+
+                const label = document.createElement('span');
+                label.classList.add('property-label');
+                label.style.width = '120px';
+                label.textContent = labelStr + ':';
+                row.appendChild(label);
+
+                const select = document.createElement('select');
+                select.id = selectId;
+                select.style.flex = '1';
+                select.classList.add('property-input');
+                row.appendChild(select);
+
+                return { row, select };
+            };
+
+            const { row: splitRow, select: splitSelect } = makeSelectRow('Input LAS', 'classify-split-select');
+            splitSection.appendChild(splitRow);
+
+            // "Full point cloud" is always available
+            const fullOpt = document.createElement('option');
+            fullOpt.value = '__full__';
+            fullOpt.textContent = 'Full point cloud (features.las)';
+            splitSelect.appendChild(fullOpt);
+
+            // Add segments from the Outline panel
+            document.querySelectorAll('.outline-item[data-segment-id]').forEach(item => {
+                const segmentId = item.dataset.segmentId;
+                const nameInput = item.querySelector('.outline-name-input');
+                const name = nameInput ? nameInput.value : `Segment ${segmentId}`;
+                const opt = document.createElement('option');
+                opt.value = segmentId;
+                opt.textContent = name;
+                splitSelect.appendChild(opt);
+            });
+
+            // ── SECTION 2: MODEL ──────────────────────────────────────────────
+            const modelTitle = document.createElement('div');
+            modelTitle.classList.add('modal-section-title');
+            modelTitle.textContent = "Model";
+            body.appendChild(modelTitle);
+
+            const modelSection = document.createElement('div');
+            modelSection.classList.add('modal-section');
+            body.appendChild(modelSection);
+
+            const { row: modelRow, select: modelSelect } = makeSelectRow('Trained Model', 'classify-model-select');
+            modelSection.appendChild(modelRow);
+
+            // Loading placeholder
+            const loadingOpt = document.createElement('option');
+            loadingOpt.value = '';
+            loadingOpt.textContent = 'Loading models…';
+            loadingOpt.disabled = true;
+            loadingOpt.selected = true;
+            modelSelect.appendChild(loadingOpt);
+
+            // Fetch available models
+            fetch('/api/models-list/')
+                .then(r => r.json())
+                .then(data => {
+                    modelSelect.innerHTML = '';
+                    const models = data.models || [];
+                    if (models.length === 0) {
+                        const noOpt = document.createElement('option');
+                        noOpt.value = '';
+                        noOpt.textContent = '— No models found —';
+                        noOpt.disabled = true;
+                        modelSelect.appendChild(noOpt);
+                    } else {
+                        models.forEach(m => {
+                            const opt = document.createElement('option');
+                            opt.value = m.path;
+                            opt.textContent = `${m.name}  (${m.created}, ${m.size_mb} MB)`;
+                            modelSelect.appendChild(opt);
+                        });
+                    }
+                })
+                .catch(() => {
+                    modelSelect.innerHTML = '';
+                    const errOpt = document.createElement('option');
+                    errOpt.value = '';
+                    errOpt.textContent = '— Failed to load models —';
+                    errOpt.disabled = true;
+                    modelSelect.appendChild(errOpt);
+                });
+
+            // ── SECTION 3: OPTIONS ────────────────────────────────────────────
+            const optTitle = document.createElement('div');
+            optTitle.classList.add('modal-section-title');
+            optTitle.textContent = "Options";
+            body.appendChild(optTitle);
+
+            const optSection = document.createElement('div');
+            optSection.classList.add('modal-section');
+            body.appendChild(optSection);
+
+            const gpuRow = document.createElement('div');
+            gpuRow.classList.add('property-row');
+            gpuRow.style.padding = '0 4px';
+            gpuRow.innerHTML = `<span class="property-label">Use GPU:</span>`;
+
+            const gpuToggleWrap = document.createElement('div');
+            gpuToggleWrap.classList.add('rf-toggle-wrap');
+
+            const gpuToggle = document.createElement('button');
+            gpuToggle.id = 'classify-gpu-toggle';
+            gpuToggle.classList.add('rf-toggle-btn');
+            gpuToggle.setAttribute('data-on', 'false');
+            gpuToggle.textContent = 'OFF';
+            gpuToggle.onclick = () => {
+                const isOn = gpuToggle.getAttribute('data-on') === 'true';
+                gpuToggle.setAttribute('data-on', String(!isOn));
+                gpuToggle.textContent = isOn ? 'OFF' : 'ON';
+                gpuToggle.classList.toggle('on', !isOn);
+            };
+
+            gpuToggleWrap.appendChild(gpuToggle);
+            gpuRow.appendChild(gpuToggleWrap);
+            optSection.appendChild(gpuRow);
+        },
+
+        // ── FOOTER ────────────────────────────────────────────────────────────
+        (footer, overlay) => {
+            const cancelBtn = document.createElement('button');
+            cancelBtn.classList.add('btn');
+            cancelBtn.style.backgroundColor = 'transparent';
+            cancelBtn.style.border = '1px solid var(--border-color)';
+            cancelBtn.textContent = 'Cancel';
+            cancelBtn.onclick = () => {
+                overlay.classList.remove('active');
+                setTimeout(() => overlay.remove(), 300);
+            };
+
+            const runBtn = document.createElement('button');
+            runBtn.classList.add('btn');
+            runBtn.textContent = 'Start Classify';
+
+            runBtn.onclick = async () => {
+                const body = overlay.querySelector('.modal-body');
+
+                const splitValue = body.querySelector('#classify-split-select').value;
+                const modelPath = body.querySelector('#classify-model-select').value;
+                const useGpu = body.querySelector('#classify-gpu-toggle').getAttribute('data-on') === 'true';
+
+                // Error helper (shown before pipeline starts)
+                const showError = (msg) => {
+                    const existing = overlay.querySelector('.classify-modal-error');
+                    if (existing) existing.remove();
+                    const errorDiv = document.createElement('div');
+                    errorDiv.classList.add('classify-modal-error');
+                    errorDiv.style.cssText = 'color:#ff5f5f;font-size:0.75rem;padding:0 4px 10px 4px;text-align:center;width:100%;';
+                    errorDiv.textContent = msg;
+                    footer.insertAdjacentElement('beforebegin', errorDiv);
+                    setTimeout(() => {
+                        errorDiv.style.transition = 'opacity 0.4s ease';
+                        errorDiv.style.opacity = '0';
+                        setTimeout(() => errorDiv.remove(), 400);
+                    }, 4000);
+                };
+
+                if (!modelPath) { showError('Please select a trained model.'); return; }
+
+                const modelDir = modelPath.replace(/\/model\.pkl$/, '');
+                const classifyWorkingDir = `${modelDir}/classify_working/`;
+                const outputClassifyName = `${modelDir}/predicted.las`;
+                const needsSplit = splitValue !== '__full__';
+
+                // ── Read model metadata to get the feature list ────────────────
+                let modelFeatures = [];   // e.g. ["linearity_0_1", "planarity_0_2"]
+                try {
+                    const metaRes = await fetch(`/api/read-file/?path=${encodeURIComponent(modelDir + '/metadata.json')}`);
+                    if (metaRes.ok) {
+                        const metaData = await metaRes.json();
+                        const meta = JSON.parse(metaData.content || '{}');
+                        if (Array.isArray(meta.features) && meta.features.length > 0)
+                            modelFeatures = meta.features;
+                    }
+                } catch (_) { }
+
+                if (modelFeatures.length === 0) {
+                    showError('Could not read feature list from model metadata. Re-train the model and try again.');
+                    return;
+                }
+
+                // Parse "name_R_R" → base feature names + unique radii
+                // e.g. "linearity_0_1" → name="linearity", radius=0.1
+                const featureSet = new Set();
+                const radiusSet = new Set();
+                for (const f of modelFeatures) {
+                    const match = f.match(/^(.+)_(\d+_\d+)$/);
+                    if (match) {
+                        featureSet.add(match[1]);
+                        radiusSet.add(parseFloat(match[2].replace('_', '.')));
+                    } else {
+                        featureSet.add(f); // no-radius feature (e.g. rgb)
+                    }
+                }
+                const featureList = [...featureSet];
+                const radiusList = [...radiusSet].sort((a, b) => a - b);
+
+                // ── Switch to pipeline UI ──────────────────────────────────────
+                body.innerHTML = '';
+                const modalCloseBtn = overlay.querySelector('.modal-close');
+                if (modalCloseBtn) modalCloseBtn.style.display = 'none';
+
+                let isCancelled = false;
+                footer.style.display = '';
+                footer.innerHTML = '';
+
+                const cancelRunBtn = document.createElement('button');
+                cancelRunBtn.classList.add('btn');
+                cancelRunBtn.style.cssText = 'background:transparent;border:1px solid var(--border-color);';
+                cancelRunBtn.textContent = 'Stop';
+                cancelRunBtn.onclick = async () => {
+                    if (isCancelled) return;
+                    isCancelled = true;
+                    cancelRunBtn.disabled = true;
+                    cancelRunBtn.textContent = 'Stopping…';
+                    try { await fetch('/stop_process/', { method: 'POST', headers: { 'X-CSRFToken': getCSRFToken() } }); }
+                    catch (e) { console.warn('Could not stop process:', e); }
+                    overlay.classList.remove('active');
+                    setTimeout(() => overlay.remove(), 300);
+                };
+                footer.appendChild(cancelRunBtn);
+
+                // Build step list dynamically
+                const STEPS = [
+                    'Calculating Features',
+                    'Generating Feature Bin',
+                    ...(needsSplit ? ['Extracting Points', 'Saving Segment Data', 'Exporting Segment LAS'] : []),
+                    'Classifying Point Cloud',
+                    'Updating Feature Bin',
+                    'Loading in Viewer',
+                ];
+
+                const stepList = document.createElement('div');
+                stepList.classList.add('pipeline-step-list');
+                const stepEls = STEPS.map((label) => {
+                    const item = document.createElement('div');
+                    item.classList.add('pipeline-step-item', 'step-idle');
+                    item.innerHTML = `
+                        <div class="step-icon-wrap">
+                            <svg class="step-svg" viewBox="0 0 32 32">
+                                <circle class="step-track" cx="16" cy="16" r="13"/>
+                                <circle class="step-arc"   cx="16" cy="16" r="13"/>
+                            </svg>
+                            <div class="step-check">
+                                <svg viewBox="0 0 12 12" fill="none">
+                                    <polyline points="2,6 5,9 10,3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                                </svg>
+                            </div>
+                            <div class="step-cross">
+                                <svg viewBox="0 0 12 12" fill="none">
+                                    <line x1="2.5" y1="2.5" x2="9.5" y2="9.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                                    <line x1="9.5" y1="2.5" x2="2.5" y2="9.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                                </svg>
+                            </div>
+                        </div>
+                        <span class="step-label">${label}</span>`;
+                    stepList.appendChild(item);
+                    return item;
+                });
+                body.appendChild(stepList);
+
+                const activateStep = (i) => { stepEls[i].classList.replace('step-idle', 'step-running') || stepEls[i].classList.remove('step-done', 'step-error') || stepEls[i].classList.add('step-running'); };
+                const completeStep = (i) => { stepEls[i].classList.remove('step-running'); stepEls[i].classList.add('step-done'); };
+                const failStep = (i) => { stepEls[i].classList.remove('step-running'); stepEls[i].classList.add('step-error'); };
+
+                const CANCELLED = Symbol('CANCELLED');
+                const checkCancelled = () => { if (isCancelled) throw CANCELLED; };
+
+                // Step index helpers
+                const STEP_FEAT_EXTRACT = 0;
+                const STEP_FEAT_BIN = 1;
+                const splitOffset = needsSplit ? 3 : 0;  // 3 split steps or 0
+                const STEP_EXTRACT_PTS = needsSplit ? 2 : -1;
+                const STEP_SAVE_DATA = needsSplit ? 3 : -1;
+                const STEP_EXPORT_LAS = needsSplit ? 4 : -1;
+                const STEP_CLASSIFY = 2 + splitOffset;
+                const STEP_UPDATE_BIN = 3 + splitOffset;
+                const STEP_RELOAD = 4 + splitOffset;
+
+                let currentStepIdx = 0;
+                let testFilepath = 'viewer/static/viewer/data/working/features.las';
+
+                try {
+                    // ── STEP 0: Feature Extraction on full cloud ───────────────
+                    checkCancelled();
+                    currentStepIdx = STEP_FEAT_EXTRACT;
+                    activateStep(currentStepIdx);
+
+                    const featRes = await fetch('/feature_extraction/', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
+                        body: JSON.stringify({
+                            input_filepath: 'viewer/static/viewer/data/working/features.las',
+                            output_filepath: 'viewer/static/viewer/data/working/features.las',
+                            feature_list: featureList,
+                            radius_list: radiusList,
+                        })
+                    });
+                    if (!featRes.ok) {
+                        const e = await featRes.json().catch(() => ({}));
+                        throw new Error(e.message || e.error || 'Feature extraction failed');
+                    }
+                    completeStep(currentStepIdx);
+
+                    // ── STEP 1: Generate Feature Bin (updates viewer colormap) ─
+                    checkCancelled();
+                    currentStepIdx = STEP_FEAT_BIN;
+                    activateStep(currentStepIdx);
+
+                    const binRes1 = await fetch('/las_to_feature_bin/', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
+                        body: JSON.stringify({
+                            las_path: 'viewer/static/viewer/data/working/features.las',
+                            bin_path: 'viewer/static/viewer/data/working/features.bin',
+                        })
+                    });
+                    if (!binRes1.ok) {
+                        const e = await binRes1.json().catch(() => ({}));
+                        throw new Error(e.message || e.error || 'Feature bin generation failed');
+                    }
+                    completeStep(currentStepIdx);
+
+                    // ── STEPS 2-4 (optional): Extract segment LAS ─────────────
+                    if (needsSplit) {
+                        const loader = scene.potree2Loader;
+
+                        // STEP 2 — Export annotated segment data
+                        checkCancelled();
+                        currentStepIdx = STEP_EXTRACT_PTS;
+                        activateStep(currentStepIdx);
+                        const segmentMap = {};
+                        document.querySelectorAll('.outline-item[data-segment-id]').forEach(item => {
+                            const segId = parseInt(item.dataset.segmentId, 10);
+                            const nameInput = item.querySelector('.outline-name-input');
+                            if (!isNaN(segId) && nameInput) segmentMap[segId] = nameInput.value;
+                        });
+                        const classMap = {};
+                        classRegistry.forEach((val, id) => { classMap[id] = val.name; });
+                        const exportResult = await loader.exportAllTrainingData(segmentMap);
+                        if (!exportResult || !exportResult.buffer)
+                            throw new Error('No points found for the selected segment.');
+                        completeStep(currentStepIdx);
+
+                        // STEP 3 — Save buffer + metadata to server
+                        checkCancelled();
+                        currentStepIdx = STEP_SAVE_DATA;
+                        activateStep(currentStepIdx);
+                        const formData = new FormData();
+                        formData.append('labels', JSON.stringify({ segments: exportResult.segmentMap, classes: classMap }));
+                        formData.append('buffer', new Blob([exportResult.buffer], { type: 'application/octet-stream' }));
+                        const saveRes = await fetch('/api/start-training/', { method: 'POST', body: formData });
+                        if (!saveRes.ok) {
+                            const e = await saveRes.json().catch(() => ({}));
+                            throw new Error(e.error || 'Failed to save segment data');
+                        }
+                        const saveData = await saveRes.json();
+                        completeStep(currentStepIdx);
+
+                        // STEP 4 — Extract segment points → clean LAS (no labels dim)
+                        checkCancelled();
+                        currentStepIdx = STEP_EXPORT_LAS;
+                        activateStep(currentStepIdx);
+                        const segmentOutPath = `${classifyWorkingDir}segment_${splitValue}.las`;
+                        const extractRes = await fetch('/api/extract-segment-las/', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
+                            body: JSON.stringify({
+                                las_path: 'viewer/static/viewer/data/working/features.las',
+                                bin_path: saveData.bin_path,
+                                seg_id: parseInt(splitValue, 10),
+                                out_path: segmentOutPath,
+                            })
+                        });
+                        if (!extractRes.ok) {
+                            const e = await extractRes.json().catch(() => ({}));
+                            throw new Error(e.message || e.error || 'Failed to extract segment LAS');
+                        }
+                        completeStep(currentStepIdx);
+                        testFilepath = segmentOutPath;
+                    }
+
+                    // ── STEP CLASSIFY ─────────────────────────────────────────
+                    checkCancelled();
+                    currentStepIdx = STEP_CLASSIFY;
+                    activateStep(currentStepIdx);
+
+                    const classifyRes = await fetch('/launch_RF_classify/', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
+                        body: JSON.stringify({
+                            model_savepath: modelPath,
+                            test_filepath: testFilepath,
+                            output_classify_name: outputClassifyName,
+                            use_gpu: useGpu,
+                            selected_features: modelFeatures,
+                        }),
+                    });
+                    if (!classifyRes.ok) {
+                        const e = await classifyRes.json().catch(() => ({}));
+                        throw new Error(e.message || e.error || 'Classification failed');
+                    }
+                    completeStep(currentStepIdx);
+
+                    // ── STEP UPDATE BIN ───────────────────────────────────────
+                    checkCancelled();
+                    currentStepIdx = STEP_UPDATE_BIN;
+                    activateStep(currentStepIdx);
+
+                    const binRes2 = await fetch('/las_to_feature_bin/', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
+                        body: JSON.stringify({
+                            las_path: outputClassifyName,
+                            bin_path: 'viewer/static/viewer/data/working/features.bin',
+                        })
+                    });
+                    if (!binRes2.ok) {
+                        const e = await binRes2.json().catch(() => ({}));
+                        throw new Error(e.message || e.error || 'Feature bin update failed');
+                    }
+                    completeStep(currentStepIdx);
+
+                    // ── STEP RELOAD VIEWER ────────────────────────────────────
+                    checkCancelled();
+                    currentStepIdx = STEP_RELOAD;
+                    activateStep(currentStepIdx);
+                    try {
+                        const featureBinLoader = window.__babylonScene?.potree2Loader;
+                        if (featureBinLoader) {
+                            const featureNames = await featureBinLoader.loadFeatureBin('/static/viewer/data/working/features.bin');
+                            window.dispatchEvent(new CustomEvent('feature-bin-loaded', { detail: { names: featureNames } }));
+                        }
+                    } catch (binErr) {
+                        console.warn('⚠️ Feature bin not reloaded in viewer:', binErr.message);
+                    }
+                    completeStep(currentStepIdx);
+
+                    // Success
+                    if (modalCloseBtn) modalCloseBtn.style.display = '';
+                    footer.innerHTML = '';
+                    const closeBtn = document.createElement('button');
+                    closeBtn.classList.add('btn');
+                    closeBtn.textContent = 'Close';
+                    closeBtn.onclick = () => { overlay.classList.remove('active'); setTimeout(() => overlay.remove(), 300); };
+                    footer.appendChild(closeBtn);
+                    console.log(`✅ Classification complete → ${outputClassifyName}`);
+
+                } catch (err) {
+                    if (err === CANCELLED) return;
+                    failStep(currentStepIdx);
+                    console.error('❌ Classify error:', err);
+
+                    const errMsg = document.createElement('div');
+                    errMsg.style.cssText = 'color:#ff5f5f;font-size:0.75rem;padding:12px 4px 0;text-align:center;';
+                    errMsg.textContent = `Error: ${err.message}`;
+                    body.appendChild(errMsg);
+
+                    if (modalCloseBtn) modalCloseBtn.style.display = '';
+                    footer.innerHTML = '';
+                    const closeBtn = document.createElement('button');
+                    closeBtn.classList.add('btn');
+                    closeBtn.textContent = 'Close';
+                    closeBtn.onclick = () => { overlay.classList.remove('active'); setTimeout(() => overlay.remove(), 300); };
+                    footer.appendChild(closeBtn);
+                }
+            };
+
+            footer.appendChild(cancelBtn);
+            footer.appendChild(runBtn);
+        }
+    );
+
+    return overlay;
+}

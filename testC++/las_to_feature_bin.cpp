@@ -1,40 +1,30 @@
 /**
  * las_to_feature_bin.cpp
  *
- * Reads a LAS file with extra dims (features + POINT_ID) and writes a compact
- * binary file for fast per-point feature lookup in the Babylon.js viewer.
+ * Reads a LAS file (raw binary, no dependencies) and writes a compact
+ * binary lookup file for the Babylon.js viewer.
  *
  * Usage:
- *   las_to_feature_bin <features.las> <output.bin>
+ *   las_to_feature_bin <input.las> <output.bin>
+ *
+ * Compile:
+ *   g++ -std=c++17 -O2 las_to_feature_bin.cpp -o las_to_feature_bin
  *
  * ─── Output binary format ────────────────────────────────────────────────────
  *
  *  [HEADER]
- *   4 bytes   magic          "FEAT"  (0x54 0x41 0x45 0x46 — little-endian)
- *   4 bytes   N              uint32  — array size = max(POINT_ID) + 1
- *   4 bytes   F              uint32  — number of features
- *   F × 32 bytes  names      char[32] each, null-padded ASCII
- *   F × 4 bytes   vmin       float32 per feature (global min, NaN excluded)
- *   F × 4 bytes   vmax       float32 per feature (global max, NaN excluded)
+ *   4 bytes        magic   "FEAT"
+ *   4 bytes        N       uint32  max(POINT_ID) + 1
+ *   4 bytes        F       uint32  number of features
+ *   F × 32 bytes   names   char[32] null-padded ASCII
+ *   F × 4 bytes    vmin    float32 per feature
+ *   F × 4 bytes    vmax    float32 per feature
  *
  *  [DATA]
  *   N × F × 4 bytes  float32
- *   data[point_id * F + feature_idx] = value for that point/feature
- *   NaN = point not present in LAS (gap in POINT_ID space)
- *
- * ─── Notes ───────────────────────────────────────────────────────────────────
- *  - Extra dim names are read from the Extra Bytes VLR directly (binary),
- *    bypassing PDAL's broken UTF-8 parsing of non-ASCII VLR names.
- *  - Standard LAS dims (X, Y, Z, Intensity, Classification, etc.) and
- *    POINT_ID itself are excluded from the feature list.
- *  - The "labels" dim added by split_las_by_binary is also excluded.
+ *   data[point_id * F + fi] = feature value
+ *   NaN = point not present (gap in POINT_ID space)
  */
-
-#include <pdal/PointTable.hpp>
-#include <pdal/PointView.hpp>
-#include <pdal/io/LasReader.hpp>
-#include <pdal/Options.hpp>
-#include <pdal/Dimension.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -42,273 +32,270 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <limits>
-#include <set>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace fs = std::filesystem;
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  Extra Bytes VLR parser (same as split_las_by_binary)
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── LAS type helpers ─────────────────────────────────────────────────────────
 
-struct ExtraBytesEntry {
-    std::string           name;
-    pdal::Dimension::Type type;
-};
-
-static pdal::Dimension::Type lasTypeToPdal(uint8_t data_type)
-{
-    switch (data_type) {
-        case  1: return pdal::Dimension::Type::Unsigned8;
-        case  2: return pdal::Dimension::Type::Signed8;
-        case  3: return pdal::Dimension::Type::Unsigned16;
-        case  4: return pdal::Dimension::Type::Signed16;
-        case  5: return pdal::Dimension::Type::Unsigned32;
-        case  6: return pdal::Dimension::Type::Signed32;
-        case  7: return pdal::Dimension::Type::Unsigned64;
-        case  8: return pdal::Dimension::Type::Signed64;
-        case  9: return pdal::Dimension::Type::Float;
-        case 10: return pdal::Dimension::Type::Double;
-        default: return pdal::Dimension::Type::None;
+static int lasTypeSize(uint8_t t) {
+    switch(t) {
+        case 1: case 2: return 1;
+        case 3: case 4: return 2;
+        case 5: case 6: return 4;
+        case 7: case 8: return 8;
+        case 9:         return 4;   // float32
+        case 10:        return 8;   // float64
+        default:        return 0;
     }
 }
 
-static std::vector<ExtraBytesEntry> readExtraBytesVLR(const fs::path& las_path)
+static const int kBaseSizes[] = {
+    20, 28, 26, 34, 57, 63, 30, 36, 38, 59, 67
+};
+
+// ─── Structs ──────────────────────────────────────────────────────────────────
+
+struct DimDef {
+    std::string name;
+    uint8_t     data_type;
+    int         size;
+    int         offset;   // byte offset within extra block (from base_size)
+};
+
+struct LasInfo {
+    uint32_t            offset_to_data   = 0;
+    uint16_t            point_record_len = 0;
+    uint64_t            point_count      = 0;
+    int                 base_size        = 0;
+    std::vector<DimDef> dims;            // all VLR extra dims in order
+};
+
+// ─── Read LAS header + VLR ───────────────────────────────────────────────────
+
+static LasInfo readLasInfo(const fs::path& path)
 {
-    std::vector<ExtraBytesEntry> result;
+    LasInfo info;
+    std::ifstream f(path, std::ios::binary);
+    if (!f) throw std::runtime_error("Cannot open: " + path.string());
 
-    std::ifstream f(las_path, std::ios::binary);
-    if (!f) throw std::runtime_error("Cannot open LAS: " + las_path.string());
+    uint8_t ver_major = 0, ver_minor = 0;
+    f.seekg(24); f.read(reinterpret_cast<char*>(&ver_major), 1);
+                 f.read(reinterpret_cast<char*>(&ver_minor), 1);
+    bool isLas14 = (ver_major == 1 && ver_minor >= 4);
 
-    uint32_t num_vlrs;
-    f.seekg(100); f.read(reinterpret_cast<char*>(&num_vlrs), 4);
+    uint16_t header_size = 0;
+    uint32_t num_vlrs    = 0;
+    uint8_t  point_fmt   = 0;
 
-    uint16_t hdr_size;
-    f.seekg(94); f.read(reinterpret_cast<char*>(&hdr_size), 2);
+    f.seekg(94);  f.read(reinterpret_cast<char*>(&header_size),           2);
+    f.seekg(96);  f.read(reinterpret_cast<char*>(&info.offset_to_data),   4);
+    f.seekg(100); f.read(reinterpret_cast<char*>(&num_vlrs),              4);
+    f.seekg(104); f.read(reinterpret_cast<char*>(&point_fmt),             1);
+    point_fmt &= 0x0F;
+    f.seekg(105); f.read(reinterpret_cast<char*>(&info.point_record_len), 2);
 
-    f.seekg(hdr_size);
+    if (isLas14) {
+        f.seekg(247); f.read(reinterpret_cast<char*>(&info.point_count), 8);
+    } else {
+        uint32_t c = 0;
+        f.seekg(107); f.read(reinterpret_cast<char*>(&c), 4);
+        info.point_count = c;
+    }
 
+    info.base_size = (point_fmt <= 10) ? kBaseSizes[point_fmt] : 20;
+
+    // Walk VLRs, find Extra Bytes record (LASF_Spec record_id=4)
+    f.seekg(header_size);
     for (uint32_t v = 0; v < num_vlrs; ++v) {
-        uint8_t vlr_header[54];
-        f.read(reinterpret_cast<char*>(vlr_header), 54);
+        uint8_t hdr[54] = {};
+        f.read(reinterpret_cast<char*>(hdr), 54);
         if (!f) break;
 
-        char user_id[17] = {};
-        std::memcpy(user_id, vlr_header + 2, 16);
-
-        uint16_t record_id, record_length;
-        std::memcpy(&record_id,     vlr_header + 18, 2);
-        std::memcpy(&record_length, vlr_header + 20, 2);
+        char     user_id[17]  = {};
+        uint16_t record_id    = 0;
+        uint16_t record_len   = 0;
+        std::memcpy(user_id,    hdr + 2,  16);
+        std::memcpy(&record_id, hdr + 18, 2);
+        std::memcpy(&record_len,hdr + 20, 2);
 
         if (std::string(user_id) == "LASF_Spec" && record_id == 4) {
-            int num_extra = record_length / 192;
-            std::vector<uint8_t> data(record_length);
-            f.read(reinterpret_cast<char*>(data.data()), record_length);
+            int n = record_len / 192;
+            std::vector<uint8_t> data(record_len);
+            f.read(reinterpret_cast<char*>(data.data()), record_len);
 
-            for (int i = 0; i < num_extra; ++i) {
+            int running_offset = 0;
+            for (int i = 0; i < n; ++i) {
                 const uint8_t* rec = data.data() + i * 192;
-                uint8_t data_type = rec[2];
+                uint8_t dtype = rec[2];
                 char name_buf[33] = {};
                 std::memcpy(name_buf, rec + 4, 32);
-
-                pdal::Dimension::Type t = lasTypeToPdal(data_type);
-                if (t != pdal::Dimension::Type::None) {
-                    result.push_back({ std::string(name_buf), t });
+                int sz = lasTypeSize(dtype);
+                if (sz > 0) {
+                    info.dims.push_back({ std::string(name_buf), dtype, sz, running_offset });
+                    running_offset += sz;
                 }
             }
+            break;
         } else {
-            f.seekg(record_length, std::ios::cur);
+            f.seekg(record_len, std::ios::cur);
         }
     }
-
-    return result;
+    return info;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  Dims to exclude from the feature list
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
-static const std::set<std::string> kExcluded = {
-    // Standard LAS dims
-    "X","Y","Z","Intensity","ReturnNumber","NumberOfReturns",
-    "ScanDirectionFlag","EdgeOfFlightLine","Classification",
-    "ScanAngleRank","UserData","PointSourceId",
-    "GpsTime","Red","Green","Blue",
-    "ScannerChannel","ScanChannel","ClassificationFlags","ScanAngle",
-    "NormalX","NormalY","NormalZ","Synthetic","KeyPoint","Withheld","Overlap",
-    // Our custom dims
-    "POINT_ID","point_id","labels"
-};
+static float    readFloat32(const uint8_t* p) { float    v; std::memcpy(&v, p, 4); return v; }
+static uint32_t readUint32 (const uint8_t* p) { uint32_t v; std::memcpy(&v, p, 4); return v; }
 
-static bool isExcluded(const std::string& name)
-{
-    if (kExcluded.count(name)) return true;
-    // Case-insensitive check for point_id variants
-    std::string lower = name;
+static std::string cleanName(const std::string& s) {
+    auto z = s.find('\0');
+    return (z != std::string::npos) ? s.substr(0, z) : s;
+}
+
+static bool nameIsPointId(const std::string& s) {
+    std::string lower = cleanName(s);
     std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-    return lower == "point_id" || lower == "pointid" || lower == "labels";
+    return lower == "point_id" || lower == "pointid";
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  Main conversion
-// ─────────────────────────────────────────────────────────────────────────────
+static bool nameIsExcluded(const std::string& s) {
+    std::string lower = cleanName(s);
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+    return lower == "labels" || lower == "normalx" ||
+           lower == "normaly" || lower == "normalz";
+}
+
+// ─── Main conversion ─────────────────────────────────────────────────────────
 
 static void convert(const fs::path& las_path, const fs::path& out_path)
 {
-    // ── 1. Read extra dim names from VLR ─────────────────────────────────────
-    auto vlrExtras = readExtraBytesVLR(las_path);
-
-    // Build feature list (ordered, excluding standard/POINT_ID dims)
-    struct FeatureInfo {
-        std::string           name;
-        pdal::Dimension::Id   pdal_id;   // filled after PDAL read
-    };
-    std::vector<FeatureInfo> features;
-
-    // First pass: collect names from VLR that are not excluded
-    for (auto& e : vlrExtras) {
-        if (!isExcluded(e.name))
-            features.push_back({ e.name, pdal::Dimension::Id::Unknown });
-    }
-
-    if (features.empty())
-        throw std::runtime_error("No feature dims found in LAS. Run feature extraction first.");
-
-    const uint32_t F = static_cast<uint32_t>(features.size());
-
-    // ── 2. Read LAS with PDAL ─────────────────────────────────────────────────
     std::cout << "Loading LAS: " << las_path << "\n";
 
-    pdal::PointTable table;
-    pdal::LasReader  reader;
-    {
-        pdal::Options opts;
-        opts.add("filename", las_path.string());
-        reader.setOptions(opts);
-        reader.prepare(table);
-    }
-    pdal::PointViewPtr view = *reader.execute(table).begin();
+    LasInfo info = readLasInfo(las_path);
 
-    const size_t nPoints = view->size();
-    std::cout << "  Points: " << nPoints << "\n";
-    std::cout << "  Features: " << F << "\n";
+    std::cout << "  Points        : " << info.point_count      << "\n";
+    std::cout << "  Rec length    : " << info.point_record_len << "\n";
+    std::cout << "  Base size     : " << info.base_size        << "\n";
+    std::cout << "  VLR dims      : " << info.dims.size()      << "\n\n";
 
-    // ── 3. Find POINT_ID dim in PDAL view ─────────────────────────────────────
-    pdal::Dimension::Id dimPointId = pdal::Dimension::Id::Unknown;
-    for (const auto& dimId : view->dims()) {
-        std::string dname = pdal::Dimension::name(dimId);
-        std::string lower = dname;
-        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-        if (lower == "point_id" || lower == "pointid") {
-            dimPointId = dimId;
-            break;
+    // ── Classify VLR dims into POINT_ID and features ──────────────────────────
+    int pid_offset = -1;
+
+    struct FeatureDef {
+        std::string name;
+        int         offset;
+    };
+    std::vector<FeatureDef> features;
+
+    for (auto& d : info.dims) {
+        if (nameIsPointId(d.name)) {
+            pid_offset = d.offset;
+        } else if (!nameIsExcluded(d.name)) {
+            features.push_back({ cleanName(d.name), d.offset });
         }
     }
 
-    // ── 4. Match feature names (from VLR) to PDAL dim IDs ────────────────────
-    // PDAL may have empty names for non-UTF8 dims, so we match positionally:
-    // collect PDAL extra dim IDs in the same order as VLR entries
-    std::vector<pdal::Dimension::Id> pdal_extra_ids;
-    for (const auto& dimId : view->dims()) {
-        std::string dname = pdal::Dimension::name(dimId);
-        if (kExcluded.count(dname)) continue;
-        std::string lower = dname;
-        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-        if (lower == "point_id" || lower == "pointid" || lower == "labels") continue;
-        pdal_extra_ids.push_back(dimId);
+    if (pid_offset < 0)
+        throw std::runtime_error("POINT_ID not found in VLR.");
+    if (features.empty())
+        throw std::runtime_error("No feature dims found in VLR.");
+
+    const uint32_t F = static_cast<uint32_t>(features.size());
+    std::cout << "  POINT_ID at extra offset +" << pid_offset << "\n";
+    std::cout << "  Features: " << F << "\n\n";
+
+    // ── Load all points into memory ───────────────────────────────────────────
+    std::ifstream f(las_path, std::ios::binary);
+    if (!f) throw std::runtime_error("Cannot reopen: " + las_path.string());
+
+    const uint64_t N_pts   = info.point_count;
+    const int      rec_len = info.point_record_len;
+    const int      base    = info.base_size;
+
+    std::vector<uint8_t> raw(static_cast<size_t>(N_pts) * rec_len);
+    f.seekg(info.offset_to_data);
+    f.read(reinterpret_cast<char*>(raw.data()),
+           static_cast<std::streamsize>(raw.size()));
+    if (!f) throw std::runtime_error("Failed to read point data.");
+    f.close();
+
+    // ── First pass: find max POINT_ID ────────────────────────────────────────
+    uint32_t maxPid = 0;
+    for (uint64_t i = 0; i < N_pts; ++i) {
+        uint32_t pid = readUint32(raw.data() + i * rec_len + base + pid_offset);
+        if (pid > maxPid) maxPid = pid;
     }
 
-    // vlrExtras (non-excluded) → pdal_extra_ids should align positionally
-    // Build mapping: feature index → pdal dim id
-    std::vector<pdal::Dimension::Id> feat_dim_ids(F, pdal::Dimension::Id::Unknown);
-    {
-        size_t vlr_feat_idx = 0;  // index into vlrExtras non-excluded entries
-        size_t pdal_idx = 0;
-        for (size_t vi = 0; vi < vlrExtras.size() && pdal_idx < pdal_extra_ids.size(); ++vi) {
-            if (isExcluded(vlrExtras[vi].name)) continue;
-            feat_dim_ids[vlr_feat_idx] = pdal_extra_ids[pdal_idx];
-            ++vlr_feat_idx;
-            ++pdal_idx;
-        }
-    }
+    const uint32_t kMaxSane = static_cast<uint32_t>(N_pts) * 10u;
+    if (maxPid > kMaxSane)
+        throw std::runtime_error(
+            "max POINT_ID=" + std::to_string(maxPid) + " looks wrong (>" +
+            std::to_string(kMaxSane) + "). Check VLR layout.");
 
-    // ── 5. First pass: find max POINT_ID ─────────────────────────────────────
-    uint32_t maxPointId = 0;
-    if (dimPointId != pdal::Dimension::Id::Unknown) {
-        for (pdal::PointId i = 0; i < static_cast<pdal::PointId>(nPoints); ++i) {
-            uint32_t pid = view->getFieldAs<uint32_t>(dimPointId, i);
-            if (pid > maxPointId) maxPointId = pid;
-        }
-    } else {
-        // No POINT_ID: use sequential index
-        maxPointId = static_cast<uint32_t>(nPoints) - 1;
-        std::cerr << "WARNING: POINT_ID not found, using sequential index.\n";
-    }
+    const uint32_t N = maxPid + 1;
+    std::cout << "  max POINT_ID : " << maxPid << "  →  N=" << N << "\n";
 
-    const uint32_t N = maxPointId + 1;
-    std::cout << "  Array size N (max POINT_ID + 1): " << N << "\n";
+    // ── Allocate output array (NaN = no data) ─────────────────────────────────
+    const size_t kMaxBytes  = size_t(2) * 1024 * 1024 * 1024;
+    const size_t allocBytes = static_cast<size_t>(N) * F * 4;
+    if (allocBytes > kMaxBytes)
+        throw std::runtime_error(
+            "Allocation too large: " + std::to_string(allocBytes / 1024 / 1024) + " MB");
 
-    // ── 6. Allocate output array and fill with NaN ────────────────────────────
     const float kNaN = std::numeric_limits<float>::quiet_NaN();
     std::vector<float> data(static_cast<size_t>(N) * F, kNaN);
 
-    // ── 7. Fill data array ────────────────────────────────────────────────────
-    for (pdal::PointId i = 0; i < static_cast<pdal::PointId>(nPoints); ++i) {
-        uint32_t pid = (dimPointId != pdal::Dimension::Id::Unknown)
-            ? view->getFieldAs<uint32_t>(dimPointId, i)
-            : static_cast<uint32_t>(i);
+    // ── Second pass: fill data array ─────────────────────────────────────────
+    for (uint64_t i = 0; i < N_pts; ++i) {
+        const uint8_t* rec = raw.data() + i * rec_len;
+        uint32_t pid = readUint32(rec + base + pid_offset);
+        if (pid >= N) continue;
 
-        if (pid >= N) continue;  // safety
-
-        for (uint32_t f = 0; f < F; ++f) {
-            if (feat_dim_ids[f] == pdal::Dimension::Id::Unknown) continue;
-            data[static_cast<size_t>(pid) * F + f] =
-                view->getFieldAs<float>(feat_dim_ids[f], i);
-        }
+        float* row = data.data() + static_cast<size_t>(pid) * F;
+        for (uint32_t fi = 0; fi < F; ++fi)
+            row[fi] = readFloat32(rec + base + features[fi].offset);
     }
 
-    // ── 8. Compute per-feature min/max (ignoring NaN) ─────────────────────────
+    // ── Compute per-feature min/max ───────────────────────────────────────────
     std::vector<float> vmin(F,  std::numeric_limits<float>::max());
     std::vector<float> vmax(F, -std::numeric_limits<float>::max());
 
     for (size_t i = 0; i < N; ++i) {
-        for (uint32_t f = 0; f < F; ++f) {
-            float v = data[i * F + f];
+        const float* row = data.data() + i * F;
+        for (uint32_t fi = 0; fi < F; ++fi) {
+            float v = row[fi];
             if (!std::isnan(v)) {
-                if (v < vmin[f]) vmin[f] = v;
-                if (v > vmax[f]) vmax[f] = v;
+                if (v < vmin[fi]) vmin[fi] = v;
+                if (v > vmax[fi]) vmax[fi] = v;
             }
         }
     }
-    // Fallback for features with no valid data
-    for (uint32_t f = 0; f < F; ++f) {
-        if (vmin[f] > vmax[f]) { vmin[f] = 0.0f; vmax[f] = 1.0f; }
-    }
+    for (uint32_t fi = 0; fi < F; ++fi)
+        if (vmin[fi] > vmax[fi]) { vmin[fi] = 0.f; vmax[fi] = 1.f; }
 
-    // ── 9. Write binary file ──────────────────────────────────────────────────
-    std::cout << "Writing: " << out_path << "\n";
-
+    // ── Write binary file ─────────────────────────────────────────────────────
+    std::cout << "\nWriting: " << out_path << "\n";
     std::ofstream out(out_path, std::ios::binary);
     if (!out) throw std::runtime_error("Cannot write: " + out_path.string());
 
-    // Magic
-    const char magic[4] = { 'F', 'E', 'A', 'T' };
-    out.write(magic, 4);
-
-    // N, F
+    // Header
+    out.write("FEAT", 4);
     out.write(reinterpret_cast<const char*>(&N), 4);
     out.write(reinterpret_cast<const char*>(&F), 4);
 
     // Feature names (32 bytes each, null-padded)
-    for (uint32_t f = 0; f < F; ++f) {
-        char name_buf[32] = {};
-        std::memcpy(name_buf, features[f].name.c_str(),
-                    std::min(features[f].name.size(), size_t(31)));
-        out.write(name_buf, 32);
+    for (uint32_t fi = 0; fi < F; ++fi) {
+        char buf[32] = {};
+        std::memcpy(buf, features[fi].name.c_str(),
+                    std::min(features[fi].name.size(), size_t(31)));
+        out.write(buf, 32);
     }
 
     // vmin, vmax
@@ -318,17 +305,25 @@ static void convert(const fs::path& las_path, const fs::path& out_path)
     // Data
     out.write(reinterpret_cast<const char*>(data.data()),
               static_cast<std::streamsize>(data.size()) * 4);
-
     out.close();
 
-    // Summary
+    // ── Summary ───────────────────────────────────────────────────────────────
     const size_t total_bytes = 4 + 4 + 4 + F*32 + F*4 + F*4 + data.size()*4;
-    std::cout << "  Done. File size: " << (total_bytes / 1024 / 1024) << " MB\n";
-    std::cout << "  Features written:\n";
-    for (uint32_t f = 0; f < F; ++f)
-        std::cout << "    [" << f << "] " << features[f].name
-                  << "  min=" << vmin[f] << "  max=" << vmax[f] << "\n";
-    std::cout << out_path.string() << "\n";  // last line = path for Python
+    std::cout << "  File size : " << (total_bytes / 1024 / 1024) << " MB\n\n";
+    std::cout << std::left
+              << std::setw(4)  << "Idx"
+              << std::setw(32) << "Feature"
+              << std::setw(14) << "Min"
+              << "Max\n";
+    std::cout << std::string(64, '-') << "\n";
+    for (uint32_t fi = 0; fi < F; ++fi)
+        std::cout << std::setw(4)  << fi
+                  << std::setw(32) << features[fi].name
+                  << std::setw(14) << vmin[fi]
+                  << vmax[fi] << "\n";
+
+    // Last line = output path (for Python caller)
+    std::cout << "\n" << out_path.string() << "\n";
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

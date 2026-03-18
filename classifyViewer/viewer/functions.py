@@ -334,6 +334,38 @@ def split_las_by_binary(las_path: str, bin_path: str, meta_path: str, output_dir
 
     job.launch_subprocess(command)
 
+def extract_segment_las(las_path: str, bin_path: str, seg_id: int, out_path: str):
+    """
+    Extracts all points belonging to a specific segment from features.las
+    into a new LAS file ready for classification (no 'labels' extra dim added).
+
+    Uses the same split_las_by_binary binary with the --extract-segment flag.
+
+    Args:
+        las_path:  Path to features.las (source point cloud)
+        bin_path:  Path to the .bin buffer (2 bytes/point: [seg_id, class_id])
+        seg_id:    Integer segment ID to extract
+        out_path:  Path for the output .las file
+    """
+    print(f"\n[FUNCTION] ---- EXTRACT SEGMENT LAS (seg_id={seg_id}) -----")
+
+    abs_las = os.path.abspath(os.path.join(settings.BASE_DIR, las_path))
+    abs_bin = os.path.abspath(os.path.join(settings.BASE_DIR, bin_path))
+    abs_out = os.path.abspath(os.path.join(settings.BASE_DIR, out_path))
+
+    os.makedirs(os.path.dirname(abs_out), exist_ok=True)
+
+    command = [
+        "/webapp/opt/split_las_by_binary",
+        abs_las,
+        abs_bin,
+        "--extract-segment",
+        str(seg_id),
+        abs_out,
+    ]
+
+    job.launch_subprocess(command)
+
 def las_to_feature_bin(las_path: str, bin_path: str):
     """
     Converts a features.las file into a compact binary (features.bin) for
