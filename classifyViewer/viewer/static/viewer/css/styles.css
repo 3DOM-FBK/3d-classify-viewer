@@ -111,6 +111,43 @@ textarea,
     background-color: rgba(255, 255, 255, 0.15);
 }
 
+.navbar-right {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    height: 100%;
+}
+
+.nav-doc-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background-color: rgba(59, 130, 246, 0.1);
+    border: 1px solid rgba(59, 130, 246, 0.3);
+    color: var(--accent-blue);
+    font-weight: 600;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.nav-doc-btn:hover {
+    background-color: var(--accent-blue);
+    border-color: var(--accent-blue);
+    color: white;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+}
+
+.nav-doc-btn img {
+    height: 16px;
+    filter: brightness(0) saturate(100%) invert(46%) sepia(85%) saturate(1469%) hue-rotate(204deg) brightness(99%) contrast(92%);
+    transition: filter 0.3s;
+}
+
+.nav-doc-btn:hover img {
+    filter: brightness(0) invert(1);
+}
+
 /* Navbar Separator */
 .navbar-separator {
     width: 1px;

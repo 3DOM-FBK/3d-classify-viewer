@@ -570,7 +570,7 @@ async function refreshModelsList() {
             const noteBtn = document.createElement('button');
             noteBtn.title = 'View training report';
             noteBtn.style.cssText = 'background:none; border:none; cursor:pointer; padding:2px 4px; flex-shrink:0; display:flex; align-items:center; opacity:0.5; transition:opacity 0.15s;';
-            noteBtn.innerHTML = `<img src="/static/viewer/icons/note.png" alt="Report" style="width:14px; height:14px;">`;
+            noteBtn.innerHTML = `<img src="/static/viewer/icons/note.png" alt="Report" style="height:14px;">`;
             noteBtn.addEventListener('mouseenter', () => noteBtn.style.opacity = '1');
             noteBtn.addEventListener('mouseleave', () => noteBtn.style.opacity = '0.5');
             noteBtn.addEventListener('click', (e) => {
