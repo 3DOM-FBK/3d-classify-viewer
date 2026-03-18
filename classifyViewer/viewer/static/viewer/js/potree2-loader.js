@@ -90,7 +90,10 @@ export class Potree2Loader {
         this.activeNodes = new Set();
         this.loadingNodes = new Set();
 
-        this.pointSize = options.pointSize || 2;
+        // 0 = automatic spacing-based sizing; any positive value = fixed size
+        this.pointSize = options.pointSize ?? 0;
+        // Multiplier applied on top of the auto-computed size (controlled by the UI slider)
+        this.pointSizeMultiplier = options.pointSizeMultiplier ?? 1.0;
         this.maxVisibleNodes = options.maxVisibleNodes || 500;
         this.maxVisiblePoints = options.maxVisiblePoints || 5_000_000;
         this.maxConcurrentLoads = options.maxConcurrentLoads || 6;
@@ -332,12 +335,84 @@ export class Potree2Loader {
         this.stats.visibleNodes = this.activeNodes.size;
         this.stats.totalPointsRendered = totalPoints;
         this.stats.loadingNodes = this.loadingNodes.size;
+
+        // ---- Per-node dynamic point size based on node spacing ----
+        // Each node's pointSize is set so that a point visually "covers" its
+        // spacing in world space, projected onto the screen.  This makes the
+        // perceived density uniform across LOD levels, masking octree seams.
+        // The mode is active only when this.pointSize === 0 (auto).
+        if (this.pointSize === 0) {
+            const engine = this.scene.getEngine();
+            const screenHeight = engine.getRenderHeight();
+            const fov = camera.fov || 0.8;
+            const slope = Math.tan(fov / 2);
+
+            for (const [, mesh] of this.loadedNodes) {
+                if (!mesh.isVisible || !mesh.material) continue;
+
+                const spacing = mesh.metadata?.nodeSpacing;
+                const bb = mesh.metadata?.nodeBoundingBox;
+                if (!spacing || !bb) continue;
+
+                const cx = (bb.min[0] + bb.max[0]) / 2;
+                const cy = (bb.min[1] + bb.max[1]) / 2;
+                const cz = (bb.min[2] + bb.max[2]) / 2;
+                const center = new BABYLON.Vector3(cx, cy, cz);
+                const distance = BABYLON.Vector3.Distance(camera.position, center);
+
+                if (distance < 0.001) continue;
+
+                // Projected sphere radius × user multiplier
+                const projectedSize = (spacing * screenHeight) / (2 * slope * distance) * this.pointSizeMultiplier;
+
+                // Clamp: never smaller than 1 px, never larger than 20 px
+                mesh.material.pointSize = Math.max(1, Math.min(20, projectedSize));
+            }
+        }
     }
 
     setPointSize(size) {
+        // size === 0  → enable automatic spacing-based sizing (default)
+        // size  >  0  → fixed size set by the user, disables auto mode
         this.pointSize = size;
-        for (const mesh of this.loadedNodes.values()) {
-            if (mesh.material) mesh.material.pointSize = size;
+        if (size > 0) {
+            for (const mesh of this.loadedNodes.values()) {
+                if (mesh.material) mesh.material.pointSize = size;
+            }
+        }
+    }
+
+    /**
+     * Sets a multiplier applied on top of the auto-computed projected point size.
+     * Called by the Point Size slider in the viewport settings panel.
+     * multiplier = 1.0 → neutral (default)
+     * multiplier < 1.0 → smaller points
+     * multiplier > 1.0 → larger points
+     */
+    setPointSizeMultiplier(multiplier) {
+        this.pointSizeMultiplier = Math.max(0.1, multiplier);
+        // Apply immediately to all visible nodes without waiting for camera movement
+        const camera = this.scene.activeCamera;
+        if (!camera) return;
+        const engine = this.scene.getEngine();
+        const screenHeight = engine.getRenderHeight();
+        const fov = camera.fov || 0.8;
+        const slope = Math.tan(fov / 2);
+        for (const [, mesh] of this.loadedNodes) {
+            if (!mesh.isVisible || !mesh.material) continue;
+            const spacing = mesh.metadata?.nodeSpacing;
+            const bb = mesh.metadata?.nodeBoundingBox;
+            if (!spacing || !bb) continue;
+            const cx = (bb.min[0] + bb.max[0]) / 2;
+            const cy = (bb.min[1] + bb.max[1]) / 2;
+            const cz = (bb.min[2] + bb.max[2]) / 2;
+            const distance = BABYLON.Vector3.Distance(
+                camera.position,
+                new BABYLON.Vector3(cx, cy, cz)
+            );
+            if (distance < 0.001) continue;
+            const projectedSize = (spacing * screenHeight) / (2 * slope * distance) * this.pointSizeMultiplier;
+            mesh.material.pointSize = Math.max(1, Math.min(20, projectedSize));
         }
     }
 
@@ -874,7 +949,9 @@ export class Potree2Loader {
 
         const mat = new BABYLON.StandardMaterial(`mat_p2_${node.name}`, this.scene);
         mat.pointsCloud = true;
-        mat.pointSize = this.pointSize;
+        // In auto mode (pointSize===0) start with a safe fallback; update() will
+        // overwrite this with the correct projected value on the next camera event.
+        mat.pointSize = this.pointSize > 0 ? this.pointSize : 2;
         mat.disableLighting = true;
         mat.emissiveColor = new BABYLON.Color3(1, 1, 1);
         mat.useVertexAlpha = true; // needed for alpha=0 to hide cut segment points
@@ -897,7 +974,10 @@ export class Potree2Loader {
             classColors,
             segmentIds,
             pointIds,
-            potree2Node: true
+            potree2Node: true,
+            // Used by update() to compute per-node projected point size (spacing-based LOD).
+            nodeSpacing: node.spacing,
+            nodeBoundingBox: node.boundingBox
         };
 
         this.loadedNodes.set(node.name, mesh);

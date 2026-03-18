@@ -21,7 +21,8 @@ import {
     classRegistry,
     showModelReportModal,
     showContextMenu,
-    showClassifyModal
+    showClassifyModal,
+    setLODParameters
 } from "./functions.js";
 
 // --- UI Elements ---
@@ -706,7 +707,7 @@ const viewportContent = viewportSection.content;
 
 const gridToggle = createCheckbox("Show Grid", true, viewportContent);
 const lightModeToggle = createCheckbox("Light Background", false, viewportContent);
-const pointSizeSlider = createSlider("Point Size", 1, 10, 2, 0.5, viewportContent);
+const pointSizeSlider = createSlider("Point Size", 0.1, 3.0, 1.0, 0.05, viewportContent);
 const maxPointsSlider = createSlider("Max Points (M)", 1, 20, 5, 1, viewportContent); // 1M a 20M
 const maxErrorSlider = createSlider("Max Error (px)", 0.1, 10, 3.0, 0.1, viewportContent); // 0.1 a 10
 const nearClipSlider = createSlider("Near Clip", 0.01, 10, 0.1, 0.01, viewportContent);
@@ -865,7 +866,7 @@ scene.onPointerObservable.add((pointerInfo) => {
                         lassoOverlay.style.display = "none";
                         rectShape.style.display = "none";
                     }
-                }, 1000);
+                }, 300);
             } else if (isDrawingLasso) {
                 isDrawingLasso = false;
 
@@ -882,7 +883,7 @@ scene.onPointerObservable.add((pointerInfo) => {
                         lassoPath.setAttribute("points", "");
                         lassoPoints = [];
                     }
-                }, 1000);
+                }, 300);
             }
             break;
     }
@@ -1570,22 +1571,24 @@ lightModeToggle.addEventListener('change', (e) => {
     }
 });
 
-// Slider Point Size
+// Slider Point Size — works as a multiplier for the auto spacing-based size.
+// 1.0 = neutral, <1.0 = smaller, >1.0 = larger.
 pointSizeSlider.addEventListener('input', (e) => {
-    const size = parseFloat(e.target.value);
+    const multiplier = parseFloat(e.target.value);
     const pc = sceneObjects.currentPointCloud;
-    if (pc) {
-        // Handle both simple mesh and clustered TransformNode
+    // For Potree2: delegate entirely to the loader (multiplier applied in update())
+    const handledByLoader = setLODParameters(scene, { pointSizeMultiplier: multiplier });
+    if (pc && !handledByLoader) {
+        // Fallback for non-Potree2 point clouds only
+        const fixedSize = Math.round(multiplier * 2);
         if (pc.getChildMeshes) {
             pc.getChildMeshes().forEach(mesh => {
-                if (mesh.material) mesh.material.pointSize = size;
+                if (mesh.material) mesh.material.pointSize = fixedSize;
             });
         } else if (pc.material) {
-            pc.material.pointSize = size;
+            pc.material.pointSize = fixedSize;
         }
     }
-    // Update LOD loader if active
-    setLODParameters(scene, { pointSize: size });
 });
 
 // Slider Max Points

@@ -77,6 +77,10 @@ export function setLODParameters(scene, params) {
         loader.setPointSize(params.pointSize);
     }
 
+    if (params.pointSizeMultiplier !== undefined) {
+        loader.setPointSizeMultiplier(params.pointSizeMultiplier);
+    }
+
     if (params.maxVisiblePoints !== undefined) {
         loader.maxVisiblePoints = params.maxVisiblePoints;
     }
