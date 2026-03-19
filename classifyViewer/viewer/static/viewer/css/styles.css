@@ -2233,3 +2233,81 @@ input[type="number"].property-input::-webkit-outer-spin-button:active {
     border-radius: 4px;
     border: 1px solid rgba(255, 255, 255, 0.05);
 }
+
+/* ============================================================
+   COLORMAP PICKER — feature range header
+   ============================================================ */
+
+.feature-range-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.colormap-picker-container {
+    position: relative;
+}
+
+.colormap-dropdown {
+    display: none;
+    position: absolute;
+    bottom: calc(100% + 8px);
+    right: 0;
+    background: rgba(22, 22, 26, 0.97);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 10px;
+    padding: 5px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.55);
+    z-index: 1200;
+    min-width: 185px;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.colormap-dropdown.open {
+    display: flex;
+}
+
+.colormap-option {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    width: 100%;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    padding: 6px 8px;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.colormap-option:hover {
+    background: rgba(255, 255, 255, 0.06);
+    border-color: rgba(255, 255, 255, 0.08);
+}
+
+.colormap-option.active {
+    background: rgba(59, 130, 246, 0.12);
+    border-color: rgba(59, 130, 246, 0.35);
+}
+
+.colormap-label {
+    font-size: 0.68rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    white-space: nowrap;
+}
+
+.colormap-swatch {
+    display: inline-block;
+    width: 72px;
+    height: 10px;
+    border-radius: 3px;
+    flex-shrink: 0;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}

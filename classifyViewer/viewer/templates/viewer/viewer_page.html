@@ -84,9 +84,60 @@
             <div id="feature-range-control" class="feature-range-container">
                 <div class="feature-range-header">
                     <span id="feature-range-name" class="feature-name">Scalar Field</span>
-                    <button id="feature-range-reset" class="feature-range-reset" title="Reset Range"><img
-                            src="{% static 'viewer/icons/refresh.png' %}" style="width: 10px; height: 10px;"
-                            alt="Reset Range"></button>
+                    <div class="feature-range-actions">
+                        <div class="colormap-picker-container">
+                            <button id="colormap-picker-btn" class="feature-range-reset" title="Change Colormap">
+                                <svg width="10" height="10" viewBox="0 0 10 10" fill="none"
+                                    xmlns="http://www.w3.org/2000/svg">
+                                    <rect x="0" y="3" width="10" height="4" rx="2" fill="url(#cmPreview)" />
+                                    <defs>
+                                        <linearGradient id="cmPreview" x1="0" y1="0" x2="1" y2="0"
+                                            gradientUnits="objectBoundingBox">
+                                            <stop offset="0%" stop-color="#0000ff" />
+                                            <stop offset="33%" stop-color="#00ff00" />
+                                            <stop offset="66%" stop-color="#ffff00" />
+                                            <stop offset="100%" stop-color="#ff0000" />
+                                        </linearGradient>
+                                    </defs>
+                                </svg>
+                            </button>
+                            <div id="colormap-dropdown" class="colormap-dropdown">
+                                <button class="colormap-option active" data-colormap="0">
+                                    <span class="colormap-label">Blue › Red</span>
+                                    <span class="colormap-swatch"
+                                        style="background: linear-gradient(to right, #0000ff, #00ff00, #ffff00, #ff0000)"></span>
+                                </button>
+                                <button class="colormap-option" data-colormap="1">
+                                    <span class="colormap-label">Viridis</span>
+                                    <span class="colormap-swatch"
+                                        style="background: linear-gradient(to right, #440154, #31688e, #35b779, #fde725)"></span>
+                                </button>
+                                <button class="colormap-option" data-colormap="2">
+                                    <span class="colormap-label">Jet</span>
+                                    <span class="colormap-swatch"
+                                        style="background: linear-gradient(to right, #0000ff, #00ffff, #00ff00, #ffff00, #ff0000)"></span>
+                                </button>
+                                <button class="colormap-option" data-colormap="3">
+                                    <span class="colormap-label">Diverging</span>
+                                    <span class="colormap-swatch"
+                                        style="background: linear-gradient(to right, #2166ac, #f7f7f7, #d6604d)"></span>
+                                </button>
+                                <button class="colormap-option" data-colormap="4">
+                                    <span class="colormap-label">Grayscale</span>
+                                    <span class="colormap-swatch"
+                                        style="background: linear-gradient(to right, #000000, #ffffff)"></span>
+                                </button>
+                                <button class="colormap-option" data-colormap="5">
+                                    <span class="colormap-label">Hot</span>
+                                    <span class="colormap-swatch"
+                                        style="background: linear-gradient(to right, #000000, #ff0000, #ffff00, #ffffff)"></span>
+                                </button>
+                            </div>
+                        </div>
+                        <button id="feature-range-reset" class="feature-range-reset" title="Reset Range"><img
+                                src="{% static 'viewer/icons/refresh.png' %}" style="width: 10px; height: 10px;"
+                                alt="Reset Range"></button>
+                    </div>
                 </div>
                 <div class="dual-range-slider">
                     <div class="slider-track"></div>

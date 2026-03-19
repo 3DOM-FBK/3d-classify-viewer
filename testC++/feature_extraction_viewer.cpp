@@ -731,7 +731,9 @@ static void wLE(std::vector<uint8_t>& buf, size_t off, T val) {
 }
 
 // Build one 192-byte VLR Extra Bytes record.
-// dtype: 5=uint8, 6=uint16, 7=uint32, 9=float32
+// LAS 1.4 Extra Bytes dtype codes (Table 24):
+//   1=uint8  2=int8  3=uint16 4=int16  5=uint32 6=int32
+//   7=uint64 8=int64 9=float32 10=float64
 static std::array<uint8_t,192> makeVlrDimRecord(const std::string& name, uint8_t dtype)
 {
     std::array<uint8_t,192> rec{};
@@ -781,9 +783,11 @@ void writeToLas(const std::string& outputPath,
     std::vector<PassthroughDim> passthroughDims;
     for (auto& d : srcInfo.extra_dims) {
         if (!isExcluded(d.name)) {
-            // Map size to VLR dtype: 4-byte = float32 (9) or uint32 (7)
-            // We preserve as float32 for generality; source was likely float32 anyway.
-            uint8_t dtype = (d.size == 4) ? 9 : (d.size == 2 ? 4 : 6);
+            // Map size to VLR dtype per LAS 1.4 spec:
+            //   4 bytes → float32 = dtype 9 (preserve as float for generality)
+            //   2 bytes → uint16  = dtype 3
+            //   1 byte  → uint8   = dtype 1
+            uint8_t dtype = (d.size == 4) ? 9 : (d.size == 2 ? 3 : 1);
             passthroughDims.push_back({ d.name, d.offset, d.size, dtype });
         }
     }
@@ -804,7 +808,7 @@ void writeToLas(const std::string& outputPath,
     // -------------------------------------------------------
     struct OutExtraDim {
         std::string name;
-        uint8_t     vlr_dtype;  // 9=float32, 7=uint32
+        uint8_t     vlr_dtype;  // 5=uint32, 9=float32 (LAS 1.4 Extra Bytes spec)
         int         rec_offset; // byte offset within extra-bytes block of output record
     };
     std::vector<OutExtraDim> outExtra;
@@ -818,7 +822,7 @@ void writeToLas(const std::string& outputPath,
 
     // 2b. POINT_ID (uint32)
     const int off_pid = extraOffset;
-    outExtra.push_back({ "POINT_ID", 7, off_pid });
+    outExtra.push_back({ "POINT_ID", 5, off_pid }); // dtype 5 = uint32 per LAS 1.4 spec
     extraOffset += 4;
 
     // 2c. Feature dims (float32)
@@ -928,7 +932,10 @@ void writeToLas(const std::string& outputPath,
 
     // File signature "LASF"
     std::memcpy(header.data(), "LASF", 4);
-    // File source ID, global encoding — 0
+    // Global Encoding (offset 6, uint16):
+    //   bit 0 = GPS Time Type (1 = standard GPS time)
+    //   bit 4 = WKT flag — REQUIRED for point formats 6-10 by LAS 1.4 spec
+    wLE<uint16_t>(header, 6, 0x0011u); // bits 0 + 4
     // Version Major/Minor
     header[24] = 1;
     header[25] = 4;

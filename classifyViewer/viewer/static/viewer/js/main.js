@@ -44,6 +44,8 @@ const valMax = document.getElementById('val-max');
 const rangeHighlight = document.getElementById('range-highlight');
 const featureNameDisplay = document.getElementById('feature-range-name');
 const rangeResetBtn = document.getElementById('feature-range-reset');
+const colormapPickerBtn = document.getElementById('colormap-picker-btn');
+const colormapDropdown = document.getElementById('colormap-dropdown');
 
 // --- Tool Selection State ---
 let activeTool = "tool-1"; // Default mode
@@ -228,6 +230,56 @@ function initFeatureRangeSlider() {
     featureRangeControl._updateUI = updateRangeUI;
 }
 initFeatureRangeSlider();
+
+// Colormap gradient stops per id (matches loader GLSL order)
+const _COLORMAP_STOPS = [
+    ['#0000ff', '#00ff00', '#ffff00', '#ff0000'],           // 0 Blue>Green>Yellow>Red
+    ['#440154', '#31688e', '#35b779', '#fde725'],           // 1 Viridis
+    ['#0000ff', '#00ffff', '#00ff00', '#ffff00', '#ff0000'],// 2 Jet
+    ['#2166ac', '#f7f7f7', '#d6604d'],                      // 3 Diverging
+    ['#000000', '#ffffff'],                                  // 4 Grayscale
+    ['#000000', '#ff0000', '#ffff00', '#ffffff'],            // 5 Hot
+];
+
+function _updateColormapPickerIcon(id) {
+    const stops = _COLORMAP_STOPS[id] || _COLORMAP_STOPS[0];
+    const grad = colormapPickerBtn && colormapPickerBtn.querySelector('#cmPreview');
+    if (!grad) return;
+    grad.innerHTML = stops.map((c, i) => {
+        const offset = Math.round(i / (stops.length - 1) * 100);
+        return `<stop offset="${offset}%" stop-color="${c}"/>`;
+    }).join('');
+}
+
+function initColormapPicker() {
+    if (!colormapPickerBtn || !colormapDropdown) return;
+
+    colormapPickerBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        colormapDropdown.classList.toggle('open');
+    });
+
+    document.addEventListener('click', () => {
+        colormapDropdown.classList.remove('open');
+    });
+
+    colormapDropdown.querySelectorAll('.colormap-option').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const id = parseInt(btn.dataset.colormap, 10);
+
+            colormapDropdown.querySelectorAll('.colormap-option').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            _updateColormapPickerIcon(id);
+
+            const loader = scene.potree2Loader;
+            if (loader && typeof loader.setColormap === 'function') loader.setColormap(id);
+
+            colormapDropdown.classList.remove('open');
+        });
+    });
+}
+initColormapPicker();
 
 /**
  * Called after loadFeatureBin() completes. Adds/refreshes the Features section

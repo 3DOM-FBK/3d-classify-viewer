@@ -130,9 +130,10 @@ export class Potree2Loader {
         // into the vertex data of newly loaded LOD nodes.
         this.colorMode = "classification";
         this.featureBin = null;
-        // Custom display range for feature colormap (null = use global vmin/vmax)
         this._featureRangeMin = null;
         this._featureRangeMax = null;
+        this._featureShaderMat = null;
+        this._colormapId = 0; // 0=Blue>Green>Yellow>Red (default)
 
         // ---- CUT / SEGMENT HISTORY ----
         // segmentId 0 = main (uncut) cloud. Each cutSelection() adds an entry.
@@ -430,6 +431,7 @@ export class Potree2Loader {
         for (const mesh of this.loadedNodes.values()) {
             if (mesh.material) mesh.material.pointSize = this.pointSize;
         }
+        if (this._featureShaderMat) this._featureShaderMat.setFloat('pointSize', this.pointSize);
     }
 
     /**
@@ -446,37 +448,16 @@ export class Potree2Loader {
      * so newly loaded LOD nodes immediately use the correct colors.
      */
     setColorMode(mode) {
+        const wasFeature = this.colorMode.startsWith('feature:');
+        const isFeature = mode.startsWith('feature:');
         this.colorMode = mode;
-        // Immediately update all visible nodes
-        for (const mesh of this.loadedNodes.values()) {
-            if (mesh.isVisible) this._applyColorModeToMesh(mesh);
-        }
-    }
-
-    /**
-     * Sets a custom display range for the feature colormap.
-     * Values below min map to 0, above max map to 1 in the Viridis colormap.
-     * Called by the range slider in main.js.
-     */
-    setFeatureRange(min, max) {
-        this._featureRangeMin = min;
-        this._featureRangeMax = max;
-        // Re-apply colors immediately to all visible nodes
-        for (const mesh of this.loadedNodes.values()) {
-            if (mesh.isVisible) this._applyColorModeToMesh(mesh);
-        }
-    }
-
-    /**
-     * Resets the feature display range to the global min/max from the featureBin.
-     * Called when the user clicks the reset button on the range slider.
-     */
-    resetFeatureRange() {
-        this._featureRangeMin = null;
-        this._featureRangeMax = null;
-        // Re-apply colors immediately to all visible nodes
-        for (const mesh of this.loadedNodes.values()) {
-            if (mesh.isVisible) this._applyColorModeToMesh(mesh);
+        if (isFeature) {
+            this._applyFeatureShaderMode(true, mode.slice(8));
+        } else {
+            if (wasFeature) this._applyFeatureShaderMode(false, '');
+            for (const mesh of this.loadedNodes.values()) {
+                if (mesh.isVisible) this._applyColorModeToMesh(mesh);
+            }
         }
     }
 
@@ -535,6 +516,13 @@ export class Potree2Loader {
         const featureIdx = (featureBin && featureName !== null) ? featureBin.names.indexOf(featureName) : -1;
         const pointIds = mesh.metadata?.pointIds;
 
+        // Cache LUT + range boundaries outside the loop
+        const lut = Potree2Loader._viridisLUT;
+        const fmin = (featureBin && featureIdx >= 0)
+            ? (this._featureRangeMin !== null ? this._featureRangeMin : featureBin.vmin[featureIdx]) : 0;
+        const fmax = (featureBin && featureIdx >= 0)
+            ? (this._featureRangeMax !== null ? this._featureRangeMax : featureBin.vmax[featureIdx]) : 1;
+
         for (let i = 0; i < numPoints; i++) {
             // 1. Apply base color
             if (isFeatureMode && featureBin && featureIdx >= 0 && pointIds) {
@@ -543,10 +531,9 @@ export class Potree2Loader {
                 if (pid >= 0 && pid < featureBin.N) {
                     const val = featureBin.data[pid * featureBin.F + featureIdx];
                     if (!isNaN(val)) {
-                        const fmin = this._featureRangeMin !== null ? this._featureRangeMin : featureBin.vmin[featureIdx];
-                        const fmax = this._featureRangeMax !== null ? this._featureRangeMax : featureBin.vmax[featureIdx];
                         const t = (fmax > fmin) ? (val - fmin) / (fmax - fmin) : 0.5;
-                        [r, g, b] = this._colormapViridis(Math.max(0, Math.min(1, t)));
+                        const lutIdx = Math.round(Math.max(0, Math.min(1, t)) * 255) * 3;
+                        r = lut[lutIdx]; g = lut[lutIdx + 1]; b = lut[lutIdx + 2];
                     }
                 }
                 colors[i * 4] = r;
@@ -755,26 +742,30 @@ export class Potree2Loader {
     /**
      * Viridis colormap (clamps to [0,1]). Used for continuous attributes (e.g. intensity).
      */
-    _colormapViridis(t) {
-        t = Math.max(0, Math.min(1, t));
-        // 5-stop Viridis approximation
+    static _buildViridisLUT() {
         const stops = [
-            [0.267, 0.005, 0.329],
-            [0.283, 0.141, 0.458],
-            [0.163, 0.471, 0.558],
-            [0.134, 0.659, 0.518],
-            [0.478, 0.821, 0.318],
-            [0.993, 0.906, 0.144]
+            [0.267, 0.005, 0.329], [0.283, 0.141, 0.458], [0.163, 0.471, 0.558],
+            [0.134, 0.659, 0.518], [0.478, 0.821, 0.318], [0.993, 0.906, 0.144]
         ];
-        const scaled = t * (stops.length - 1);
-        const lo = Math.floor(scaled);
-        const hi = Math.min(lo + 1, stops.length - 1);
-        const f = scaled - lo;
-        return [
-            stops[lo][0] + (stops[hi][0] - stops[lo][0]) * f,
-            stops[lo][1] + (stops[hi][1] - stops[lo][1]) * f,
-            stops[lo][2] + (stops[hi][2] - stops[lo][2]) * f
-        ];
+        const lut = new Float32Array(256 * 3);
+        for (let i = 0; i < 256; i++) {
+            const t = i / 255;
+            const scaled = t * (stops.length - 1);
+            const lo = Math.floor(scaled);
+            const hi = Math.min(lo + 1, stops.length - 1);
+            const f = scaled - lo;
+            lut[i * 3] = stops[lo][0] + (stops[hi][0] - stops[lo][0]) * f;
+            lut[i * 3 + 1] = stops[lo][1] + (stops[hi][1] - stops[lo][1]) * f;
+            lut[i * 3 + 2] = stops[lo][2] + (stops[hi][2] - stops[lo][2]) * f;
+        }
+        return lut;
+    }
+
+    _colormapViridis(t) {
+        const idx = Math.round(Math.max(0, Math.min(1, t)) * 255) * 3;
+        return [Potree2Loader._viridisLUT[idx],
+        Potree2Loader._viridisLUT[idx + 1],
+        Potree2Loader._viridisLUT[idx + 2]];
     }
 
     /**
@@ -799,6 +790,199 @@ export class Potree2Loader {
     }
 
 
+
+    // ========== FEATURE SHADER ==========
+
+    static _featureVertexShader = `
+        precision highp float;
+        attribute vec3 position;
+        attribute float featureValue;
+        uniform mat4 worldViewProjection;
+        uniform float pointSize;
+        varying float vFeature;
+        void main() {
+            vFeature = featureValue;
+            gl_Position = worldViewProjection * vec4(position, 1.0);
+            gl_PointSize = pointSize;
+        }
+    `;
+
+    static _featureFragmentShader = `
+        precision highp float;
+        uniform float fmin;
+        uniform float fmax;
+        uniform int   colormap;
+        varying float vFeature;
+
+        // 0: Blue > Green > Yellow > Red (default, CloudCompare-style)
+        vec3 cm_bgyr(float t) {
+            t = clamp(t, 0.0, 1.0) * 3.0;
+            float i = floor(t); float f = t - i;
+            vec3 c0 = vec3(0.0, 0.0, 1.0);
+            vec3 c1 = vec3(0.0, 1.0, 0.0);
+            vec3 c2 = vec3(1.0, 1.0, 0.0);
+            vec3 c3 = vec3(1.0, 0.0, 0.0);
+            vec3 a, b;
+            if      (i < 1.0) { a = c0; b = c1; }
+            else if (i < 2.0) { a = c1; b = c2; }
+            else               { a = c2; b = c3; }
+            return mix(a, b, f);
+        }
+
+        // 1: Viridis
+        vec3 cm_viridis(float t) {
+            const vec3 c0 = vec3(0.267, 0.005, 0.329);
+            const vec3 c1 = vec3(0.283, 0.141, 0.458);
+            const vec3 c2 = vec3(0.163, 0.471, 0.558);
+            const vec3 c3 = vec3(0.134, 0.659, 0.518);
+            const vec3 c4 = vec3(0.478, 0.821, 0.318);
+            const vec3 c5 = vec3(0.993, 0.906, 0.144);
+            t = clamp(t, 0.0, 1.0) * 5.0;
+            float i = floor(t); float f = t - i;
+            vec3 a, b;
+            if      (i < 1.0) { a = c0; b = c1; }
+            else if (i < 2.0) { a = c1; b = c2; }
+            else if (i < 3.0) { a = c2; b = c3; }
+            else if (i < 4.0) { a = c3; b = c4; }
+            else               { a = c4; b = c5; }
+            return mix(a, b, f);
+        }
+
+        // 2: Jet
+        vec3 cm_jet(float t) {
+            t = clamp(t, 0.0, 1.0);
+            float r = clamp(1.5 - abs(4.0*t - 3.0), 0.0, 1.0);
+            float g = clamp(1.5 - abs(4.0*t - 2.0), 0.0, 1.0);
+            float b = clamp(1.5 - abs(4.0*t - 1.0), 0.0, 1.0);
+            return vec3(r, g, b);
+        }
+
+        // 3: Diverging (Blue > White > Red)
+        vec3 cm_diverging(float t) {
+            t = clamp(t, 0.0, 1.0);
+            vec3 blue  = vec3(0.129, 0.400, 0.675);
+            vec3 white = vec3(0.969, 0.969, 0.969);
+            vec3 red   = vec3(0.839, 0.376, 0.302);
+            if (t < 0.5) return mix(blue, white, t * 2.0);
+            else          return mix(white, red, (t - 0.5) * 2.0);
+        }
+
+        // 4: Grayscale
+        vec3 cm_gray(float t) { return vec3(clamp(t, 0.0, 1.0)); }
+
+        // 5: Hot (Black > Red > Yellow > White)
+        vec3 cm_hot(float t) {
+            t = clamp(t, 0.0, 1.0) * 3.0;
+            return vec3(clamp(t, 0.0, 1.0),
+                        clamp(t - 1.0, 0.0, 1.0),
+                        clamp(t - 2.0, 0.0, 1.0));
+        }
+
+        void main() {
+            if (vFeature < -1e37) { gl_FragColor = vec4(0.3, 0.3, 0.3, 1.0); return; }
+            float range = fmax - fmin;
+            float t = (range > 0.0) ? (vFeature - fmin) / range : 0.5;
+            vec3 col;
+            if      (colormap == 1) col = cm_viridis(t);
+            else if (colormap == 2) col = cm_jet(t);
+            else if (colormap == 3) col = cm_diverging(t);
+            else if (colormap == 4) col = cm_gray(t);
+            else if (colormap == 5) col = cm_hot(t);
+            else                    col = cm_bgyr(t);
+            gl_FragColor = vec4(col, 1.0);
+        }
+    `;
+
+    _getOrCreateFeatureShaderMaterial() {
+        if (this._featureShaderMat) return this._featureShaderMat;
+        BABYLON.Effect.ShadersStore['potreeFeatureVertexShader'] = Potree2Loader._featureVertexShader;
+        BABYLON.Effect.ShadersStore['potreeFeatureFragmentShader'] = Potree2Loader._featureFragmentShader;
+        const mat = new BABYLON.ShaderMaterial('potreeFeatureMat', this.scene, 'potreeFeature', {
+            attributes: ['position', 'featureValue'],
+            uniforms: ['worldViewProjection', 'pointSize', 'fmin', 'fmax', 'colormap'],
+        });
+        mat.pointsCloud = true;
+        mat.disableLighting = true;
+        mat.setFloat('pointSize', this.pointSize);
+        mat.setFloat('fmin', 0.0);
+        mat.setFloat('fmax', 1.0);
+        mat.setInt('colormap', this._colormapId);
+        mat.transparencyMode = BABYLON.Material.MATERIAL_ALPHATEST;
+        mat.alphaCutOff = 0.1;
+        this._featureShaderMat = mat;
+        return mat;
+    }
+
+    _uploadFeatureAttribute(mesh) {
+        if (!this.featureBin) return;
+        const featureName = this.colorMode.slice(8);
+        const featureIdx = this.featureBin.names.indexOf(featureName);
+        if (featureIdx < 0) return;
+        const pointIds = mesh.metadata?.pointIds;
+        if (!pointIds) return;
+        const numPoints = pointIds.length;
+        const featureValues = new Float32Array(numPoints);
+        const { data, F, N } = this.featureBin;
+        for (let i = 0; i < numPoints; i++) {
+            const pid = pointIds[i];
+            featureValues[i] = (pid >= 0 && pid < N) ? data[pid * F + featureIdx] : -1e38;
+        }
+        const buf = new BABYLON.VertexBuffer(
+            this.scene.getEngine(), featureValues, 'featureValue', false, false, 1
+        );
+        mesh.setVerticesBuffer(buf);
+    }
+
+    _applyFeatureShaderMode(enable, featureName) {
+        const shaderMat = this._getOrCreateFeatureShaderMaterial();
+        if (this.featureBin && featureName) {
+            const featureIdx = this.featureBin.names.indexOf(featureName);
+            if (featureIdx >= 0) {
+                shaderMat.setFloat('fmin', this._featureRangeMin !== null ? this._featureRangeMin : this.featureBin.vmin[featureIdx]);
+                shaderMat.setFloat('fmax', this._featureRangeMax !== null ? this._featureRangeMax : this.featureBin.vmax[featureIdx]);
+            }
+        }
+        shaderMat.setInt('colormap', this._colormapId);
+        shaderMat.setFloat('pointSize', this.pointSize);
+        for (const mesh of this.loadedNodes.values()) {
+            if (enable) {
+                if (!mesh.metadata._origMaterial) mesh.metadata._origMaterial = mesh.material;
+                this._uploadFeatureAttribute(mesh);
+                mesh.material = shaderMat;
+            } else {
+                if (mesh.metadata._origMaterial) {
+                    mesh.material = mesh.metadata._origMaterial;
+                    mesh.metadata._origMaterial = null;
+                }
+            }
+        }
+    }
+
+    setFeatureRange(min, max) {
+        this._featureRangeMin = min;
+        this._featureRangeMax = max;
+        if (this._featureShaderMat) {
+            this._featureShaderMat.setFloat('fmin', min);
+            this._featureShaderMat.setFloat('fmax', max);
+        }
+    }
+
+    resetFeatureRange() {
+        this._featureRangeMin = null;
+        this._featureRangeMax = null;
+        if (this._featureShaderMat && this.featureBin && this.colorMode.startsWith('feature:')) {
+            const featureIdx = this.featureBin.names.indexOf(this.colorMode.slice(8));
+            if (featureIdx >= 0) {
+                this._featureShaderMat.setFloat('fmin', this.featureBin.vmin[featureIdx]);
+                this._featureShaderMat.setFloat('fmax', this.featureBin.vmax[featureIdx]);
+            }
+        }
+    }
+
+    setColormap(id) {
+        this._colormapId = id;
+        if (this._featureShaderMat) this._featureShaderMat.setInt('colormap', id);
+    }
 
     // ========== MESH CREATION ==========
 
@@ -1009,6 +1193,12 @@ export class Potree2Loader {
         this.loadedNodes.set(node.name, mesh);
         node.loaded = true;
         node.mesh = mesh;
+
+        if (this.colorMode.startsWith('feature:') && this.featureBin) {
+            mesh.metadata._origMaterial = mesh.material;
+            this._uploadFeatureAttribute(mesh);
+            mesh.material = this._getOrCreateFeatureShaderMaterial();
+        }
     }
 
     // ========== CLEANUP ==========
@@ -2268,6 +2458,7 @@ export class Potree2Loader {
     }
 
 } // END class Potree2Loader
+Potree2Loader._viridisLUT = Potree2Loader._buildViridisLUT();
 
 
 // =====================================================================
