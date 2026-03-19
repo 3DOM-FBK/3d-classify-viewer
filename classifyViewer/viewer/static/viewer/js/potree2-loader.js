@@ -90,8 +90,8 @@ export class Potree2Loader {
         this.activeNodes = new Set();
         this.loadingNodes = new Set();
 
-        // 0 = automatic spacing-based sizing; any positive value = fixed size
-        this.pointSize = options.pointSize ?? 0;
+        // Fixed point size for all nodes — same value regardless of LOD level
+        this.pointSize = options.pointSize ?? 2;
         // Multiplier applied on top of the auto-computed size (controlled by the UI slider)
         this.pointSizeMultiplier = options.pointSizeMultiplier ?? 1.0;
         this.maxVisibleNodes = options.maxVisibleNodes || 500;
@@ -130,6 +130,9 @@ export class Potree2Loader {
         // into the vertex data of newly loaded LOD nodes.
         this.colorMode = "classification";
         this.featureBin = null;
+        // Custom display range for feature colormap (null = use global vmin/vmax)
+        this._featureRangeMin = null;
+        this._featureRangeMax = null;
 
         // ---- CUT / SEGMENT HISTORY ----
         // segmentId 0 = main (uncut) cloud. Each cutSelection() adds an entry.
@@ -161,12 +164,16 @@ export class Potree2Loader {
 
         this._parseAttributes();
 
-        // console.log("📂 Loading hierarchy.bin...");
+        // Load the complete hierarchy.bin in one request.
+        // hierarchy.bin contains ALL hierarchy chunks for the entire octree.
+        // Previously only firstChunkSize bytes were used, causing proxy nodes
+        // whose chunks were beyond that offset to never resolve — leaving entire
+        // subtrees permanently at low LOD regardless of camera distance.
         const hierUrl = this._getRangeUrl("hierarchy.bin");
         const hierResponse = await fetch(hierUrl);
         if (!hierResponse.ok) throw new Error(`Failed to load hierarchy.bin: ${hierResponse.status}`);
         this.hierarchyBuffer = await hierResponse.arrayBuffer();
-        // console.log(`   hierarchy.bin loaded: ${this.hierarchyBuffer.byteLength.toLocaleString()} bytes`);
+        console.log(`   hierarchy.bin loaded: ${this.hierarchyBuffer.byteLength.toLocaleString()} bytes (full file)`);
 
         const bbMin = this.metadata.boundingBox.min;
         const bbMax = this.metadata.boundingBox.max;
@@ -230,14 +237,11 @@ export class Potree2Loader {
     }
 
     async _loadInitialNodes() {
-        // console.log("🔄 Loading initial nodes (root + levels 0-2)...");
         const allNodes = this._collectNodes(this.root);
 
         const initialNodes = allNodes
             .filter(n => n.level <= 2 && n.numPoints > 0 && n.byteSize > 0n)
             .sort((a, b) => a.level - b.level || b.numPoints - a.numPoints);
-
-        // console.log(`   Will load ${initialNodes.length} initial nodes via Range requests`);
 
         const batchSize = 6;
         for (let i = 0; i < initialNodes.length; i += batchSize) {
@@ -245,16 +249,14 @@ export class Potree2Loader {
             await Promise.all(batch.map(node => this._loadNode(node)));
         }
 
-        for (const node of initialNodes) {
-            if (this.loadedNodes.has(node.name)) {
-                const mesh = this.loadedNodes.get(node.name);
-                mesh.isVisible = true;
-                this.activeNodes.add(node.name);
-            }
-        }
+        // Do NOT force visibility here — let update() decide which nodes to show
+        // based on SSE and the parent-replacement logic. Forcing all initial nodes
+        // visible was the root cause of low-LOD nodes bleeding through high-LOD ones.
+        // Trigger one update pass so the correct nodes become visible immediately.
+        const camera = this.scene.activeCamera;
+        if (camera) this.update(camera);
 
         this.stats.visibleNodes = this.activeNodes.size;
-        // console.log(`✅ Initial load complete: ${this.loadedNodes.size} meshes visible`);
     }
 
     async _loadNode(node) {
@@ -294,32 +296,113 @@ export class Potree2Loader {
     update(camera) {
         if (!this.root || !camera) return;
 
-        const priorityQueue = [];
+        const anySegmentVisible = this.mainCloudVisible || this.cutHistory.some(e => e.visible);
+
+        // ---- Potree-style iterative LOD selection ----
+        //
+        // Mirrors Potree's updateVisibility() algorithm from Potree_update_visibility.js:
+        //   - Uses a max-priority queue ordered by screenPixelRadius of bounding sphere
+        //   - Starts from root (weight = Infinity)
+        //   - At each step: pop highest-priority node, decide visibility, push children
+        //   - Nodes at level <= 2 are ALWAYS shown regardless of budget (Potree line 182)
+        //   - No recursive fallback logic — the queue naturally handles parent/child order
+        //   because parents are visited before children (they have higher weight initially)
+        //
+        // This eliminates all the fragile allChildrenCovered/isFallback logic.
+
+        const engine = this.scene.getEngine();
+        const screenHeight = engine.getRenderHeight();
+        const fov = camera.fov || 0.8;
+        const slope = Math.tan(fov / 2);
+
         const nodesToShow = new Set();
+        const toLoad = [];
         let totalPoints = 0;
 
-        this._traverseForLOD(this.root, camera, priorityQueue);
-        priorityQueue.sort((a, b) => b.priority - a.priority);
+        // Simple max-heap using a sorted array (node count is small enough)
+        const heap = [{ node: this.root, weight: Infinity }];
 
-        for (const entry of priorityQueue) {
-            if (nodesToShow.size >= this.maxVisibleNodes) break;
-            if (totalPoints + entry.node.numPoints > this.maxVisiblePoints) continue;
+        while (heap.length > 0) {
+            // Pop max-weight element
+            let maxIdx = 0;
+            for (let i = 1; i < heap.length; i++) {
+                if (heap[i].weight > heap[maxIdx].weight) maxIdx = i;
+            }
+            const { node } = heap[maxIdx];
+            heap.splice(maxIdx, 1);
 
-            nodesToShow.add(entry.node.name);
-            totalPoints += entry.node.numPoints;
+            if (!node || node.numPoints === 0) continue;
 
-            if (!this.loadedNodes.has(entry.node.name) && !this.loadingNodes.has(entry.node.name)) {
-                this._loadNode(entry.node);
+            // Resolve proxy nodes (lazy hierarchy chunks)
+            if (node.nodeType === 2) this._ensureHierarchyLoaded(node);
+
+            const level = node.level !== undefined ? node.level : (node.name === 'r' ? 0 : node.name.length - 1);
+
+            // Visibility decision — mirrors Potree logic:
+            // always show level <= 2, otherwise check point budget
+            const alwaysVisible = level <= 2;
+            const withinBudget = totalPoints + node.numPoints <= this.maxVisiblePoints &&
+                nodesToShow.size < this.maxVisibleNodes;
+            const visible = alwaysVisible || withinBudget;
+
+            if (!visible) continue;
+
+            // Show this node
+            nodesToShow.add(node.name);
+            totalPoints += node.numPoints;
+
+            // Trigger load if not in memory
+            if (!this.loadedNodes.has(node.name)) {
+                toLoad.push(node);
+            }
+
+            // Push children to heap with their screen-space weight
+            for (const child of node.children) {
+                if (!child || child.numPoints === 0) continue;
+
+                const bb = child.boundingBox;
+                // Bounding sphere center and radius from AABB
+                const cx = (bb.min[0] + bb.max[0]) / 2;
+                const cy = (bb.min[1] + bb.max[1]) / 2;
+                const cz = (bb.min[2] + bb.max[2]) / 2;
+                const dx = bb.max[0] - bb.min[0];
+                const dy = bb.max[1] - bb.min[1];
+                const dz = bb.max[2] - bb.min[2];
+                const radius = Math.sqrt(dx * dx + dy * dy + dz * dz) / 2;
+
+                const camX = camera.position.x;
+                const camY = camera.position.y;
+                const camZ = camera.position.z;
+                const dist = Math.sqrt((camX - cx) ** 2 + (camY - cy) ** 2 + (camZ - cz) ** 2);
+
+                // Camera inside sphere → always refine
+                let weight;
+                if (dist - radius <= 0) {
+                    weight = Infinity;
+                } else {
+                    // screenPixelRadius: how large this node appears on screen
+                    weight = radius * (screenHeight / 2) / (slope * dist);
+                }
+
+                // Only push children worth refining (Potree: minimumNodePixelSize)
+                if (weight < 1 && level > 2) continue;
+
+                heap.push({ node: child, weight });
             }
         }
 
+        // Trigger background loads (limited by maxConcurrentLoads)
+        // Sort by weight descending so closest nodes load first
+        for (const node of toLoad) {
+            if (!this.loadingNodes.has(node.name)) {
+                this._loadNode(node);
+            }
+        }
+
+        // Apply visibility to all loaded meshes
         for (const [name, mesh] of this.loadedNodes) {
             const shouldShow = nodesToShow.has(name);
             const wasHidden = !mesh.isVisible;
-
-            // Respect the outline hide/show state: if nothing is visible at all,
-            // keep the mesh hidden so the GPU skips it.
-            const anySegmentVisible = this.mainCloudVisible || this.cutHistory.some(e => e.visible);
             const targetVisible = shouldShow && anySegmentVisible;
 
             if (mesh.isVisible !== targetVisible) mesh.isVisible = targetVisible;
@@ -336,84 +419,25 @@ export class Potree2Loader {
         this.stats.totalPointsRendered = totalPoints;
         this.stats.loadingNodes = this.loadingNodes.size;
 
-        // ---- Per-node dynamic point size based on node spacing ----
-        // Each node's pointSize is set so that a point visually "covers" its
-        // spacing in world space, projected onto the screen.  This makes the
-        // perceived density uniform across LOD levels, masking octree seams.
-        // The mode is active only when this.pointSize === 0 (auto).
-        if (this.pointSize === 0) {
-            const engine = this.scene.getEngine();
-            const screenHeight = engine.getRenderHeight();
-            const fov = camera.fov || 0.8;
-            const slope = Math.tan(fov / 2);
-
-            for (const [, mesh] of this.loadedNodes) {
-                if (!mesh.isVisible || !mesh.material) continue;
-
-                const spacing = mesh.metadata?.nodeSpacing;
-                const bb = mesh.metadata?.nodeBoundingBox;
-                if (!spacing || !bb) continue;
-
-                const cx = (bb.min[0] + bb.max[0]) / 2;
-                const cy = (bb.min[1] + bb.max[1]) / 2;
-                const cz = (bb.min[2] + bb.max[2]) / 2;
-                const center = new BABYLON.Vector3(cx, cy, cz);
-                const distance = BABYLON.Vector3.Distance(camera.position, center);
-
-                if (distance < 0.001) continue;
-
-                // Projected sphere radius × user multiplier
-                const projectedSize = (spacing * screenHeight) / (2 * slope * distance) * this.pointSizeMultiplier;
-
-                // Clamp: never smaller than 1 px, never larger than 20 px
-                mesh.material.pointSize = Math.max(1, Math.min(20, projectedSize));
-            }
-        }
     }
 
+    /**
+     * Sets a fixed point size for all nodes. Called by the UI slider.
+     * All points use the same size regardless of LOD level or distance.
+     */
     setPointSize(size) {
-        // size === 0  → enable automatic spacing-based sizing (default)
-        // size  >  0  → fixed size set by the user, disables auto mode
-        this.pointSize = size;
-        if (size > 0) {
-            for (const mesh of this.loadedNodes.values()) {
-                if (mesh.material) mesh.material.pointSize = size;
-            }
+        this.pointSize = Math.max(1, size);
+        for (const mesh of this.loadedNodes.values()) {
+            if (mesh.material) mesh.material.pointSize = this.pointSize;
         }
     }
 
     /**
-     * Sets a multiplier applied on top of the auto-computed projected point size.
-     * Called by the Point Size slider in the viewport settings panel.
-     * multiplier = 1.0 → neutral (default)
-     * multiplier < 1.0 → smaller points
-     * multiplier > 1.0 → larger points
+     * setPointSizeMultiplier kept for API compatibility with functions.js.
+     * Internally maps to setPointSize using a base of 2px.
      */
     setPointSizeMultiplier(multiplier) {
-        this.pointSizeMultiplier = Math.max(0.1, multiplier);
-        // Apply immediately to all visible nodes without waiting for camera movement
-        const camera = this.scene.activeCamera;
-        if (!camera) return;
-        const engine = this.scene.getEngine();
-        const screenHeight = engine.getRenderHeight();
-        const fov = camera.fov || 0.8;
-        const slope = Math.tan(fov / 2);
-        for (const [, mesh] of this.loadedNodes) {
-            if (!mesh.isVisible || !mesh.material) continue;
-            const spacing = mesh.metadata?.nodeSpacing;
-            const bb = mesh.metadata?.nodeBoundingBox;
-            if (!spacing || !bb) continue;
-            const cx = (bb.min[0] + bb.max[0]) / 2;
-            const cy = (bb.min[1] + bb.max[1]) / 2;
-            const cz = (bb.min[2] + bb.max[2]) / 2;
-            const distance = BABYLON.Vector3.Distance(
-                camera.position,
-                new BABYLON.Vector3(cx, cy, cz)
-            );
-            if (distance < 0.001) continue;
-            const projectedSize = (spacing * screenHeight) / (2 * slope * distance) * this.pointSizeMultiplier;
-            mesh.material.pointSize = Math.max(1, Math.min(20, projectedSize));
-        }
+        this.setPointSize(Math.round(Math.max(0.1, multiplier) * 2));
     }
 
     /**
@@ -424,6 +448,33 @@ export class Potree2Loader {
     setColorMode(mode) {
         this.colorMode = mode;
         // Immediately update all visible nodes
+        for (const mesh of this.loadedNodes.values()) {
+            if (mesh.isVisible) this._applyColorModeToMesh(mesh);
+        }
+    }
+
+    /**
+     * Sets a custom display range for the feature colormap.
+     * Values below min map to 0, above max map to 1 in the Viridis colormap.
+     * Called by the range slider in main.js.
+     */
+    setFeatureRange(min, max) {
+        this._featureRangeMin = min;
+        this._featureRangeMax = max;
+        // Re-apply colors immediately to all visible nodes
+        for (const mesh of this.loadedNodes.values()) {
+            if (mesh.isVisible) this._applyColorModeToMesh(mesh);
+        }
+    }
+
+    /**
+     * Resets the feature display range to the global min/max from the featureBin.
+     * Called when the user clicks the reset button on the range slider.
+     */
+    resetFeatureRange() {
+        this._featureRangeMin = null;
+        this._featureRangeMax = null;
+        // Re-apply colors immediately to all visible nodes
         for (const mesh of this.loadedNodes.values()) {
             if (mesh.isVisible) this._applyColorModeToMesh(mesh);
         }
@@ -492,8 +543,8 @@ export class Potree2Loader {
                 if (pid >= 0 && pid < featureBin.N) {
                     const val = featureBin.data[pid * featureBin.F + featureIdx];
                     if (!isNaN(val)) {
-                        const fmin = featureBin.vmin[featureIdx];
-                        const fmax = featureBin.vmax[featureIdx];
+                        const fmin = this._featureRangeMin !== null ? this._featureRangeMin : featureBin.vmin[featureIdx];
+                        const fmax = this._featureRangeMax !== null ? this._featureRangeMax : featureBin.vmax[featureIdx];
                         const t = (fmax > fmin) ? (val - fmin) / (fmax - fmin) : 0.5;
                         [r, g, b] = this._colormapViridis(Math.max(0, Math.min(1, t)));
                     }
@@ -651,6 +702,13 @@ export class Potree2Loader {
 
     _ensureHierarchyLoaded(node) {
         if (node.nodeType !== 2) return;
+        const bufLen = this.hierarchyBuffer ? this.hierarchyBuffer.byteLength : 0;
+        const chunkStart = Number(node.hierarchyByteOffset);
+        const chunkEnd = chunkStart + Number(node.hierarchyByteSize);
+        if (chunkEnd > bufLen) {
+            console.warn(`⚠️ Proxy node ${node.name}: chunk [${chunkStart}-${chunkEnd}] exceeds hierarchy buffer (${bufLen} bytes). Node will stay as proxy.`);
+            return;
+        }
         this._parseHierarchyChunk(node);
     }
 
@@ -663,38 +721,8 @@ export class Potree2Loader {
     }
 
     // ========== LOD TRAVERSAL ==========
-
-    _traverseForLOD(node, camera, priorityQueue) {
-        if (!node || node.numPoints === 0) return;
-
-        if (node.nodeType === 2) this._ensureHierarchyLoaded(node);
-
-        const sse = this._calculateSSE(node, camera);
-
-        if (node.name === "r" || sse > 1.0) {
-            priorityQueue.push({ node, priority: sse });
-
-            if (sse > 2.0) {
-                for (const child of node.children) {
-                    if (child) this._traverseForLOD(child, camera, priorityQueue);
-                }
-            }
-        }
-    }
-
-    _calculateSSE(node, camera) {
-        const bbCenter = this._getLocalCenter(node);
-        const distance = BABYLON.Vector3.Distance(camera.position, bbCenter);
-
-        if (distance < 0.001) return Infinity;
-
-        const engine = this.scene.getEngine();
-        const screenWidth = engine.getRenderWidth();
-        const fov = camera.fov || 0.8;
-        const slope = Math.tan(fov / 2);
-
-        return (node.spacing / distance) * (screenWidth / (2 * slope));
-    }
+    // Replaced by iterative heap-based algorithm inside update().
+    // See update() for the Potree-faithful implementation.
 
     _getLocalCenter(node) {
         const bb = node.boundingBox;
@@ -949,9 +977,7 @@ export class Potree2Loader {
 
         const mat = new BABYLON.StandardMaterial(`mat_p2_${node.name}`, this.scene);
         mat.pointsCloud = true;
-        // In auto mode (pointSize===0) start with a safe fallback; update() will
-        // overwrite this with the correct projected value on the next camera event.
-        mat.pointSize = this.pointSize > 0 ? this.pointSize : 2;
+        mat.pointSize = this.pointSize;
         mat.disableLighting = true;
         mat.emissiveColor = new BABYLON.Color3(1, 1, 1);
         mat.useVertexAlpha = true; // needed for alpha=0 to hide cut segment points

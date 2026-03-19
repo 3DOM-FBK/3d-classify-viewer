@@ -80,6 +80,28 @@
                 <!-- Buttons injected by JS -->
             </div>
 
+            <!-- Feature Range Slider (Floating) -->
+            <div id="feature-range-control" class="feature-range-container">
+                <div class="feature-range-header">
+                    <span id="feature-range-name" class="feature-name">Scalar Field</span>
+                    <button id="feature-range-reset" class="feature-range-reset" title="Reset Range"><img
+                            src="{% static 'viewer/icons/refresh.png' %}" style="width: 10px; height: 10px;"
+                            alt="Reset Range"></button>
+                </div>
+                <div class="dual-range-slider">
+                    <div class="slider-track"></div>
+                    <div id="range-highlight" class="range-highlight"></div>
+                    <input type="range" id="range-min" class="range-input min-handle" min="0" max="100" value="0"
+                        step="0.1">
+                    <input type="range" id="range-max" class="range-input max-handle" min="0" max="100" value="100"
+                        step="0.1">
+                </div>
+                <div class="range-values">
+                    <span id="val-min" class="range-val">0.00</span>
+                    <span id="val-max" class="range-val">1.00</span>
+                </div>
+            </div>
+
             <!-- Command Guide Overlay -->
             <div id="command-guide" class="command-guide">
                 <!-- Navigation (Default Mode) -->

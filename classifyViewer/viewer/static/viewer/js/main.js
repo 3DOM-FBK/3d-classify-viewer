@@ -35,6 +35,16 @@ const viewMenu = document.getElementById('view-menu');
 const colorMenu = document.getElementById('color-menu');
 const centralViewport = document.getElementById('central-viewport');
 
+// --- Feature Range Slider Elements ---
+const featureRangeControl = document.getElementById('feature-range-control');
+const rangeMin = document.getElementById('range-min');
+const rangeMax = document.getElementById('range-max');
+const valMin = document.getElementById('val-min');
+const valMax = document.getElementById('val-max');
+const rangeHighlight = document.getElementById('range-highlight');
+const featureNameDisplay = document.getElementById('feature-range-name');
+const rangeResetBtn = document.getElementById('feature-range-reset');
+
 // --- Tool Selection State ---
 let activeTool = "tool-1"; // Default mode
 
@@ -153,6 +163,71 @@ function initColorMenu() {
         _colorMenuDropdown.classList.toggle('show');
     };
 }
+
+function initFeatureRangeSlider() {
+    if (!featureRangeControl) return;
+
+    function updateRangeUI() {
+        const minVal = parseFloat(rangeMin.value);
+        const maxVal = parseFloat(rangeMax.value);
+
+        const minPercent = minVal;
+        const maxPercent = maxVal;
+
+        rangeHighlight.style.left = minPercent + "%";
+        rangeHighlight.style.width = (maxPercent - minPercent) + "%";
+
+        const loader = scene.potree2Loader;
+        if (loader && loader.featureBin && currentColorMode.startsWith('feature:')) {
+            const featName = currentColorMode.slice(8);
+            const featIdx = loader.featureBin.names.indexOf(featName);
+            if (featIdx >= 0) {
+                const absMin = loader.featureBin.vmin[featIdx];
+                const absMax = loader.featureBin.vmax[featIdx];
+
+                const currentAbsMin = absMin + (absMax - absMin) * (minVal / 100);
+                const currentAbsMax = absMin + (absMax - absMin) * (maxVal / 100);
+
+                valMin.textContent = currentAbsMin.toFixed(3);
+                valMax.textContent = currentAbsMax.toFixed(3);
+
+                loader.setFeatureRange(currentAbsMin, currentAbsMax);
+            }
+        }
+    }
+
+    rangeMin.oninput = (e) => {
+        let v = parseFloat(e.target.value);
+        let maxV = parseFloat(rangeMax.value);
+        if (v > maxV) {
+            v = maxV;
+            rangeMin.value = v;
+        }
+        updateRangeUI();
+    };
+
+    rangeMax.oninput = (e) => {
+        let v = parseFloat(e.target.value);
+        let minV = parseFloat(rangeMin.value);
+        if (v < minV) {
+            v = minV;
+            rangeMax.value = v;
+        }
+        updateRangeUI();
+    };
+
+    rangeResetBtn.onclick = () => {
+        rangeMin.value = 0;
+        rangeMax.value = 100;
+        const loader = scene.potree2Loader;
+        if (loader) loader.resetFeatureRange();
+        updateRangeUI();
+    };
+
+    // Store for external access if needed
+    featureRangeControl._updateUI = updateRangeUI;
+}
+initFeatureRangeSlider();
 
 /**
  * Called after loadFeatureBin() completes. Adds/refreshes the Features section
@@ -286,6 +361,18 @@ function switchColorMode(mode) {
     // per tutti i nodi (visibili e futuri) tramite _applyColorModeToMesh
     const p2loader = scene.potree2Loader;
     if (p2loader) {
+        if (mode.startsWith('feature:')) {
+            featureRangeControl.style.display = 'flex';
+            featureNameDisplay.textContent = mode.slice(8);
+            // Reset to default on switch
+            rangeMin.value = 0;
+            rangeMax.value = 100;
+            p2loader.resetFeatureRange();
+            if (featureRangeControl._updateUI) featureRangeControl._updateUI();
+        } else {
+            featureRangeControl.style.display = 'none';
+        }
+
         p2loader.setColorMode(mode);
         return;
     }
