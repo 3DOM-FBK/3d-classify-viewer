@@ -335,7 +335,9 @@ textarea,
     background-color: var(--panel-bg);
     color: var(--text-primary);
     border: 1px solid var(--border-color);
-    padding: 8px 16px;
+    padding: 0 16px; /* Restored horizontal padding, removed vertical */
+    height: 36px;
+    box-sizing: border-box;
     border-radius: 8px;
     font-size: 0.85rem;
     font-weight: 500;
@@ -353,6 +355,58 @@ textarea,
     border-color: var(--text-muted);
 }
 
+/* Camera buttons group */
+.camera-btn-group {
+    display: flex;
+    gap: 4px;
+    background-color: var(--panel-bg);
+    padding: 0 3px;
+    height: 36px;
+    box-sizing: border-box;
+    border-radius: 10px;
+    border: 1px solid var(--border-color);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    align-items: center;
+}
+
+.camera-btn {
+    width: 30px;
+    height: 30px;
+    background: transparent;
+    border: none;
+    border-radius: 7px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+    position: relative;
+}
+
+.camera-btn:hover {
+    background-color: rgba(255, 255, 255, 0.08);
+}
+
+.camera-btn.active {
+    background-color: var(--accent-blue);
+}
+
+.camera-btn img {
+    width: 18px;
+    height: 18px;
+    filter: brightness(0) invert(1);
+    opacity: 0.8;
+}
+
+.camera-btn.active img {
+    opacity: 1;
+}
+
+.camera-btn:hover img {
+    opacity: 1;
+}
+
+/* Dropdown styles legacy */
 .dropdown-btn::after {
     content: "\25bc";
     font-size: 0.6rem;
@@ -514,12 +568,14 @@ textarea,
 
 /* Tooltip Custom */
 .tool-btn,
-.header-action-btn {
+.header-action-btn,
+.camera-btn {
     position: relative;
 }
 
 .tool-btn::after,
-.header-action-btn::after {
+.header-action-btn::after,
+.camera-btn::after {
     content: attr(data-tooltip);
     position: absolute;
     top: calc(100% + 10px);
@@ -540,7 +596,8 @@ textarea,
 }
 
 .tool-btn:hover::after,
-.header-action-btn:hover::after {
+.header-action-btn:hover::after,
+.camera-btn:hover::after {
     opacity: 1;
     transform: translateX(-50%) translateY(0);
     transition-delay: 0.6s;
@@ -1122,6 +1179,22 @@ select.property-input option {
     display: flex;
     flex-direction: column;
     /* gap: 12px; */
+}
+
+/* Scrollable list in download modal */
+.dl-list-scroll {
+    display: flex;
+    flex-direction: column;
+    max-height: 150px;
+    overflow-y: auto;
+    padding-right: 2px;
+    gap: 0;
+}
+
+/* Ensure checkbox items in dl-list-scroll look compact */
+.dl-list-scroll .checkbox-item {
+    padding: 8px 10px;
+    border-radius: 6px;
 }
 
 .modal-section {

@@ -22,7 +22,8 @@ import {
     showModelReportModal,
     showContextMenu,
     showClassifyModal,
-    setLODParameters
+    setLODParameters,
+    getCSRFToken
 } from "./functions.js";
 
 // --- UI Elements ---
@@ -83,44 +84,43 @@ function initLassoOverlay() {
 initLassoOverlay();
 
 // --- View Menu Logic ---
+/**
+ * Initializes the camera view controls.
+ * Replaces the dropdown menu with a horizontal row of buttons with icons.
+ */
 function initViewMenu() {
     if (!viewMenu) return;
 
-    const btn = document.createElement('button');
-    btn.classList.add('dropdown-btn');
-    btn.textContent = "Perspective View";
-    viewMenu.appendChild(btn);
-
-    const dropdown = document.createElement('div');
-    dropdown.classList.add('dropdown-content');
-    viewMenu.appendChild(dropdown);
+    viewMenu.innerHTML = '';
+    viewMenu.classList.add('camera-btn-group');
 
     const views = [
-        { name: "Perspective", action: () => setCameraMode(BABYLON.Camera.PERSPECTIVE_CAMERA) },
-        { name: "Orthographic", action: () => setCameraMode(BABYLON.Camera.ORTHOGRAPHIC_CAMERA) },
-        { name: "Top View", action: () => setCameraView(0, -Math.PI / 2) },
-        { name: "Right View", action: () => setCameraView(0, Math.PI / 2) },
-        { name: "Front View", action: () => setCameraView(Math.PI / 2, Math.PI / 2) },
-        { name: "Left View", action: () => setCameraView(Math.PI, Math.PI / 2) }
+        { name: "Perspective", icon: "camera_prosp.png", action: () => setCameraMode(BABYLON.Camera.PERSPECTIVE_CAMERA) },
+        { name: "Orthographic", icon: "camera_ortho.png", action: () => setCameraMode(BABYLON.Camera.ORTHOGRAPHIC_CAMERA) },
+        { name: "Top View", icon: "camera_top.png", action: () => setCameraView(0, -Math.PI / 2) },
+        { name: "Right View", icon: "camera_right.png", action: () => setCameraView(0, Math.PI / 2) },
+        { name: "Front View", icon: "camera_front.png", action: () => setCameraView(Math.PI / 2, Math.PI / 2) },
+        { name: "Left View", icon: "camera_left.png", action: () => setCameraView(Math.PI, Math.PI / 2) }
     ];
 
     views.forEach(v => {
-        const opt = document.createElement('button');
-        opt.classList.add('dropdown-option');
-        opt.textContent = v.name;
-        opt.onclick = () => {
-            v.action();
-            btn.textContent = v.name + " View";
-            dropdown.classList.remove('show');
-        };
-        dropdown.appendChild(opt);
-    });
+        const btn = document.createElement('button');
+        btn.classList.add('camera-btn');
+        btn.innerHTML = `<img src="/static/viewer/icons/${v.icon}" alt="${v.name}">`;
+        btn.setAttribute('data-tooltip', v.name);
 
-    btn.onclick = (e) => {
-        e.stopPropagation();
-        closeAllDropdowns();
-        dropdown.classList.toggle('show');
-    };
+        btn.onclick = () => {
+            v.action();
+            // Highlight active button
+            viewMenu.querySelectorAll('.camera-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+        };
+
+        viewMenu.appendChild(btn);
+
+        // Default state: Perspective
+        if (v.name === "Perspective") btn.classList.add('active');
+    });
 }
 
 // --- Color Menu Logic ---
@@ -287,8 +287,20 @@ initColormapPicker();
  * @param {string[]} featureNames
  */
 function addFeaturesToColorMenu(featureNames) {
-    // Skip empty or whitespace-only names (can appear after re-calculation)
-    featureNames = featureNames.filter(n => n && n.trim().length > 0);
+    // 1. Skip empty names AND hide normals (normal_x, normal_y, normal_z)
+    featureNames = featureNames.filter(n => {
+        if (!n || n.trim().length === 0) return false;
+        const low = n.toLowerCase();
+        return low !== 'normal_x' && low !== 'normal_y' && low !== 'normal_z';
+    });
+
+    // 2. Move 'prediction' to the top if it exists
+    const predIdx = featureNames.findIndex(n => n.toLowerCase() === 'prediction');
+    if (predIdx !== -1) {
+        const pred = featureNames.splice(predIdx, 1)[0];
+        featureNames.unshift(pred);
+    }
+
     if (!_colorMenuDropdown || featureNames.length === 0) return;
 
     // Remove previous feature section if present (supports refresh)
@@ -621,17 +633,29 @@ createClassItem("Ground", `${iconBase}cluster.png`, classesContent);
 const outlineSection = createAccordionSection("Outline", "sidebar-left-content");
 const outlineContent = outlineSection.content;
 
-// Single persistent outline item for the main point cloud (segment 0)
-const outlineItem = createOutlineItem("Point Cloud", `${iconBase}modeling.png`, outlineContent, 0, null);
+// The main point cloud outline item is created lazily when data is actually loaded.
+let outlineItem = null;
 
 /**
  * Called after a point cloud is successfully loaded.
- * Binds the outline item to segment 0 (main cloud) of the Potree2 loader.
- * @param {BABYLON.TransformNode} pc  - The loaded point cloud root node (unused now but kept for API compat).
+ * Creates (or updates) the outline item for segment 0 (main cloud).
+ * @param {BABYLON.TransformNode} pc  - The loaded point cloud root node (unused but kept for API compat).
  * @param {string} [label]            - Display name.
  */
 export function registerPointCloudInOutline(pc, label = "Point Cloud") {
-    outlineItem.nameInput.value = label;
+    // Strip file extension if present (e.g. data.las -> data)
+    let displayName = label;
+    if (label && label.includes('.')) {
+        displayName = label.substring(0, label.lastIndexOf('.'));
+    }
+
+    if (!outlineItem) {
+        // First load: create the item
+        outlineItem = createOutlineItem(displayName, `${iconBase}modeling.png`, outlineContent, 0, null);
+    } else {
+        // Subsequent loads: just update the name
+        outlineItem.nameInput.value = displayName;
+    }
     outlineItem.setVisibilityCallback((visible) => {
         const loader = window.__babylonScene?.potree2Loader;
         if (loader) loader.setSegmentVisible(0, visible);
@@ -664,6 +688,54 @@ modelsRefreshBtn.title = 'Refresh model list';
 modelsRefreshBtn.style.cssText = 'background:none; border:none; cursor:pointer; padding:2px 4px; display:flex; align-items:center;';
 modelsRefreshBtn.innerHTML = `<img src="/static/viewer/icons/refresh.png" alt="Refresh" style="width:13px; height:13px; opacity:0.6;">`;
 modelsSection.headerActions.appendChild(modelsRefreshBtn);
+
+// Add Upload Model button
+const modelsUploadBtn = document.createElement('button');
+modelsUploadBtn.title = 'Upload trained model (.zip)';
+modelsUploadBtn.style.cssText = 'background:none; border:none; cursor:pointer; padding:2px 4px; display:flex; align-items:center;';
+modelsUploadBtn.innerHTML = `<img src="/static/viewer/icons/add-class.png" alt="Upload" style="width:13px; height:13px; opacity:0.6;">`;
+modelsSection.headerActions.appendChild(modelsUploadBtn);
+
+// Hidden file input
+const modelsUploadInput = document.createElement('input');
+modelsUploadInput.type = 'file';
+modelsUploadInput.accept = '.zip';
+modelsUploadInput.style.display = 'none';
+document.body.appendChild(modelsUploadInput);
+
+modelsUploadBtn.addEventListener('click', () => modelsUploadInput.click());
+
+modelsUploadInput.addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    modelsUploadBtn.disabled = true;
+    modelsUploadBtn.style.opacity = '0.3';
+
+    try {
+        const formData = new FormData();
+        formData.append('file', file);
+        const res = await fetch('/api/upload-model/', {
+            method: 'POST',
+            body: formData,
+            headers: { 'X-CSRFToken': getCSRFToken() }
+        });
+        const data = await res.json();
+        if (data.status === 'success') {
+            await refreshModelsList();
+            alert(`Model '${data.name}' uploaded successfully.`);
+        } else {
+            alert(`Error uploading model: ${data.message || data.error}`);
+        }
+    } catch (err) {
+        console.error('Upload Error:', err);
+        alert('An unexpected error occurred during upload.');
+    } finally {
+        modelsUploadBtn.disabled = false;
+        modelsUploadBtn.style.opacity = '1';
+        modelsUploadInput.value = '';
+    }
+});
 
 async function refreshModelsList() {
     modelsListEl.innerHTML = '';
@@ -715,7 +787,7 @@ async function refreshModelsList() {
             noteBtn.addEventListener('mouseleave', () => noteBtn.style.opacity = '0.5');
             noteBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                const reportPath = `viewer/static/viewer/data/models/${model.name}/report_RF.txt`;
+                const reportPath = `viewer/static/viewer/data/models/${model.name}/report.txt`;
                 const metaPath = `viewer/static/viewer/data/models/${model.name}/metadata.json`;
                 showModelReportModal(model.name, reportPath, metaPath);
             });
@@ -1998,6 +2070,7 @@ if (startClassifyButton) {
 // LAYOUT MODE  (Training ↔ Classify)
 // ---------------------------------------------------------------------------
 let currentLayoutMode = 'training'; // 'training' | 'classify'
+window.__currentLayoutMode = currentLayoutMode;
 
 // DOM references for the three sidebar-right accordion sections
 const featureSectionEl = featuresSection.content.closest('.accordion-section');
@@ -2008,6 +2081,7 @@ const classesSectionEl = classesSection.content.closest('.accordion-section');
 function setLayoutMode(mode) {
     if (currentLayoutMode === mode) return;
     currentLayoutMode = mode;
+    window.__currentLayoutMode = mode;
 
     const isClassify = (mode === 'classify');
 

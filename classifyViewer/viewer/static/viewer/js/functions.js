@@ -866,8 +866,11 @@ export function createOutlineItem(name, iconSrc, parent, segmentId, onVisibility
     row.appendChild(visibilityBtn);
     parent.appendChild(row);
 
-    // Right-click context menu (Same logic as createClassItem)
+    // Right-click context menu (Only in Training Layout)
     row.addEventListener('contextmenu', (e) => {
+        // Disable in Classify layout
+        if (window.__currentLayoutMode === 'classify') return;
+
         e.preventDefault();
         const iconBase = "static/viewer/icons/";
         const options = [
@@ -1246,22 +1249,150 @@ export function createModal(title, contentCallback, footerCallback) {
 
 export function showDownloadModal() {
     createModal(
-        "Download Configuration",
+        "Download Data",
         (body) => {
-            const group = document.createElement('div');
-            group.classList.add('checkbox-group');
+            // Tracks checkboxes
+            const segmentCheckboxes = [];  // { id, checkbox }
+            const modelCheckboxes = [];    // { name, checkbox }
 
-            createSimpleCheckbox("PointCloud Training", true, group);
-            createSimpleCheckbox("PointCloud Evaluation", false, group);
-            createSimpleCheckbox("PointCloud Testing", false, group);
+            // ── Helper: section separator ──────────────────────────────────
+            function makeSeparator() {
+                const sep = document.createElement('div');
+                sep.style.cssText = 'height:1px; background:var(--border-color); margin:4px 0;';
+                return sep;
+            }
 
-            body.appendChild(group);
+            // ── SECTION 1: Point Cloud Segments ────────────────────────────
+            const segSection = document.createElement('div');
+            segSection.classList.add('modal-section');
+
+            const segTitle = document.createElement('div');
+            segTitle.classList.add('modal-section-title');
+            segTitle.textContent = 'Point Cloud Segments';
+            segSection.appendChild(segTitle);
+
+            // Scrollable list container
+            const segScroll = document.createElement('div');
+            segScroll.classList.add('dl-list-scroll');
+            segSection.appendChild(segScroll);
+
+            // Populate segments from the actual UI Outline items (allows picking up renames)
+            const outlineItems = document.querySelectorAll('.outline-item:not(.class-item)');
+            let availableSegments = [];
+            
+            outlineItems.forEach(item => {
+                const segId = item.dataset.segmentId;
+                const nameInput = item.querySelector('.outline-name-input');
+                if (segId !== undefined && nameInput) {
+                    availableSegments.push({ 
+                        id: parseInt(segId, 10), 
+                        label: nameInput.value 
+                    });
+                }
+            });
+
+            // If no items in outline, check if main cloud exists but isn't in outline (fallback)
+            if (availableSegments.length === 0) {
+                const loader = window.__babylonScene?.potree2Loader;
+                if (loader) {
+                    availableSegments.push({ id: 0, label: 'Main Point Cloud' });
+                }
+            }
+
+            if (availableSegments.length === 0) {
+                const empty = document.createElement('div');
+                empty.style.cssText = 'font-size:0.78rem; color:var(--text-muted); padding:8px 4px;';
+                empty.textContent = 'No point cloud loaded.';
+                segScroll.appendChild(empty);
+            }
+
+            availableSegments.forEach(seg => {
+                const cb = createSimpleCheckbox(seg.label, true, segScroll);
+                // Add icon next to label
+                const labelSpan = cb.parentElement.querySelector('span:last-child');
+                if (labelSpan) {
+                    labelSpan.innerHTML = `<span style="opacity:0.7; margin-right:6px;">🗃️</span>${seg.label}`;
+                }
+                segmentCheckboxes.push({ id: seg.id, checkbox: cb });
+            });
+
+            body.appendChild(segSection);
+            body.appendChild(makeSeparator());
+
+            // ── SECTION 2: Trained Models ──────────────────────────────────
+            const modelSection = document.createElement('div');
+            modelSection.classList.add('modal-section');
+
+            const modelTitle = document.createElement('div');
+            modelTitle.classList.add('modal-section-title');
+            modelTitle.textContent = 'Trained Models';
+            modelSection.appendChild(modelTitle);
+
+            const modelScroll = document.createElement('div');
+            modelScroll.classList.add('dl-list-scroll');
+            modelSection.appendChild(modelScroll);
+
+            // Placeholder while loading
+            const loadingEl = document.createElement('div');
+            loadingEl.style.cssText = 'font-size:0.78rem; color:var(--text-muted); padding:8px 4px;';
+            loadingEl.textContent = 'Loading models…';
+            modelScroll.appendChild(loadingEl);
+
+            // Load models asynchronously
+            (async () => {
+                try {
+                    const res = await fetch('/api/models-list/');
+                    const data = await res.json();
+                    const models = data.models || [];
+                    modelScroll.innerHTML = '';
+
+                    if (models.length === 0) {
+                        const empty = document.createElement('div');
+                        empty.style.cssText = 'font-size:0.78rem; color:var(--text-muted); padding:8px 4px;';
+                        empty.textContent = 'No trained models available.';
+                        modelScroll.appendChild(empty);
+                        return;
+                    }
+
+                    models.forEach(model => {
+                        // Build a richer label with name + metadata
+                        const cb = createSimpleCheckbox(model.name, false, modelScroll);
+                        // Enrich label with icon and meta
+                        const labelSpan = cb.parentElement.querySelector('span:last-child');
+                        if (labelSpan) {
+                            labelSpan.style.cssText = 'display:flex; flex-direction:column; gap:1px;';
+                            labelSpan.innerHTML = `
+                                <span style="display:flex; align-items:center; gap:5px;">
+                                    <span style="opacity:0.75;">🤖</span>
+                                    <span style="font-weight:600;">${model.name}</span>
+                                </span>
+                                <span style="font-size:0.7rem; color:var(--text-muted); padding-left:2px;">${model.created} · ${model.size_mb} MB</span>`;
+                        }
+                        modelCheckboxes.push({ name: model.name, checkbox: cb });
+                    });
+                } catch (err) {
+                    modelScroll.innerHTML = '';
+                    const errEl = document.createElement('div');
+                    errEl.style.cssText = 'font-size:0.78rem; color:#f87171; padding:8px 4px;';
+                    errEl.textContent = '⚠️ Could not load model list.';
+                    modelScroll.appendChild(errEl);
+                }
+            })();
+
+            body.appendChild(modelSection);
+
+            // Expose selection getters for the footer
+            body._getSelectedSegments = () => segmentCheckboxes
+                .filter(s => s.checkbox.checked)
+                .map(s => ({ id: s.id, label: s.label }));
+            body._getSelectedModels = () => modelCheckboxes
+                .filter(m => m.checkbox.checked)
+                .map(m => m.name);
         },
         (footer, overlay) => {
             const cancelBtn = document.createElement('button');
             cancelBtn.classList.add('btn');
-            cancelBtn.style.backgroundColor = 'transparent';
-            cancelBtn.style.border = '1px solid var(--border-color)';
+            cancelBtn.style.cssText = 'background:transparent; border:1px solid var(--border-color);';
             cancelBtn.textContent = "Cancel";
             cancelBtn.onclick = () => {
                 overlay.classList.remove('active');
@@ -1271,11 +1402,69 @@ export function showDownloadModal() {
             const downloadBtn = document.createElement('button');
             downloadBtn.classList.add('btn');
             downloadBtn.textContent = "Download";
-            downloadBtn.onclick = () => {
-                console.log("Download triggered (to be implemented)");
-                // Future: collect checkbox states and trigger download logic
-                overlay.classList.remove('active');
-                setTimeout(() => overlay.remove(), 300);
+            downloadBtn.onclick = async () => {
+                const body = overlay.querySelector('.modal-body');
+                const segments = body?._getSelectedSegments?.() ?? [];
+                const models = body?._getSelectedModels?.() ?? [];
+
+                if (segments.length === 0 && models.length === 0) {
+                    alert('Please select at least one item to download.');
+                    return;
+                }
+
+                downloadBtn.disabled = true;
+                downloadBtn.textContent = 'Preparing Package...';
+
+                try {
+                    const response = await fetch('/api/download-package/', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-CSRFToken': getCSRFToken()
+                        },
+                        body: JSON.stringify({
+                            segments,
+                            models,
+                            las_path: window.__currentProjectLAS,
+                            bin_path: window.__currentProjectBIN
+                        })
+                    });
+
+                    if (!response.ok) {
+                        const err = await response.json().catch(() => ({}));
+                        throw new Error(err.error || 'Download failed');
+                    }
+
+                    // Handle binary blob
+                    const blob = await response.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    
+                    // Extract filename from Content-Disposition if present
+                    const disposition = response.headers.get('Content-Disposition');
+                    let filename = 'download_package.zip';
+                    if (disposition && disposition.includes('filename=')) {
+                        filename = disposition.split('filename=')[1]
+                            .split(';')[0]
+                            .replace(/['"]/g, '').trim();
+                    }
+
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = filename;
+                    document.body.appendChild(a);
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                    a.remove();
+
+                    overlay.classList.remove('active');
+                    setTimeout(() => overlay.remove(), 300);
+
+                } catch (err) {
+                    console.error('Download error:', err);
+                    alert('Error creating package: ' + err.message);
+                    downloadBtn.disabled = false;
+                    downloadBtn.textContent = 'Download';
+                }
             };
 
             footer.appendChild(cancelBtn);
@@ -1646,6 +1835,10 @@ export function showLoadModal() {
                     }
                     completeStep(4);
                     console.log("✅ Process complete. Potree cloud loaded.");
+                    
+                    // Store for download logic
+                    window.__currentProjectLAS = lasPath;
+                    window.__currentProjectBIN = 'viewer/static/viewer/data/working/features.bin';
 
                     // Load feature bin if available (populated by Calculate Features)
                     try {
@@ -1714,7 +1907,7 @@ export function showLoadModal() {
 //  showModelReportModal
 //  Opens a standalone modal showing the RF training report for a saved model.
 //  @param {string} modelName   - Display name (folder name)
-//  @param {string} reportPath  - Relative path to report_RF.txt
+//  @param {string} reportPath  - Relative path to report.txt
 //  @param {string} [metaPath]  - Optional relative path to metadata JSON (for class names)
 // ─────────────────────────────────────────────────────────────────────────────
 export async function showModelReportModal(modelName, reportPath, metaPath) {
@@ -2489,7 +2682,7 @@ export function showTrainingModal(scene, onStart) {
                 // Sanitize: keep only alphanumeric, dash, underscore
                 const modelName = modelNameRaw.replace(/[^a-zA-Z0-9_\-]/g, '_').replace(/^_+|_+$/g, '') || 'my_model';
                 const modelDir = `viewer/static/viewer/data/models/${modelName}/`;
-                const workingDir = `${modelDir}working/`;
+                const workingDir = `viewer/static/viewer/data/working/${modelName}/`;
 
                 // Helper: show error above footer, auto-hide after 4s
                 const showError = (msg) => {
@@ -2752,7 +2945,7 @@ export function showTrainingModal(scene, onStart) {
                         use_gpu: rfParams.use_gpu ?? false,
                         output_training_name: `${workingDir}test_predicted.las`,
                         model_savepath: `${modelDir}model.pkl`,
-                        report_savepath: `${modelDir}report_RF.txt`
+                        report_savepath: `${modelDir}report.txt`
                     };
                     const trainResponse = await fetch('/launch_RF_training/', {
                         method: 'POST',
@@ -2788,7 +2981,7 @@ export function showTrainingModal(scene, onStart) {
                     } catch (e) { console.warn('[Report] Could not load class names:', e); }
 
                     // ── Read report_RF.txt ──
-                    const reportPath = `${modelDir}report_RF.txt`;
+                    const reportPath = `${modelDir}report.txt`;
                     let reportContent = null;
                     try {
                         const reportRes = await fetch(`/api/read-file/?path=${encodeURIComponent(reportPath)}`);
@@ -3498,26 +3691,45 @@ export function showCalculateFeaturesModal(scene, onConfirm) {
 
             const radiiHint = document.createElement('div');
             radiiHint.style.cssText = "font-size:0.72rem;color:var(--text-muted);margin-bottom:8px;";
-            radiiHint.textContent = "Comma-separated values in meters (e.g. 0.1, 0.2, 0.5)";
+            radiiHint.textContent = "Specify 1 to 5 search radii in meters (e.g. 0.1):";
             radiiSection.appendChild(radiiHint);
 
-            const radiiRow = document.createElement('div');
-            radiiRow.classList.add('property-row');
-            radiiRow.innerHTML = `<span class="property-label">Radius:</span>`;
+            const radiiContainer = document.createElement('div');
+            radiiContainer.style.cssText = "display:flex; flex-direction:column; gap:6px;";
 
-            const radiiInput = document.createElement('input');
-            radiiInput.type = 'text';
-            radiiInput.classList.add('property-input');
-            radiiInput.value = "0.1, 0.2, 0.5";
-            radiiInput.placeholder = "0.1, 0.2, 0.5";
-            radiiRow.appendChild(radiiInput);
-            radiiSection.appendChild(radiiRow);
+            const radiiInputs = [];
+            for (let i = 0; i < 5; i++) {
+                const row = document.createElement('div');
+                row.classList.add('property-row');
+                row.style.alignItems = 'center';
+
+                const label = document.createElement('span');
+                label.classList.add('property-label');
+                label.style.width = '80px';
+                label.textContent = `Radius ${i + 1}:`;
+
+                const input = document.createElement('input');
+                input.type = 'number';
+                input.step = '0.1';
+                input.min = '0';
+                input.classList.add('property-input');
+                input.placeholder = "— empty —";
+                if (i === 0) input.value = "0.1";
+                if (i === 1) input.value = "0.2";
+                if (i === 2) input.value = "0.5";
+
+                row.appendChild(label);
+                row.appendChild(input);
+                radiiContainer.appendChild(row);
+                radiiInputs.push(input);
+            }
+            radiiSection.appendChild(radiiContainer);
 
             body.appendChild(radiiSection);
 
             // Attach getters to body for footer access
             body._getFeatSection = () => featSection;
-            body._getRadiiInput = () => radiiInput;
+            body._getRadiiInputs = () => radiiInputs;
         },
         (footer, overlay) => {
             const cancelBtn = document.createElement('button');
@@ -3536,7 +3748,7 @@ export function showCalculateFeaturesModal(scene, onConfirm) {
             confirmBtn.onclick = async () => {
                 const body = overlay.querySelector('.modal-body');
                 const featSection = body._getFeatSection();
-                const radiiInput = body._getRadiiInput();
+                const radiiInputs = body._getRadiiInputs();
 
                 const selectedFeatures = featSection._getSelected
                     ? featSection._getSelected()
@@ -3547,14 +3759,18 @@ export function showCalculateFeaturesModal(scene, onConfirm) {
                     return;
                 }
 
-                // Parse radii string -> array of floats
-                const radii = radiiInput.value
-                    .split(',')
-                    .map(s => parseFloat(s.trim()))
+                // Get values from inputs
+                const radii = radiiInputs
+                    .map(inp => parseFloat(inp.value.trim()))
                     .filter(n => !isNaN(n) && n > 0);
 
                 if (radii.length === 0) {
                     alert("Please enter at least one valid radius.");
+                    return;
+                }
+
+                if (radii.length > 5) {
+                    alert("Maximum 5 radii allowed.");
                     return;
                 }
 
@@ -3762,7 +3978,7 @@ export function showCalculateFeaturesModal(scene, onConfirm) {
     return overlay;
 }
 
-function getCSRFToken() {
+export function getCSRFToken() {
     return document.querySelector('meta[name="csrf-token"]').getAttribute('content');
 }
 
@@ -3815,11 +4031,7 @@ export async function showClassifyModal(scene) {
             const { row: splitRow, select: splitSelect } = makeSelectRow('Input LAS', 'classify-split-select');
             splitSection.appendChild(splitRow);
 
-            // "Full point cloud" is always available
-            const fullOpt = document.createElement('option');
-            fullOpt.value = '__full__';
-            fullOpt.textContent = 'Full point cloud (features.las)';
-            splitSelect.appendChild(fullOpt);
+            // No "Full point cloud" option — user must specify a segment
 
             // Add segments from the Outline panel
             document.querySelectorAll('.outline-item[data-segment-id]').forEach(item => {
@@ -3960,8 +4172,9 @@ export async function showClassifyModal(scene) {
                 if (!modelPath) { showError('Please select a trained model.'); return; }
 
                 const modelDir = modelPath.replace(/\/model\.pkl$/, '');
-                const classifyWorkingDir = `${modelDir}/classify_working/`;
-                const outputClassifyName = `${modelDir}/predicted.las`;
+                const modelName = modelDir.split('/').pop();
+                const classifyWorkingDir = `viewer/static/viewer/data/working/${modelName}/classify_working/`;
+                const outputClassifyName = `viewer/static/viewer/data/working/${modelName}/predicted.las`;
                 const needsSplit = splitValue !== '__full__';
 
                 // ── Read model metadata to get the feature list ────────────────

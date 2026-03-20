@@ -5,6 +5,9 @@ import os
 import re
 import json
 import datetime
+import zipfile
+import tempfile
+import shutil
 
 # Create your views here.
 
@@ -147,7 +150,7 @@ def serve_range_file(request, filepath):
     # Security: restrict to specific binary files in the data directory
     ALLOWED_EXTENSIONS = ('.bin', '.json')
     BASE_DATA_DIR = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)),
+                os.path.dirname(os.path.abspath(__file__)),
         'static', 'viewer', 'data'
     )
 
@@ -241,3 +244,161 @@ def serve_range_file(request, filepath):
     response['Accept-Ranges'] = 'bytes'
     response['Access-Control-Allow-Origin'] = '*'
     return response
+
+@csrf_exempt
+def upload_model(request):
+    """
+    Endpoint for uploading a trained model in a ZIP file.
+    The ZIP must contain the model files (pkl, json, txt).
+    """
+    if request.method == 'POST':
+        try:
+            from django.conf import settings
+            uploaded_file = request.FILES.get('file')
+            if not uploaded_file:
+                return JsonResponse({"error": "No file provided"}, status=400)
+            if not uploaded_file.name.endswith('.zip'):
+                return JsonResponse({"error": "Only ZIP files are supported"}, status=400)
+
+            model_name = os.path.splitext(uploaded_file.name)[0]
+            models_root = os.path.join(settings.BASE_DIR, 'viewer', 'static', 'viewer', 'data', 'models')
+            os.makedirs(models_root, exist_ok=True)
+            
+            model_dir = os.path.join(models_root, model_name)
+            if os.path.exists(model_dir):
+                shutil.rmtree(model_dir)
+
+            with tempfile.TemporaryDirectory() as temp_dir:
+                temp_zip_path = os.path.join(temp_dir, uploaded_file.name)
+                with open(temp_zip_path, 'wb+') as f:
+                    for chunk in uploaded_file.chunks():
+                        f.write(chunk)
+                
+                # Separate directory for extraction to avoid copying the ZIP itself
+                extract_path = os.path.join(temp_dir, "extracted")
+                os.makedirs(extract_path, exist_ok=True)
+
+                with zipfile.ZipFile(temp_zip_path, 'r') as zip_ref:
+                    zip_ref.extractall(extract_path)
+                    
+                    # Logic to handle both flat zip and one-folder-deep zip
+                    items = [i for i in os.listdir(extract_path) if not i.startswith('__MACOSX')]
+                    extract_target = extract_path
+                    if len(items) == 1 and os.path.isdir(os.path.join(extract_path, items[0])):
+                        extract_target = os.path.join(extract_path, items[0])
+
+                    # Verify model.pkl
+                    if not any(f.endswith('.pkl') for f in os.listdir(extract_target)):
+                        return JsonResponse({"error": "ZIP must contain a .pkl model file"}, status=400)
+
+                    # Move content to final folder
+                    shutil.copytree(extract_target, model_dir, dirs_exist_ok=True)
+
+            return JsonResponse({"status": "success", "message": f"Model '{model_name}' uploaded successfully", "name": model_name})
+        except Exception as e:
+            return JsonResponse({"status": "error", "message": str(e)}, status=500)
+
+    return JsonResponse({"error": "Method not allowed"}, status=405)
+
+
+@csrf_exempt
+def package_download_view(request):
+    """
+    Creates a ZIP package containing the selected LAS segments and trained models.
+    """
+    if request.method == 'POST':
+        try:
+            from django.conf import settings
+            from io import BytesIO
+            import zipfile
+            from .functions import extract_segment_las
+
+            data = json.loads(request.body)
+            selected_segments = data.get('segments', []) # list of {id, label}
+            selected_models   = data.get('models', [])   # list of model names
+            project_las       = data.get('las_path')     # e.g. viewer/static/viewer/data/working/features.las
+            project_bin       = data.get('bin_path')     # e.g. viewer/static/viewer/data/working/features.bin
+            
+            # Convert relative paths to absolute if needed
+            if project_las and not os.path.isabs(project_las):
+                project_las = os.path.join(settings.BASE_DIR, project_las)
+            if project_bin and not os.path.isabs(project_bin):
+                project_bin = os.path.join(settings.BASE_DIR, project_bin)
+                
+            # Fallbacks if paths missing
+            working_dir = os.path.join(settings.BASE_DIR, 'viewer', 'static', 'viewer', 'data', 'working')
+            if not project_las: project_las = os.path.join(working_dir, 'features.las')
+            if not project_bin: project_bin = os.path.join(working_dir, 'features.bin')
+            
+            models_root = os.path.join(settings.BASE_DIR, 'viewer', 'static', 'viewer', 'data', 'models')
+            
+            zip_buffer = BytesIO()
+            # Gather items
+            items_to_zip = [] # list of (archive_path, file_content_or_path, is_content)
+
+            # 1. Process Segments
+            for seg in selected_segments:
+                seg_id = int(seg['id'])
+                label  = seg['label'].replace(' ', '_').replace('.', '_')
+                
+                if seg_id == 0:
+                    if os.path.isfile(project_las):
+                        items_to_zip.append((f"segments/{label}.las", project_las, False))
+                else:
+                    seg_las_name = f"segment_{seg_id}.las"
+                    seg_las_path = os.path.join(working_dir, seg_las_name)
+                    if not os.path.isfile(seg_las_path):
+                        if os.path.isfile(project_las) and os.path.isfile(project_bin):
+                            try:
+                                extract_segment_las(project_las, project_bin, seg_id, seg_las_path)
+                            except Exception as ex:
+                                print(f"[DOWNLOAD] Error extracting segment {seg_id}: {ex}")
+                    if os.path.isfile(seg_las_path):
+                        items_to_zip.append((f"segments/{label}.las", seg_las_path, False))
+
+            # 2. Process Models
+            for model_name in selected_models:
+                model_dir = os.path.join(models_root, model_name)
+                if os.path.isdir(model_dir):
+                    model_zip_buf = BytesIO()
+                    with zipfile.ZipFile(model_zip_buf, 'w', zipfile.ZIP_DEFLATED) as model_zip:
+                        ALLOWED_EXTS = ('.pkl', '.txt', '.json')
+                        for root, _, files in os.walk(model_dir):
+                            for file in files:
+                                if any(file.lower().endswith(ext) for ext in ALLOWED_EXTS):
+                                    f_path = os.path.join(root, file)
+                                    model_zip.write(f_path, file)
+                    
+                    model_zip_buf.seek(0)
+                    items_to_zip.append((f"models/{model_name}.zip", model_zip_buf.read(), True))
+
+            # Decide on response format
+            if len(items_to_zip) == 1 and items_to_zip[0][0].startswith("models/") and items_to_zip[0][2]:
+                # Only one model: return its zip directly
+                content = items_to_zip[0][1]
+                model_filename = os.path.basename(items_to_zip[0][0])
+                response = HttpResponse(content, content_type='application/zip')
+                response['Content-Disposition'] = f'attachment; filename="{model_filename}"'
+                return response
+
+            # Multiple items or segments: create wrapper zip
+            zip_buffer = BytesIO()
+            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                for arcname, target, is_content in items_to_zip:
+                    if is_content:
+                        zip_file.writestr(arcname, target)
+                    else:
+                        zip_file.write(target, arcname)
+
+            zip_buffer.seek(0)
+            response = HttpResponse(zip_buffer.read(), content_type='application/zip')
+            response['Content-Disposition'] = f'attachment; filename="download_package.zip"'
+            return response
+
+        except Exception as e:
+            import traceback
+            print(f"[DOWNLOAD ERROR] {e}")
+            print(traceback.format_exc())
+            return JsonResponse({"error": str(e)}, status=500)
+
+    return JsonResponse({"error": "Method not allowed"}, status=405)
