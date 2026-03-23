@@ -305,64 +305,83 @@ def upload_model(request):
 def package_download_view(request):
     """
     Creates a ZIP package containing the selected LAS segments and trained models.
+    All temporary files generated during packaging are deleted after the response
+    is built (segment .las, segment .bin, metadata .json).
     """
     if request.method == 'POST':
-        try:
-            from django.conf import settings
-            from io import BytesIO
-            import zipfile
-            from .functions import extract_segment_las
+        from django.conf import settings
+        from io import BytesIO
+        from .functions import extract_segment_las
 
+        # Files to delete after the response is assembled (populated during processing)
+        temp_files_to_delete = []
+
+        try:
             data = json.loads(request.body)
-            selected_segments = data.get('segments', []) # list of {id, label}
-            selected_models   = data.get('models', [])   # list of model names
-            project_las       = data.get('las_path')     # e.g. viewer/static/viewer/data/working/features.las
-            project_bin       = data.get('bin_path')     # bin con [segId, classId] generato da exportAllTrainingData
-            
+            selected_segments = data.get('segments', [])  # list of {id, label}
+            selected_models   = data.get('models', [])    # list of model names
+            project_las       = data.get('las_path')      # e.g. viewer/static/.../features.las
+            project_bin       = data.get('bin_path')      # labels_TIMESTAMP.bin from /api/start-training/
+
             # Convert relative paths to absolute if needed
             if project_las and not os.path.isabs(project_las):
                 project_las = os.path.join(settings.BASE_DIR, project_las)
-            # project_bin viene già come path assoluto da /api/start-training/,
-            # ma gestiamo anche il caso relativo per robustezza
+            # project_bin arriva già assoluto da /api/start-training/, gestiamo
+            # anche il caso relativo per robustezza
             if project_bin and not os.path.isabs(project_bin):
                 project_bin = os.path.join(settings.BASE_DIR, project_bin)
-                
-            # Fallback path solo per project_las
-            working_dir = os.path.join(settings.BASE_DIR, 'viewer', 'static', 'viewer', 'data', 'working')
-            if not project_las: project_las = os.path.join(working_dir, 'features.las')
-            
-            models_root = os.path.join(settings.BASE_DIR, 'viewer', 'static', 'viewer', 'data', 'models')
-            
-            zip_buffer = BytesIO()
-            # Gather items
-            items_to_zip = [] # list of (archive_path, file_content_or_path, is_content)
 
-            # 1. Process Segments
+            working_dir = os.path.join(settings.BASE_DIR, 'viewer', 'static', 'viewer', 'data', 'working')
+            if not project_las:
+                project_las = os.path.join(working_dir, 'features.las')
+
+            models_root = os.path.join(settings.BASE_DIR, 'viewer', 'static', 'viewer', 'data', 'models')
+
+            # Segna per la pulizia il bin e il json generati da /api/start-training/
+            # Il bin ha nome labels_TIMESTAMP.bin → il json associato è meta_TIMESTAMP.json
+            if project_bin and os.path.isfile(project_bin):
+                temp_files_to_delete.append(project_bin)
+                # Il json ha lo stesso timestamp: labels_20240101_120000.bin → meta_20240101_120000.json
+                bin_basename = os.path.basename(project_bin)  # labels_TIMESTAMP.bin
+                if bin_basename.startswith('labels_'):
+                    json_name = bin_basename.replace('labels_', 'meta_', 1).replace('.bin', '.json')
+                    json_path = os.path.join(os.path.dirname(project_bin), json_name)
+                    if os.path.isfile(json_path):
+                        temp_files_to_delete.append(json_path)
+
+            items_to_zip = []  # list of (archive_path, file_content_or_path, is_content)
+
+            # ── 1. Segments ───────────────────────────────────────────────────
+            # Tutti i segmenti (incluso il 0) passano per extract_segment_las.
+            # Il segmento 0 NON può essere servito come features.las intero:
+            # contiene anche i punti tagliati nei segmenti 1, 2, ...
+            # Il C++ filtra solo i punti con buffer[pid*2] == seg_id.
             for seg in selected_segments:
                 seg_id = int(seg['id'])
                 label  = seg['label'].replace(' ', '_').replace('.', '_')
-                
-                # Tutti i segmenti (incluso il 0) passano per extract_segment_las.
-                # Il segmento 0 NON può essere servito come features.las intero:
-                # contiene anche i punti tagliati nei segmenti 1, 2, ...
-                # Il C++ filtra solo i punti con buffer[pid*2] == seg_id.
+
                 if not project_bin or not os.path.isfile(project_bin):
                     raise ValueError(
                         f"Segment bin not found (path: {project_bin}). "
                         "The frontend must send the segment buffer via /api/start-training/ first."
                     )
+
                 seg_las_name = f"segment_{seg_id}.las"
                 seg_las_path = os.path.join(working_dir, seg_las_name)
+
                 if not os.path.isfile(seg_las_path):
                     if os.path.isfile(project_las):
                         try:
                             extract_segment_las(project_las, project_bin, seg_id, seg_las_path)
                         except Exception as ex:
                             print(f"[DOWNLOAD] Error extracting segment {seg_id}: {ex}")
+
                 if os.path.isfile(seg_las_path):
+                    temp_files_to_delete.append(seg_las_path)
                     items_to_zip.append((f"segments/{label}.las", seg_las_path, False))
 
-            # 2. Process Models
+            # ── 2. Models ─────────────────────────────────────────────────────
+            # I model zip vengono costruiti in memoria (BytesIO) — nessun file su disco.
             for model_name in selected_models:
                 model_dir = os.path.join(models_root, model_name)
                 if os.path.isdir(model_dir):
@@ -372,22 +391,19 @@ def package_download_view(request):
                         for root, _, files in os.walk(model_dir):
                             for file in files:
                                 if any(file.lower().endswith(ext) for ext in ALLOWED_EXTS):
-                                    f_path = os.path.join(root, file)
-                                    model_zip.write(f_path, file)
-                    
+                                    model_zip.write(os.path.join(root, file), file)
                     model_zip_buf.seek(0)
                     items_to_zip.append((f"models/{model_name}.zip", model_zip_buf.read(), True))
 
-            # Decide on response format
+            # ── 3. Build response ─────────────────────────────────────────────
             if len(items_to_zip) == 1 and items_to_zip[0][0].startswith("models/") and items_to_zip[0][2]:
-                # Only one model: return its zip directly
+                # Singolo modello: restituisce il suo zip direttamente
                 content = items_to_zip[0][1]
                 model_filename = os.path.basename(items_to_zip[0][0])
                 response = HttpResponse(content, content_type='application/zip')
                 response['Content-Disposition'] = f'attachment; filename="{model_filename}"'
                 return response
 
-            # Multiple items or segments: create wrapper zip
             zip_buffer = BytesIO()
             with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
                 for arcname, target, is_content in items_to_zip:
@@ -398,7 +414,7 @@ def package_download_view(request):
 
             zip_buffer.seek(0)
             response = HttpResponse(zip_buffer.read(), content_type='application/zip')
-            response['Content-Disposition'] = f'attachment; filename="download_package.zip"'
+            response['Content-Disposition'] = 'attachment; filename="download_package.zip"'
             return response
 
         except Exception as e:
@@ -406,5 +422,16 @@ def package_download_view(request):
             print(f"[DOWNLOAD ERROR] {e}")
             print(traceback.format_exc())
             return JsonResponse({"error": str(e)}, status=500)
+
+        finally:
+            # Elimina tutti i file temporanei generati durante il packaging,
+            # sia in caso di successo che di errore.
+            for path in temp_files_to_delete:
+                try:
+                    if os.path.isfile(path):
+                        os.remove(path)
+                        print(f"[DOWNLOAD] Deleted temp file: {path}")
+                except Exception as cleanup_err:
+                    print(f"[DOWNLOAD] Warning: could not delete temp file {path}: {cleanup_err}")
 
     return JsonResponse({"error": "Method not allowed"}, status=405)
