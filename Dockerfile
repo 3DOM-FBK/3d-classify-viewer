@@ -1,82 +1,41 @@
 # ============================================================
 # STAGE 1 — builder
-# Compiles GDAL, PDAL, LASzip, laz-perf, and installs heavy
-# dependencies. This image does NOT end up in production.
+# Compila GDAL, PDAL, LASzip, laz-perf da sorgente.
+# Questa immagine NON finisce in produzione.
 # ============================================================
 FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 ARG NUM_THREADS=8
 
-WORKDIR /app
-
-# System dependencies for compilation
+# Dipendenze di compilazione (solo quanto serve per build)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    software-properties-common && \
-    add-apt-repository universe && add-apt-repository multiverse && \
+    software-properties-common ca-certificates gnupg && \
+    add-apt-repository universe && \
     apt-get update && apt-get install -y --no-install-recommends \
     git build-essential cmake ninja-build \
-    libflann-dev libjpeg-dev libpng-dev libtiff-dev libpcl-dev \
-    clang libc++-dev libc++abi-dev \
-    libpq-dev \
+    libflann-dev libjpeg-dev libpng-dev libtiff-dev \
+    libpcl-dev libpq-dev \
     libx11-dev libgl1-mesa-dev libglu1-mesa-dev freeglut3-dev \
     wget curl unzip \
-    libgomp1 libomp-dev \
-    libcgal-dev libboost-all-dev \
-    python3.10 python3.10-dev python3-pip python3.10-venv \
-    libgl1 libglib2.0-0 libsm6 libxrender1 libxext6 \
-    libstdc++6 libgcc-s1 liblaszip-dev \
+    libgomp1 libomp-dev liblaszip-dev \
+    # Solo i moduli Boost necessari a GDAL/PDAL
+    libboost-filesystem-dev libboost-iostreams-dev \
+    libboost-program-options-dev libboost-system-dev \
+    libboost-thread-dev libboost-regex-dev \
+    libcgal-dev \
+    python3.10 python3.10-dev python3-pip \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
-
-# Default Python
-RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.10 1 && \
-    update-alternatives --install /usr/bin/python  python  /usr/bin/python3.10 1 && \
-    python3 -m pip install --upgrade pip
-
-# Python dependencies (CPU)
-COPY requirements.txt .
-RUN pip install --no-cache-dir --ignore-installed -r requirements.txt
-
-# PyTorch + CUDA 11.8
-RUN pip install --no-cache-dir \
-    torch==2.3.0+cu118 torchvision==0.18.0+cu118 \
-    --index-url https://download.pytorch.org/whl/cu118
-
-# CuPy
-RUN pip install --no-cache-dir cupy-cuda11x
-
-# cuML (rapidsai)
-RUN pip install --no-cache-dir \
-    --extra-index-url https://pypi.anaconda.org/rapidsai-wheels-nightly/simple \
-    cuml-cu11
-
-# Precompiled Open3D
-RUN wget -q https://github.com/isl-org/Open3D/releases/download/v0.19.0/open3d-devel-linux-x86_64-cxx11-abi-0.19.0.tar.xz && \
-    tar -xf open3d-devel-linux-x86_64-cxx11-abi-0.19.0.tar.xz && \
-    rm    open3d-devel-linux-x86_64-cxx11-abi-0.19.0.tar.xz
-
-# tinygltf / stb headers
-RUN mkdir -p /app/tinygltf && \
-    wget -q https://raw.githubusercontent.com/syoyo/tinygltf/master/tiny_gltf.h      -O /app/tinygltf/tiny_gltf.h && \
-    wget -q https://raw.githubusercontent.com/syoyo/tinygltf/master/json.hpp         -O /app/tinygltf/json.hpp && \
-    wget -q https://raw.githubusercontent.com/nothings/stb/master/stb_image.h        -O /app/tinygltf/stb_image.h && \
-    wget -q https://raw.githubusercontent.com/nothings/stb/master/stb_image_write.h  -O /app/tinygltf/stb_image_write.h
-
-# PotreeConverter
-RUN wget -q https://github.com/potree/PotreeConverter/releases/download/2.1.1/PotreeConverter_2.1.1_x64_linux.zip && \
-    unzip -q PotreeConverter_2.1.1_x64_linux.zip && \
-    rm       PotreeConverter_2.1.1_x64_linux.zip && \
-    chmod +x PotreeConverter_linux_x64/PotreeConverter
 
 # LASzip
 RUN git clone --depth 1 https://github.com/LASzip/LASzip.git /tmp/LASzip && \
-    cmake -S /tmp/LASzip -B /tmp/LASzip/build && \
+    cmake -S /tmp/LASzip -B /tmp/LASzip/build -DCMAKE_BUILD_TYPE=Release && \
     make -C /tmp/LASzip/build -j${NUM_THREADS} install && \
     rm -rf /tmp/LASzip
 
 # laz-perf
 RUN git clone --depth 1 https://github.com/hobu/laz-perf.git /tmp/laz-perf && \
-    cmake -S /tmp/laz-perf -B /tmp/laz-perf/build && \
+    cmake -S /tmp/laz-perf -B /tmp/laz-perf/build -DCMAKE_BUILD_TYPE=Release && \
     make -C /tmp/laz-perf/build -j${NUM_THREADS} install && \
     rm -rf /tmp/laz-perf
 
@@ -91,8 +50,7 @@ RUN git clone --depth 1 --branch 2.7.1 https://github.com/PDAL/PDAL.git /tmp/PDA
     cmake -S /tmp/PDAL -B /tmp/PDAL/build \
     -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_INSTALL_PREFIX=/usr \
-    -DCMAKE_INSTALL_LIBDIR=lib/x86_64-linux-gnu \
+    -DCMAKE_INSTALL_PREFIX=/usr/local \
     -DBUILD_PLUGIN_PCL=ON \
     -DBUILD_PLUGIN_PYTHON=OFF \
     -DBUILD_PLUGIN_PGPOINTCLOUD=OFF \
@@ -103,8 +61,8 @@ RUN git clone --depth 1 --branch 2.7.1 https://github.com/PDAL/PDAL.git /tmp/PDA
     rm -rf /tmp/PDAL
 
 # ============================================================
-# STAGE 2 — runtime
-# Final image: CUDA runtime only, no compiler/sources.
+# STAGE 2 — runtime finale (~20 GB)
+# Base runtime (no compiler), copia solo i binari compilati.
 # ============================================================
 FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
 
@@ -112,56 +70,93 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     DEBIAN_FRONTEND=noninteractive \
     CUPY_CACHE_DIR=/tmp/.cupy \
-    LD_LIBRARY_PATH=/app/open3d-devel-linux-x86_64-cxx11-abi-0.19.0/lib:/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
+    LD_LIBRARY_PATH=/app/open3d-devel-linux-x86_64-cxx11-abi-0.19.0/lib:/usr/local/lib:/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
 
 WORKDIR /app
 
-# System runtime (only what is needed at runtime, no compiler)
+# Solo runtime di sistema — niente *-dev, niente compiler
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3.10 python3-pip \
-    libgomp1 \
-    libgl1 libglib2.0-0 libsm6 libxrender1 libxext6 \
+    software-properties-common ca-certificates gnupg && \
+    add-apt-repository universe && \
+    apt-get update && apt-get install -y --no-install-recommends \
+    python3.10 python3.10-venv python3-pip \
+    libgomp1 libomp5 \
+    libgl1 libgl1-mesa-glx libglu1-mesa \
+    libglib2.0-0 libsm6 libxrender1 libxext6 libx11-6 \
     libstdc++6 libgcc-s1 \
+    # Runtime Boost (solo .so, non gli header -dev)
     libboost-filesystem1.74.0 libboost-iostreams1.74.0 \
     libboost-program-options1.74.0 libboost-system1.74.0 \
+    libboost-thread1.74.0 libboost-regex1.74.0 \
+    # Runtime GDAL/PDAL/PCL deps
     libflann1.9 libjpeg8 libpng16-16 libtiff5 \
-    libx11-6 libgl1-mesa-glx libglu1-mesa \
-    libomp5 \
+    libpcl-common1.12 libpcl-io1.12 libpcl-filters1.12 \
+    libpq5 \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Default Python
+# Python di default
 RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.10 1 && \
-    update-alternatives --install /usr/bin/python  python  /usr/bin/python3.10 1
+    update-alternatives --install /usr/bin/python  python  /usr/bin/python3.10 1 && \
+    python3 -m pip install --upgrade pip --no-cache-dir
 
-# Copy Python packages installed in builder stage
-COPY --from=builder /usr/local/lib/python3.10 /usr/local/lib/python3.10
-COPY --from=builder /usr/local/bin             /usr/local/bin
+# ── Dipendenze Python CPU ──────────────────────────────────
+COPY requirements.txt /app/
+RUN pip install --no-cache-dir -r requirements.txt && \
+    find /usr/local/lib/python3.10 -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 
-# Copy compiled system libraries (GDAL, PDAL, LASzip, laz-perf)
-COPY --from=builder /usr/local/lib    /usr/local/lib
-COPY --from=builder /usr/local/share  /usr/local/share
-COPY --from=builder /usr/lib/x86_64-linux-gnu /usr/lib/x86_64-linux-gnu
+# ── PyTorch + CUDA 11.8 (~5 GB) ───────────────────────────
+RUN pip install --no-cache-dir \
+    torch==2.3.0+cu118 torchvision==0.18.0+cu118 \
+    --index-url https://download.pytorch.org/whl/cu118 && \
+    find /usr/local/lib/python3.10 -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 
-# Precompiled Open3D
-COPY --from=builder /app/open3d-devel-linux-x86_64-cxx11-abi-0.19.0 \
-    /app/open3d-devel-linux-x86_64-cxx11-abi-0.19.0
+# ── CuPy ──────────────────────────────────────────────────
+RUN pip install --no-cache-dir cupy-cuda11x && \
+    find /usr/local/lib/python3.10 -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 
-# tinygltf / stb headers
-COPY --from=builder /app/tinygltf /app/tinygltf
+# ── cuML / RAPIDS (~4 GB) ─────────────────────────────────
+# Rimuovi questo blocco se non viene usato in produzione:
+# risparmio ~4 GB sull'immagine finale.
+RUN pip install --no-cache-dir \
+    --extra-index-url https://pypi.anaconda.org/rapidsai-wheels-nightly/simple \
+    cuml-cu11 && \
+    find /usr/local/lib/python3.10 -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 
-# PotreeConverter
-COPY --from=builder /app/PotreeConverter_linux_x64 /app/PotreeConverter_linux_x64
+# ── Copia binari compilati dallo stage builder ─────────────
+COPY --from=builder /usr/local/lib     /usr/local/lib
+COPY --from=builder /usr/local/bin     /usr/local/bin
+COPY --from=builder /usr/local/share   /usr/local/share
+COPY --from=builder /usr/local/include /usr/local/include
 
-# Update dynamic library cache
+# ── Open3D precompilata ────────────────────────────────────
+RUN wget -q https://github.com/isl-org/Open3D/releases/download/v0.19.0/open3d-devel-linux-x86_64-cxx11-abi-0.19.0.tar.xz && \
+    tar -xf open3d-devel-linux-x86_64-cxx11-abi-0.19.0.tar.xz && \
+    rm    open3d-devel-linux-x86_64-cxx11-abi-0.19.0.tar.xz
+
+# ── tinygltf / stb headers ─────────────────────────────────
+RUN mkdir -p /app/tinygltf && \
+    wget -q https://raw.githubusercontent.com/syoyo/tinygltf/master/tiny_gltf.h     -O /app/tinygltf/tiny_gltf.h && \
+    wget -q https://raw.githubusercontent.com/syoyo/tinygltf/master/json.hpp        -O /app/tinygltf/json.hpp && \
+    wget -q https://raw.githubusercontent.com/nothings/stb/master/stb_image.h       -O /app/tinygltf/stb_image.h && \
+    wget -q https://raw.githubusercontent.com/nothings/stb/master/stb_image_write.h -O /app/tinygltf/stb_image_write.h
+
+# ── PotreeConverter ────────────────────────────────────────
+RUN wget -q https://github.com/potree/PotreeConverter/releases/download/2.1.1/PotreeConverter_2.1.1_x64_linux.zip && \
+    unzip -q PotreeConverter_2.1.1_x64_linux.zip && \
+    rm       PotreeConverter_2.1.1_x64_linux.zip && \
+    chmod +x PotreeConverter_linux_x64/PotreeConverter
+
+# Aggiorna cache librerie dinamiche
 RUN echo "/usr/local/lib" > /etc/ld.so.conf.d/local.conf && ldconfig
 
-# ============================================================
-# Copy Django project and opt folder
-# ============================================================
-COPY classifyViewer/ /app/classifyViewer/
-COPY opt/            /app/opt/
+# ── Progetto Django e cartella opt ────────────────────────
+COPY classifyViewer/ /webapp/classifyViewer/
+COPY opt/            /webapp/opt/
+
+WORKDIR /webapp
 
 EXPOSE 8000
 
-# Start with Gunicorn (modify the wsgi module if necessary)
-# CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "3", "classifyViewer.wsgi:application"]
+# # Gunicorn — modifica classifyViewer.wsgi se il modulo wsgi è diverso
+# CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "3", \
+#     "--timeout", "120", "classifyViewer.wsgi:application"]
