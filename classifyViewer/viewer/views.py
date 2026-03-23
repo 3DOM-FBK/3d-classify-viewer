@@ -317,18 +317,19 @@ def package_download_view(request):
             selected_segments = data.get('segments', []) # list of {id, label}
             selected_models   = data.get('models', [])   # list of model names
             project_las       = data.get('las_path')     # e.g. viewer/static/viewer/data/working/features.las
-            project_bin       = data.get('bin_path')     # e.g. viewer/static/viewer/data/working/features.bin
+            project_bin       = data.get('bin_path')     # bin con [segId, classId] generato da exportAllTrainingData
             
             # Convert relative paths to absolute if needed
             if project_las and not os.path.isabs(project_las):
                 project_las = os.path.join(settings.BASE_DIR, project_las)
+            # project_bin viene già come path assoluto da /api/start-training/,
+            # ma gestiamo anche il caso relativo per robustezza
             if project_bin and not os.path.isabs(project_bin):
                 project_bin = os.path.join(settings.BASE_DIR, project_bin)
                 
-            # Fallbacks if paths missing
+            # Fallback path solo per project_las
             working_dir = os.path.join(settings.BASE_DIR, 'viewer', 'static', 'viewer', 'data', 'working')
             if not project_las: project_las = os.path.join(working_dir, 'features.las')
-            if not project_bin: project_bin = os.path.join(working_dir, 'features.bin')
             
             models_root = os.path.join(settings.BASE_DIR, 'viewer', 'static', 'viewer', 'data', 'models')
             
@@ -341,20 +342,25 @@ def package_download_view(request):
                 seg_id = int(seg['id'])
                 label  = seg['label'].replace(' ', '_').replace('.', '_')
                 
-                if seg_id == 0:
+                # Tutti i segmenti (incluso il 0) passano per extract_segment_las.
+                # Il segmento 0 NON può essere servito come features.las intero:
+                # contiene anche i punti tagliati nei segmenti 1, 2, ...
+                # Il C++ filtra solo i punti con buffer[pid*2] == seg_id.
+                if not project_bin or not os.path.isfile(project_bin):
+                    raise ValueError(
+                        f"Segment bin not found (path: {project_bin}). "
+                        "The frontend must send the segment buffer via /api/start-training/ first."
+                    )
+                seg_las_name = f"segment_{seg_id}.las"
+                seg_las_path = os.path.join(working_dir, seg_las_name)
+                if not os.path.isfile(seg_las_path):
                     if os.path.isfile(project_las):
-                        items_to_zip.append((f"segments/{label}.las", project_las, False))
-                else:
-                    seg_las_name = f"segment_{seg_id}.las"
-                    seg_las_path = os.path.join(working_dir, seg_las_name)
-                    if not os.path.isfile(seg_las_path):
-                        if os.path.isfile(project_las) and os.path.isfile(project_bin):
-                            try:
-                                extract_segment_las(project_las, project_bin, seg_id, seg_las_path)
-                            except Exception as ex:
-                                print(f"[DOWNLOAD] Error extracting segment {seg_id}: {ex}")
-                    if os.path.isfile(seg_las_path):
-                        items_to_zip.append((f"segments/{label}.las", seg_las_path, False))
+                        try:
+                            extract_segment_las(project_las, project_bin, seg_id, seg_las_path)
+                        except Exception as ex:
+                            print(f"[DOWNLOAD] Error extracting segment {seg_id}: {ex}")
+                if os.path.isfile(seg_las_path):
+                    items_to_zip.append((f"segments/{label}.las", seg_las_path, False))
 
             # 2. Process Models
             for model_name in selected_models:

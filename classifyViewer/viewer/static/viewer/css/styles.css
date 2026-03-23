@@ -335,7 +335,8 @@ textarea,
     background-color: var(--panel-bg);
     color: var(--text-primary);
     border: 1px solid var(--border-color);
-    padding: 0 16px; /* Restored horizontal padding, removed vertical */
+    padding: 0 16px;
+    /* Restored horizontal padding, removed vertical */
     height: 36px;
     box-sizing: border-box;
     border-radius: 8px;
@@ -1195,6 +1196,7 @@ select.property-input option {
 .dl-list-scroll .checkbox-item {
     padding: 8px 10px;
     border-radius: 6px;
+    margin-bottom: 6px;
 }
 
 .modal-section {

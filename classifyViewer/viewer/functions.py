@@ -91,11 +91,11 @@ class JobManager:
 
             process.wait()
 
-            if process.returncode not in (0, -signal.SIGTERM if os.name != 'nt' else 0):
-                # On Windows, SIGTERM might not be defined or returned this way
-                if process.returncode != 0:
-                    self.error = f"Process failed (code {process.returncode})"
-                    raise RuntimeError(self.error)
+            sigterm_code = -signal.SIGTERM if os.name != 'nt' else None
+            if process.returncode != 0 and process.returncode != sigterm_code:
+                last_line = f": {stdout_lines[-1].strip()}" if stdout_lines else ""
+                self.error = f"Process failed (code {process.returncode}){last_line}"
+                raise RuntimeError(self.error)
 
             if stdout_lines:
                 self.result = stdout_lines[-1].strip()
@@ -135,10 +135,27 @@ class JobManager:
 
     def wait(self):
         """Wait job completion."""
-        if self._thread:
-            self._thread.join()
-
 job = JobManager()
+
+
+def fix_las_header(las_path):
+    """
+    Repair the bounding box of a LAS file using laspy.
+    This is necessary because some C++ tools generate points slightly
+    outside the header's declared bounding box, which panics PotreeConverter.
+    """
+    print(f"Fixing LAS header bounding box for {las_path}...")
+    import laspy
+    try:
+        # Re-saving with laspy 2.0+ automatically updates mins/maxs in the header
+        with laspy.open(las_path) as f:
+            las = f.read()
+            # Explicit update just in case
+            las.header.update_all()
+            las.write(las_path)
+        print("Done fixing LAS header.")
+    except Exception as e:
+        print(f"Warning: could not fix LAS header for {las_path}: {e}")
 
 
 def stop_processes():
@@ -166,6 +183,10 @@ def mesh_to_point_cloud(mesh_path, out_path, num_points=5000000):
     
     command = ["/webapp/opt/mesh2pc", abs_input, abs_output, str(num_points)]
     job.launch_subprocess(command)
+    
+    # Fix LAS header
+    if abs_output and abs_output.lower().endswith(".las") and os.path.exists(abs_output):
+        fix_las_header(abs_output)
 
 
 def ply_to_las(ply_path, out_path=None):
@@ -177,6 +198,10 @@ def ply_to_las(ply_path, out_path=None):
     
     command = ["/webapp/opt/ply2las", abs_input, abs_output]
     job.launch_subprocess(command)
+
+    # Fix LAS header
+    if abs_output and abs_output.lower().endswith(".las") and os.path.exists(abs_output):
+        fix_las_header(abs_output)
 
 def feature_extraction(input_filepath, output_filepath, feature_list, radius_list, sampling=0):
     print("\n[FUNCTION] ---- FEATURE EXTRACTION -----")
@@ -194,6 +219,11 @@ def feature_extraction(input_filepath, output_filepath, feature_list, radius_lis
         command = ["/webapp/opt/feature_extraction_viewer", abs_input, abs_output, "--features", feature_str, "--radius", radius_str, "--sampling_resolution", sampling]
     
     job.launch_subprocess(command)
+
+    # Fix LAS header
+    if abs_output and abs_output.lower().endswith(".las") and os.path.exists(abs_output):
+        fix_las_header(abs_output)
+
 
 def Potree(input_filepath, output_filepath):
     print("\n[FUNCTION] ---- Potree Converter -----")
@@ -332,7 +362,10 @@ def split_las_by_binary(las_path: str, bin_path: str, meta_path: str, output_dir
         abs_outdir,
     ]
 
-    job.launch_subprocess(command)
+    # Usa launch_subprocess standalone: non passa dal singleton job,
+    # evita race condition quando viene chiamata più volte in sequenza
+    # (es. download di più segmenti) da thread Django diversi.
+    launch_subprocess(command)
 
 def extract_segment_las(las_path: str, bin_path: str, seg_id: int, out_path: str):
     """
@@ -364,7 +397,8 @@ def extract_segment_las(las_path: str, bin_path: str, seg_id: int, out_path: str
         abs_out,
     ]
 
-    job.launch_subprocess(command)
+    # Usa launch_subprocess standalone: stessa motivazione di split_las_by_binary.
+    launch_subprocess(command)
 
 def las_to_feature_bin(las_path: str, bin_path: str):
     """
@@ -388,4 +422,6 @@ def las_to_feature_bin(las_path: str, bin_path: str):
         abs_bin,
     ]
 
-    job.launch_subprocess(command)
+    # Usa launch_subprocess standalone: non necessita di essere stoppabile,
+    # non deve passare dal singleton job.
+    launch_subprocess(command)

@@ -1279,14 +1279,14 @@ export function showDownloadModal() {
             // Populate segments from the actual UI Outline items (allows picking up renames)
             const outlineItems = document.querySelectorAll('.outline-item:not(.class-item)');
             let availableSegments = [];
-            
+
             outlineItems.forEach(item => {
                 const segId = item.dataset.segmentId;
                 const nameInput = item.querySelector('.outline-name-input');
                 if (segId !== undefined && nameInput) {
-                    availableSegments.push({ 
-                        id: parseInt(segId, 10), 
-                        label: nameInput.value 
+                    availableSegments.push({
+                        id: parseInt(segId, 10),
+                        label: nameInput.value
                     });
                 }
             });
@@ -1313,7 +1313,7 @@ export function showDownloadModal() {
                 if (labelSpan) {
                     labelSpan.innerHTML = `<span style="opacity:0.7; margin-right:6px;">🗃️</span>${seg.label}`;
                 }
-                segmentCheckboxes.push({ id: seg.id, checkbox: cb });
+                segmentCheckboxes.push({ id: seg.id, label: seg.label, checkbox: cb });
             });
 
             body.appendChild(segSection);
@@ -1416,6 +1416,48 @@ export function showDownloadModal() {
                 downloadBtn.textContent = 'Preparing Package...';
 
                 try {
+                    // Se ci sono segmenti da scaricare, dobbiamo prima generare
+                    // il buffer [segId, classId] tramite exportAllTrainingData,
+                    // esattamente come fa il training. Il features.bin è il bin
+                    // delle feature della colormap, NON dei segmenti — usarlo
+                    // per extract_segment_las produrrebbe punti casuali/errati.
+                    let segmentBinPath = null;
+                    if (segments.length > 0 && segments.some(s => s.id !== 0)) {
+                        const loader = window.__babylonScene?.potree2Loader;
+                        if (!loader) throw new Error('Point cloud loader not available.');
+
+                        // Costruisce segmentMap con tutti i segmenti presenti nell'Outline
+                        // (serve passarli tutti perché il buffer copre l'intera nuvola)
+                        const segmentMap = {};
+                        document.querySelectorAll('.outline-item[data-segment-id]').forEach(item => {
+                            const segId = parseInt(item.dataset.segmentId, 10);
+                            const nameInput = item.querySelector('.outline-name-input');
+                            if (!isNaN(segId) && nameInput) segmentMap[segId] = nameInput.value;
+                        });
+
+                        downloadBtn.textContent = 'Exporting Segments...';
+                        const exportResult = await loader.exportAllTrainingData(segmentMap);
+                        if (!exportResult || !exportResult.buffer)
+                            throw new Error('No segment data found. Make sure segments have been created.');
+
+                        // Salva il buffer sul server tramite /api/start-training/
+                        // (stesso endpoint usato dal training, restituisce bin_path)
+                        downloadBtn.textContent = 'Saving Segment Data...';
+                        const classMap = {};
+                        classRegistry.forEach((val, id) => { classMap[id] = val.name; });
+                        const formData = new FormData();
+                        formData.append('labels', JSON.stringify({ segments: exportResult.segmentMap, classes: classMap }));
+                        formData.append('buffer', new Blob([exportResult.buffer], { type: 'application/octet-stream' }));
+                        const saveRes = await fetch('/api/start-training/', { method: 'POST', body: formData });
+                        if (!saveRes.ok) {
+                            const e = await saveRes.json().catch(() => ({}));
+                            throw new Error(e.error || 'Failed to save segment buffer');
+                        }
+                        const saveData = await saveRes.json();
+                        segmentBinPath = saveData.bin_path;
+                    }
+
+                    downloadBtn.textContent = 'Preparing Package...';
                     const response = await fetch('/api/download-package/', {
                         method: 'POST',
                         headers: {
@@ -1426,7 +1468,7 @@ export function showDownloadModal() {
                             segments,
                             models,
                             las_path: window.__currentProjectLAS,
-                            bin_path: window.__currentProjectBIN
+                            bin_path: segmentBinPath  // bin corretto con [segId, classId]
                         })
                     });
 
@@ -1438,7 +1480,7 @@ export function showDownloadModal() {
                     // Handle binary blob
                     const blob = await response.blob();
                     const url = window.URL.createObjectURL(blob);
-                    
+
                     // Extract filename from Content-Disposition if present
                     const disposition = response.headers.get('Content-Disposition');
                     let filename = 'download_package.zip';
@@ -1835,7 +1877,7 @@ export function showLoadModal() {
                     }
                     completeStep(4);
                     console.log("✅ Process complete. Potree cloud loaded.");
-                    
+
                     // Store for download logic
                     window.__currentProjectLAS = lasPath;
                     window.__currentProjectBIN = 'viewer/static/viewer/data/working/features.bin';

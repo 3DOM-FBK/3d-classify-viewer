@@ -2516,6 +2516,10 @@ export async function loadPotree2PointCloud(basePath, scene, options = {}) {
         window.__registerPointCloudInOutline(loader.rootTransform, "Potree 2.0 Cloud");
     }
 
+    if (window.__frameCameraOnMesh) {
+        window.__frameCameraOnMesh(scene.activeCamera, loader.rootTransform);
+    }
+
     console.log(`✅ Potree2Loader ready: ${loader.loadedNodes.size} nodes loaded, ${loader.activeNodes.size} visible`);
     return loader.getRoot();
 }
