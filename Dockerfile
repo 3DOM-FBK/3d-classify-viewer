@@ -80,6 +80,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     add-apt-repository universe && \
     apt-get update && apt-get install -y --no-install-recommends \
     python3.10 python3.10-venv python3-pip \
+    wget curl unzip \
     libgomp1 libomp5 \
     libgl1 libgl1-mesa-glx libglu1-mesa \
     libglib2.0-0 libsm6 libxrender1 libxext6 libx11-6 \
