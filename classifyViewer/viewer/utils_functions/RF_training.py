@@ -19,11 +19,7 @@ import itertools
 import laspy
 import re
 import copy
-
-''' Todo:
-    1) Add the binary case of training a model with a single class vs all the others. 
-    2) Automatic combination of features
-'''
+from scipy.spatial import KDTree
 
 
 def load_features_and_class(filepath):
@@ -328,12 +324,26 @@ def save_model(model, filename):
     with open(filename, 'wb') as out:
         pickle.dump(model, out, pickle.HIGHEST_PROTOCOL)
 
+def get_voxel_size_from_las(filepath, sample_size=10000):
+    with laspy.open(filepath) as fh:
+        las = fh.read()
+        coords = np.vstack((las.x - las.header.offsets[0], 
+                            las.y - las.header.offsets[1], 
+                            las.z - las.header.offsets[2])).T
+
+    # Calcoliamo su TUTTI i punti
+    tree = KDTree(coords)
+    # Attenzione: su dataset molto grandi (10M+ punti) questo potrebbe saturare la RAM
+    distanze, _ = tree.query(coords, k=2)
+    
+    return np.median(distanze[:, 1])
+
     
 def main():
     parser = argparse.ArgumentParser(description='Train the random forest model.')
     parser.add_argument('--selected_features', nargs="+", required = True, help='Selected feature for training')
-    parser.add_argument('--training_filepath', required = True, help='Path to the training file (.txt) [f1, ..., fn, c]')
-    parser.add_argument('--val_filepath', required = True, help='Path to the test file (.txt) [f1, ..., fn, c]')
+    parser.add_argument('--training_filepath', required = True, help='Path to the training file (.las) [f1, ..., fn, c]')
+    parser.add_argument('--val_filepath', required = True, help='Path to the test file (.las) [f1, ..., fn, c]')
     parser.add_argument('--n_jobs', required = True, help='Number of threads used to train the model', type=int)
     parser.add_argument('--n_estimators', required = True, help='Number of trees (e.g. 200)', type=int)
     parser.add_argument('--max_depth', help='Maximum depth of each tree', type=int)
@@ -367,7 +377,10 @@ def main():
 
     print("\nLoading training data...")
     X_train, Y_train, header = read_las_data(training_filepath, class_las_index)
-    
+
+    # Calculate voxel distance
+    suggested_voxel = get_voxel_size_from_las(training_filepath)
+        
     print("\nLoading validation data...")
     X_test, Y_test, _ = read_las_data(val_filepath, class_las_index)
     
@@ -414,17 +427,17 @@ def main():
     else:
         print(f'---> Training time {train_sec} sec')
     
-    print('\nEvaluating on validation set...')
+    # print('\nEvaluating on validation set...')
     # Predict depending on whether we used cuML (GPU) or scikit-learn (CPU)
     if use_gpu and GPU_AVAILABLE and cuRF is not None:
         Y_test_pred = cp.asnumpy(model.predict(cp.asarray(X_test[:, feat_to_use])))
     else:
         Y_test_pred = model.predict(X_test[:, feat_to_use])             # Test the model, using only the specified features
-
     # print(f'\nSaving {output_training_name}')
     # write_classification_las(X_test, Y_test_pred, output_training_name, header)
 
     # Compute metrics
+    print('\nCompute metrics...')
     Precision_pc = precision_score(Y_test, Y_test_pred, average=None)
     Precision = precision_score(Y_test, Y_test_pred, average='weighted')
     Recall_pc = recall_score(Y_test, Y_test_pred, average=None)
@@ -441,9 +454,9 @@ def main():
     metr_min = int(tot_metrics_sec // 60)
     metr_sec = int(tot_metrics_sec % 60)
     if metr_min > 0:
-        print(f'---> Prediction + metrics time: {metr_min} min {metr_sec} sec')
+        print(f'---> Metrics time: {metr_min} min {metr_sec} sec')
     else:
-        print(f'---> Prediction + metrics time {metr_sec} sec')
+        print(f'---> Metrics time {metr_sec} sec')
     
     # Sort features by importance in descending order
     # Try to get feature importances; cuML may expose a similar attribute
@@ -457,15 +470,15 @@ def main():
     sorted_features = sorted(zip(headers, feats), key=lambda x: x[1], reverse=True)
     
     # Print results
-    print('- Confusion matrix:\n{}'.format(confusion_matrix(Y_test, Y_test_pred)))
-    print('- Feature importance:')
+    print('\n- Confusion matrix:\n{}'.format(confusion_matrix(Y_test, Y_test_pred)))
+    print('\n- Feature importance:')
     for name, importance in sorted_features:
         print(f'{name}: {importance:.4f}')
 
     #Print report with results
     report_fname = report_savepath
 
-    print(f'Check the complete report in the folder: {report_fname}')
+    print(f'\nCheck the complete report in the folder: {report_fname}')
     ''' ******************************************************************************************** '''
 
     tot_sec = round(t4 - total_start, 2)
@@ -517,6 +530,7 @@ def main():
     file.write("\n\nFeature importance\n\n")
     for name, importance in sorted_features:
         file.write(f'{name}: {importance:.4f}\n')
+    file.write(f"\n\nVoxel distance value = {suggested_voxel:.4f} \n")
     file.write("\n\nTiming\n\n")
 
     if load_min > 0:
