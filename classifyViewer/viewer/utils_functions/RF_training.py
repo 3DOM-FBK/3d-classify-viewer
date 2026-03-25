@@ -437,7 +437,7 @@ def main():
     # write_classification_las(X_test, Y_test_pred, output_training_name, header)
 
     # Compute metrics
-    print('\nCompute metrics...')
+    print('\nComputing metrics...')
     Precision_pc = precision_score(Y_test, Y_test_pred, average=None)
     Precision = precision_score(Y_test, Y_test_pred, average='weighted')
     Recall_pc = recall_score(Y_test, Y_test_pred, average=None)
@@ -454,9 +454,9 @@ def main():
     metr_min = int(tot_metrics_sec // 60)
     metr_sec = int(tot_metrics_sec % 60)
     if metr_min > 0:
-        print(f'---> Metrics time: {metr_min} min {metr_sec} sec')
+        print(f'---> Computing Metrics time: {metr_min} min {metr_sec} sec')
     else:
-        print(f'---> Metrics time {metr_sec} sec')
+        print(f'---> Computing Metrics time {metr_sec} sec')
     
     # Sort features by importance in descending order
     # Try to get feature importances; cuML may expose a similar attribute
