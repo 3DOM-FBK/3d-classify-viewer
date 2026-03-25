@@ -8,18 +8,13 @@
 // ─────────────────────────────────────────────
 
 const PAGES = [
-    { id: 'home',           label: 'Overview',          icon: '⌂',  section: null },
-    { id: 'getting-started',label: 'Getting Started',   icon: '▶',  section: 'GETTING STARTED' },
-    { id: 'installation',   label: 'Installation',      icon: '⬇',  section: null },
-    { id: 'quickstart',     label: 'Quick Start',       icon: '⚡', section: null },
-    { id: 'interface',      label: 'Interface',         icon: '◫',  section: 'USER GUIDE' },
-    { id: 'load-data',      label: 'Load Data',         icon: '📂', section: null },
-    { id: 'training',       label: 'Training Mode',     icon: '🎯', section: null },
-    { id: 'classify',       label: 'Classify Mode',     icon: '🔬', section: null },
-    { id: 'tools',          label: 'Tools & Selection', icon: '🛠',  section: null },
-    { id: 'export',         label: 'Export Data',       icon: '⬆',  section: 'REFERENCE' },
-    { id: 'shortcuts',      label: 'Keyboard Shortcuts',icon: '⌨',  section: null },
-    { id: 'faq',            label: 'FAQ',               icon: '❓', section: null },
+    { id: 'home',       label: 'Overview',          icon: '⌂',  isSub: false, section: null },
+    { id: 'load-data',  label: 'Loading Data',       icon: '📂', isSub: false, section: 'SECTIONS' },
+    { id: 'training',   label: 'Training Mode',      icon: '🎯', isSub: false, section: null },
+    { id: 'classify',   label: 'Classify Mode',      icon: '🔬', isSub: false, section: null },
+    { id: 'export',     label: 'Export / Download',  icon: '⬆',  isSub: false, section: null },
+    { id: 'tools',      label: 'Tools & Selection',  icon: '🛠',  isSub: false, section: null },
+    { id: 'features',   label: 'Features',           icon: '✦',  isSub: false, section: null },
 ];
 
 // ─────────────────────────────────────────────
@@ -58,7 +53,8 @@ function buildTOC() {
         if (page.section) {
             html += `<div class="toc-section-label">${page.section}</div>`;
         }
-        const isSub = !page.section && PAGES.indexOf(page) > 0;
+        // Sub-items
+        const isSub = page.isSub;
         html += `
             <div class="toc-item ${isSub ? 'sub' : ''}" data-page="${page.id}">
                 <span class="toc-icon">${page.icon}</span>
@@ -100,7 +96,6 @@ function navigateTo(pageId, animate = true) {
     updatePagination();
     updateOutline(pageId);
 
-    // Scroll content to top
     if (pageEl) pageEl.scrollTop = 0;
 }
 
@@ -146,8 +141,9 @@ function pageNext() {
 // Expose for inline onclick
 window.pagePrev = pagePrev;
 window.pageNext = pageNext;
+window.navigateTo = navigateTo;
 
-// Keyboard nav
+// Keyboard nav (arrow keys)
 document.addEventListener('keydown', e => {
     if (e.target.tagName === 'INPUT') return;
     if (e.key === 'ArrowRight' || e.key === 'ArrowDown') pageNext();
@@ -158,7 +154,6 @@ document.addEventListener('keydown', e => {
 //  SEARCH
 // ─────────────────────────────────────────────
 
-// Index: build a simple searchable list from page headings text content
 const SEARCH_INDEX = [];
 
 function buildSearchIndex() {
@@ -166,15 +161,12 @@ function buildSearchIndex() {
         const pageEl = document.getElementById('page-' + page.id);
         if (!pageEl) return;
 
-        // Index the page title itself
         SEARCH_INDEX.push({ text: page.label, pageId: page.id, section: 'Page' });
 
-        // Index all headings
         pageEl.querySelectorAll('h2, h3').forEach(h => {
             SEARCH_INDEX.push({ text: h.textContent.trim(), pageId: page.id, section: page.label });
         });
 
-        // Index paragraph snippets
         pageEl.querySelectorAll('p').forEach(p => {
             const snippet = p.textContent.trim().substring(0, 80);
             if (snippet.length > 20) {
@@ -189,7 +181,6 @@ function setupSearch() {
     const dropdown = document.getElementById('search-dropdown');
     if (!input || !dropdown) return;
 
-    // Build index after DOM is ready
     setTimeout(buildSearchIndex, 200);
 
     input.addEventListener('input', () => {
@@ -234,7 +225,7 @@ function highlight(text, query) {
 }
 
 // ─────────────────────────────────────────────
-//  OUTLINE (right panel — "On This Page")
+//  OUTLINE (right panel)
 // ─────────────────────────────────────────────
 
 function updateOutline(pageId) {
@@ -245,7 +236,10 @@ function updateOutline(pageId) {
     if (!pageEl) { panel.innerHTML = ''; return; }
 
     const headings = pageEl.querySelectorAll('h2, h3');
-    if (!headings.length) { panel.innerHTML = '<div style="font-size:0.75rem;color:var(--text-muted);padding:8px">No sections</div>'; return; }
+    if (!headings.length) {
+        panel.innerHTML = '<div style="font-size:0.75rem;color:var(--text-muted);padding:8px">No sections</div>';
+        return;
+    }
 
     panel.innerHTML = Array.from(headings).map(h => {
         const level = h.tagName === 'H3' ? 'h3' : '';
@@ -266,7 +260,6 @@ function updateOutline(pageId) {
 }
 
 function setupOutlineTracking() {
-    // Track scroll on active page to highlight current section
     document.getElementById('doc-pages')?.addEventListener('scroll', onPageScroll, true);
 }
 
@@ -286,7 +279,7 @@ function onPageScroll(e) {
 }
 
 // ─────────────────────────────────────────────
-//  RESIZER
+//  RESIZER (left sidebar)
 // ─────────────────────────────────────────────
 
 function setupResizer() {
@@ -294,9 +287,7 @@ function setupResizer() {
     const sidebar = document.getElementById('sidebar-toc');
     if (!resizer || !sidebar) return;
 
-    let dragging = false;
-    let startX = 0;
-    let startW = 0;
+    let dragging = false, startX = 0, startW = 0;
 
     resizer.addEventListener('mousedown', e => {
         dragging = true;
@@ -321,9 +312,3 @@ function setupResizer() {
         document.body.style.userSelect = '';
     });
 }
-
-// ─────────────────────────────────────────────
-//  UTILITY: navigate from card clicks
-// ─────────────────────────────────────────────
-
-window.navigateTo = navigateTo;
