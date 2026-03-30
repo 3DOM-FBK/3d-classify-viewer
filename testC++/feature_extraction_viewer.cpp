@@ -762,15 +762,47 @@ void writeToLas(const std::string& outputPath,
     // -------------------------------------------------------
     LasRawInfo srcInfo = readLasRawInfo(inputPath);
 
-    // Dims to exclude from passthrough (handled explicitly below)
-    auto isExcluded = [](const std::string& name) {
+    // Pre-calculate all dimension names that will be WRITTEN by this tool.
+    // Any existing dimension in the source that matches these names will be EXCLUDED from passthrough.
+    auto dimName = [](const std::string& feat, int s) {
+        std::ostringstream ss;
+        ss << std::fixed << std::setprecision(1) << scales[s];
+        std::string r = ss.str();
+        std::replace(r.begin(), r.end(), '.', '_');
+        return feat + "_" + r;
+    };
+
+    std::set<std::string> to_be_written;
+    to_be_written.insert("point_id");
+    to_be_written.insert("pointid");
+    to_be_written.insert("normalx");
+    to_be_written.insert("normal_x");
+    to_be_written.insert("normaly");
+    to_be_written.insert("normal_y");
+    to_be_written.insert("normalz");
+    to_be_written.insert("normal_z");
+    to_be_written.insert("labels");
+    to_be_written.insert("prediction");
+
+    // Add scale-based features to exclusion mask
+    for (const auto& feat : requestedFeatures) {
+        if (AVAILABLE_SCALE_FEATURES.count(feat)) {
+            for (int s = 0; s < scalesCount; s++) {
+                std::string dn = dimName(feat, s);
+                std::transform(dn.begin(), dn.end(), dn.begin(), ::tolower);
+                to_be_written.insert(dn);
+            }
+        } else if (AVAILABLE_SINGLE_FEATURES.count(feat)) {
+            std::string dn = feat;
+            std::transform(dn.begin(), dn.end(), dn.begin(), ::tolower);
+            to_be_written.insert(dn);
+        }
+    }
+
+    auto isExcluded = [&](const std::string& name) {
         std::string lo = name;
         std::transform(lo.begin(), lo.end(), lo.begin(), ::tolower);
-        return lo == "point_id" || lo == "pointid"  ||
-               lo == "normalx"  || lo == "normal_x" ||
-               lo == "normaly"  || lo == "normal_y" ||
-               lo == "normalz"  || lo == "normal_z" ||
-               lo == "labels";
+        return to_be_written.count(lo) > 0;
     };
 
     // Build list of passthrough dims (source extra dims minus excluded)
@@ -826,13 +858,7 @@ void writeToLas(const std::string& outputPath,
     extraOffset += 4;
 
     // 2c. Feature dims (float32)
-    auto dimName = [](const std::string& feat, int s) {
-        std::ostringstream ss;
-        ss << std::fixed << std::setprecision(1) << scales[s];
-        std::string r = ss.str();
-        std::replace(r.begin(), r.end(), '.', '_');
-        return feat + "_" + r;
-    };
+    // (dimName helper moved above)
 
     struct ScaleFeatureDef {
         std::string name;

@@ -151,8 +151,21 @@ static LasInfo readLasInfo(const fs::path& path)
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-static float    readFloat32(const uint8_t* p) { float    v; std::memcpy(&v, p, 4); return v; }
-static uint32_t readUint32 (const uint8_t* p) { uint32_t v; std::memcpy(&v, p, 4); return v; }
+static uint32_t readUint32(const uint8_t* p) { uint32_t v; std::memcpy(&v, p, 4); return v; }
+
+static float readAnyAsFloat(const uint8_t* p, uint8_t type) {
+    switch (type) {
+        case 1:  return (float)(*p);                                     // uint8
+        case 2:  return (float)(*reinterpret_cast<const int8_t*>(p));    // int8
+        case 3:  return (float)(*reinterpret_cast<const uint16_t*>(p));  // uint16
+        case 4:  return (float)(*reinterpret_cast<const int16_t*>(p));   // int16
+        case 5:  return (float)(*reinterpret_cast<const uint32_t*>(p));  // uint32
+        case 6:  return (float)(*reinterpret_cast<const int32_t*>(p));   // int32
+        case 9:  { float v; std::memcpy(&v, p, 4); return v; }           // float32
+        case 10: { double v; std::memcpy(&v, p, 8); return (float)v; }   // float64
+        default: return 0.0f;
+    }
+}
 
 static std::string cleanName(const std::string& s) {
     auto z = s.find('\0');
@@ -190,6 +203,7 @@ static void convert(const fs::path& las_path, const fs::path& out_path)
 
     struct FeatureDef {
         std::string name;
+        uint8_t     data_type;
         int         offset;
     };
     std::vector<FeatureDef> features;
@@ -198,7 +212,7 @@ static void convert(const fs::path& las_path, const fs::path& out_path)
         if (nameIsPointId(d.name)) {
             pid_offset = d.offset;
         } else if (!nameIsExcluded(d.name)) {
-            features.push_back({ cleanName(d.name), d.offset });
+            features.push_back({ cleanName(d.name), d.data_type, d.offset });
         }
     }
 
@@ -260,7 +274,7 @@ static void convert(const fs::path& las_path, const fs::path& out_path)
 
         float* row = data.data() + static_cast<size_t>(pid) * F;
         for (uint32_t fi = 0; fi < F; ++fi)
-            row[fi] = readFloat32(rec + base + features[fi].offset);
+            row[fi] = readAnyAsFloat(rec + base + features[fi].offset, features[fi].data_type);
     }
 
     // ── Compute per-feature min/max ───────────────────────────────────────────
