@@ -68,7 +68,7 @@ console.clear();
 //     BABYLON.VertexBuffer.PositionKind
 // );
 // frameCameraOnMesh(camera, pointCloud);
- 
+
 // importPCButton.addEventListener("click", async () => {
 
 //     // Salva PLY binary
@@ -76,7 +76,7 @@ console.clear();
 
 //     // // Salva TXT ascii
 //     await exportPointCloud(pointCloud, export_folder_path + "c78_exp.txt", "txt", true);
-    
+
 // });
 
 scene.onPointerDown = (evt) => {
@@ -127,8 +127,8 @@ stopGButton.addEventListener("click", async () => {
     // Send request to launch function
     // console.log("Sending request to stop the process...");
     const response = await send_request("stop_process/", "POST");
-    
-    if (response.ok) {  
+
+    if (response.ok) {
         console.log("Process stopped successfully..");
     } else {
         const error = `Error: ${response.statusText}`;
@@ -145,14 +145,14 @@ testGButton.style.width = "10dvh";
 
 
 testGButton.addEventListener("click", async () => {
-    
+
     console.log("Sending request for testing the function...");
 
-    const which_function = "launch_RF_training/";
+    const which_function = "launch_RF_classify/";
     let body = null;
     let file_path = "";
     let use_gpu = false;
-    let selected_features = ['red','green','blue','Omnivariance_0_4','Planarity_0_4','Linearity_0_4','Surface_variation_0_4'];
+    let selected_features = ['red', 'green', 'blue', 'Omnivariance_0_4', 'Planarity_0_4', 'Linearity_0_4', 'Surface_variation_0_4'];
     const folder_path = "/webapp/classifyViewer/viewer/static/viewer/data2/";
 
     switch (which_function) {
@@ -177,27 +177,27 @@ testGButton.addEventListener("click", async () => {
                 max_depth: max_depth,
                 min_samples_split: min_samples_split,
                 max_features: max_features,
-                use_gpu: use_gpu, 
-                selected_features: selected_features, 
+                use_gpu: use_gpu,
+                selected_features: selected_features,
                 training_filepath: training_filepath,
-                val_filepath: val_filepath, 
+                val_filepath: val_filepath,
                 output_training_name: output_training_name,
                 model_savepath: model_savepath
 
             });
             break;
         }
-        case "launch_RF_classify/":{
+        case "launch_RF_classify/": {
             use_gpu = true;
-            const model_savepath = folder_path +"RF/training_using_gaussian/output/model_avt_gaussian.pkl";
-            const test_filepath = folder_path +"RF/training_using_gaussian/dataset/test_avt.las";
-            const output_classify_name = folder_path +"RF/training_using_gaussian/output/avt_gs_predicted.las";
+            const model_savepath = folder_path + "RF/training_using_gaussian/output/model_avt_gaussian.pkl";
+            const test_filepath = folder_path + "RF/training_using_gaussian/dataset/test_avt.las";
+            const output_classify_name = folder_path + "RF/training_using_gaussian/output/avt_gs_predicted.las";
 
             body = JSON.stringify({
-                use_gpu: use_gpu, 
-                selected_features: selected_features, 
-                model_savepath: model_savepath, 
-                test_filepath: test_filepath, 
+                use_gpu: use_gpu,
+                selected_features: selected_features,
+                model_savepath: model_savepath,
+                test_filepath: test_filepath,
                 output_classify_name: output_classify_name
             });
             break;
@@ -239,7 +239,7 @@ testGButton.addEventListener("click", async () => {
             });
             break;
         }
-        case "feature_extraction/":{
+        case "feature_extraction/": {
             // FEATURE EXTRACTION PARAMETERS
 
             let input_filepath = folder_path + "c78_pc.las";
@@ -256,16 +256,16 @@ testGButton.addEventListener("click", async () => {
                 // sampling: sampling // maybe not used
             });
             break;
-            
+
         }
         default:
-            console.error("Unknown function:", which_function); 
+            console.error("Unknown function:", which_function);
     }
-        
+
     // Send request to launch function
     const response = await send_request(which_function, "POST", body);
-    
-    if (response.ok) {  
+
+    if (response.ok) {
         console.log("Function completed successfully.");
     } else {
         const error = `Error: ${response.statusText}`;
@@ -280,14 +280,14 @@ function getCSRFToken() {
 }
 
 
-async function send_request(which_function, method, body=null) {
+async function send_request(which_function, method, body = null) {
     const response = await fetch(which_function, {
-            method: method,
-            headers: {
-                'Content-Type': 'application/json',
-                'X-CSRFToken': getCSRFToken()
-            },
-            body: body
+        method: method,
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken': getCSRFToken()
+        },
+        body: body
     });
     return response;
 }

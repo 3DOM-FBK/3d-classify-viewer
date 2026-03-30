@@ -1,7 +1,7 @@
 from django.shortcuts import render
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
-from .functions import launch_training_RF, launch_classify_RF, subsampling_point_cloud, stop_processes
+from .functions import launch_training_RF, launch_classify_RF, subsampling_point_cloud, stop_processes, get_voxel_size
 from .functions import mesh_to_point_cloud, ply_to_las, feature_extraction, Potree, split_las_by_binary, las_to_feature_bin, extract_segment_las
 import base64
 import os
@@ -64,6 +64,29 @@ def subsample_pc(request):
             return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
 
     return JsonResponse({'status': 'error', 'message': 'Method not allowed'}, status=405) 
+
+@csrf_exempt
+def get_model_voxel_size(request):
+    """Retrieve the voxel distance value from a model's report file."""
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            model_dir = data.get('model_dir', '')
+            if not model_dir:
+                return JsonResponse({"status": 'error', "message": "Missing 'model_dir'."}, status=400)
+            
+            voxel_size = get_voxel_size(model_dir)
+            
+            return JsonResponse({
+                "status": 'success',
+                "voxel_size": voxel_size
+            })
+
+        except Exception as e:
+            print("\n[REQUEST FUNCTION] get_model_voxel_size ERROR " + str(e))
+            return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+
+    return JsonResponse({'status': 'error', 'message': 'Method not allowed'}, status=405)
 
 @csrf_exempt
 def mesh2pc(request):

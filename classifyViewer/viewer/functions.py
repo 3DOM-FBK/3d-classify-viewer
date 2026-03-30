@@ -180,6 +180,39 @@ def subsampling_point_cloud(file_path, voxel_size=0.002):
     
     return output_filepath
 
+def get_voxel_size(model_dir):
+    """
+    Parses the 'Voxel distance value' from report_rt.txt or report.txt
+    inside the given model directory.
+    """
+    # Prefer report_rt.txt as requested, fallback to report.txt
+    report_rt = os.path.join(settings.BASE_DIR, model_dir, "report_rt.txt")
+    report_std = os.path.join(settings.BASE_DIR, model_dir, "report.txt")
+    
+    path = None
+    if os.path.exists(report_rt):
+        path = report_rt
+    elif os.path.exists(report_std):
+        path = report_std
+        
+    if not path:
+        print(f"Warning: No report file found in {model_dir}")
+        return None
+
+    try:
+        with open(path, 'r') as f:
+            content = f.read()
+            # Look for "Voxel distance value = 0.XXXX"
+            import re
+            match = re.search(r"Voxel distance value\s*=\s*([\d\.]+)", content)
+            if match:
+                return float(match.group(1))
+    except Exception as e:
+        print(f"Error reading voxel size from {path}: {e}")
+        
+    return None
+
+
 def mesh_to_point_cloud(mesh_path, out_path, num_points=5000000):
     print("\n[FUNCTION] ---- MESH TO POINT CLOUD -----")
     

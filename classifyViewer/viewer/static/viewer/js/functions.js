@@ -4220,7 +4220,7 @@ export async function showClassifyModal(scene) {
                 const needsSplit = splitValue !== '__full__';
 
                 // ── Read model metadata to get the feature list ────────────────
-                let modelFeatures = [];   // e.g. ["linearity_0_1", "planarity_0_2"]
+                let modelFeatures = [];
                 try {
                     const metaRes = await fetch(`/api/read-file/?path=${encodeURIComponent(modelDir + '/metadata.json')}`);
                     if (metaRes.ok) {
@@ -4236,7 +4236,7 @@ export async function showClassifyModal(scene) {
                     return;
                 }
 
-                // Parse "name_R_R" → base feature names + unique radii
+                // Parse features/radii from model feature names
                 // e.g. "linearity_0_1" → name="linearity", radius=0.1
                 const featureSet = new Set();
                 const radiusSet = new Set();
@@ -4277,14 +4277,21 @@ export async function showClassifyModal(scene) {
                 };
                 footer.appendChild(cancelRunBtn);
 
+                // Step index helpers
+                let stepIdx = 0;
+                const STEP_PREPARE = needsSplit ? stepIdx++ : -1;
+                const STEP_FEAT_EXTRACT = stepIdx++;
+                const STEP_CLASSIFY = stepIdx++;
+                const STEP_POTREE = stepIdx++;
+                const STEP_RELOAD = stepIdx++;
+
                 // Build step list dynamically
                 const STEPS = [
-                    'Calculating Features',
-                    'Generating Feature Bin',
-                    ...(needsSplit ? ['Extracting Points', 'Saving Segment Data', 'Exporting Segment LAS'] : []),
-                    'Classifying Point Cloud',
-                    'Updating Feature Bin',
-                    'Loading in Viewer',
+                    ...(needsSplit ? ['Data Preparation'] : []),
+                    'Feature Extraction',
+                    'Point Cloud Classification',
+                    'Potree Conversion',
+                    'Visualization Update',
                 ];
 
                 const stepList = document.createElement('div');
@@ -4323,69 +4330,17 @@ export async function showClassifyModal(scene) {
                 const CANCELLED = Symbol('CANCELLED');
                 const checkCancelled = () => { if (isCancelled) throw CANCELLED; };
 
-                // Step index helpers
-                const STEP_FEAT_EXTRACT = 0;
-                const STEP_FEAT_BIN = 1;
-                const splitOffset = needsSplit ? 3 : 0;  // 3 split steps or 0
-                const STEP_EXTRACT_PTS = needsSplit ? 2 : -1;
-                const STEP_SAVE_DATA = needsSplit ? 3 : -1;
-                const STEP_EXPORT_LAS = needsSplit ? 4 : -1;
-                const STEP_CLASSIFY = 2 + splitOffset;
-                const STEP_UPDATE_BIN = 3 + splitOffset;
-                const STEP_RELOAD = 4 + splitOffset;
-
                 let currentStepIdx = 0;
                 let testFilepath = 'viewer/static/viewer/data/working/features.las';
 
                 try {
-                    // ── STEP 0: Feature Extraction on full cloud ───────────────
-                    checkCancelled();
-                    currentStepIdx = STEP_FEAT_EXTRACT;
-                    activateStep(currentStepIdx);
-
-                    const featRes = await fetch('/feature_extraction/', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
-                        body: JSON.stringify({
-                            input_filepath: 'viewer/static/viewer/data/working/features.las',
-                            output_filepath: 'viewer/static/viewer/data/working/features.las',
-                            feature_list: featureList,
-                            radius_list: radiusList,
-                        })
-                    });
-                    if (!featRes.ok) {
-                        const e = await featRes.json().catch(() => ({}));
-                        throw new Error(e.message || e.error || 'Feature extraction failed');
-                    }
-                    completeStep(currentStepIdx);
-
-                    // ── STEP 1: Generate Feature Bin (updates viewer colormap) ─
-                    checkCancelled();
-                    currentStepIdx = STEP_FEAT_BIN;
-                    activateStep(currentStepIdx);
-
-                    const binRes1 = await fetch('/las_to_feature_bin/', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
-                        body: JSON.stringify({
-                            las_path: 'viewer/static/viewer/data/working/features.las',
-                            bin_path: 'viewer/static/viewer/data/working/features.bin',
-                        })
-                    });
-                    if (!binRes1.ok) {
-                        const e = await binRes1.json().catch(() => ({}));
-                        throw new Error(e.message || e.error || 'Feature bin generation failed');
-                    }
-                    completeStep(currentStepIdx);
-
-                    // ── STEPS 2-4 (optional): Extract segment LAS ─────────────
+                    // ── STEP (optional): Data Preparation ─────────────────────
                     if (needsSplit) {
-                        const loader = scene.potree2Loader;
-
-                        // STEP 2 — Export annotated segment data
                         checkCancelled();
-                        currentStepIdx = STEP_EXTRACT_PTS;
+                        currentStepIdx = STEP_PREPARE;
                         activateStep(currentStepIdx);
+
+                        const loader = scene.potree2Loader;
                         const segmentMap = {};
                         document.querySelectorAll('.outline-item[data-segment-id]').forEach(item => {
                             const segId = parseInt(item.dataset.segmentId, 10);
@@ -4397,29 +4352,15 @@ export async function showClassifyModal(scene) {
                         const exportResult = await loader.exportAllTrainingData(segmentMap);
                         if (!exportResult || !exportResult.buffer)
                             throw new Error('No points found for the selected segment.');
-                        completeStep(currentStepIdx);
 
-                        // STEP 3 — Save buffer + metadata to server
-                        checkCancelled();
-                        currentStepIdx = STEP_SAVE_DATA;
-                        activateStep(currentStepIdx);
                         const formData = new FormData();
                         formData.append('labels', JSON.stringify({ segments: exportResult.segmentMap, classes: classMap }));
                         formData.append('buffer', new Blob([exportResult.buffer], { type: 'application/octet-stream' }));
                         const saveRes = await fetch('/api/start-training/', { method: 'POST', body: formData });
-                        if (!saveRes.ok) {
-                            const e = await saveRes.json().catch(() => ({}));
-                            throw new Error(e.error || 'Failed to save segment data');
-                        }
                         const saveData = await saveRes.json();
-                        completeStep(currentStepIdx);
 
-                        // STEP 4 — Extract segment points → clean LAS (no labels dim)
-                        checkCancelled();
-                        currentStepIdx = STEP_EXPORT_LAS;
-                        activateStep(currentStepIdx);
                         const segmentOutPath = `${classifyWorkingDir}segment_${splitValue}.las`;
-                        const extractRes = await fetch('/api/extract-segment-las/', {
+                        await fetch('/api/extract-segment-las/', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
                             body: JSON.stringify({
@@ -4429,15 +4370,52 @@ export async function showClassifyModal(scene) {
                                 out_path: segmentOutPath,
                             })
                         });
-                        if (!extractRes.ok) {
-                            const e = await extractRes.json().catch(() => ({}));
-                            throw new Error(e.message || e.error || 'Failed to extract segment LAS');
-                        }
-                        completeStep(currentStepIdx);
                         testFilepath = segmentOutPath;
+                        completeStep(currentStepIdx);
                     }
 
-                    // ── STEP CLASSIFY ─────────────────────────────────────────
+                    // ── STEP: Feature Extraction (includes sampling) ───────────
+                    checkCancelled();
+                    currentStepIdx = STEP_FEAT_EXTRACT;
+                    activateStep(currentStepIdx);
+
+                    // Get voxel size from report
+                    const voxelRes = await fetch('/get_model_voxel_size/', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
+                        body: JSON.stringify({ model_dir: modelDir })
+                    });
+                    const voxelData = await voxelRes.json();
+                    const voxelSize = voxelData.voxel_size || 0;
+
+                    const featRes = await fetch('/feature_extraction/', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
+                        body: JSON.stringify({
+                            input_filepath: testFilepath,
+                            output_filepath: 'viewer/static/viewer/data/working/features.las',
+                            feature_list: featureList,
+                            radius_list: radiusList,
+                            sampling: voxelSize,
+                        })
+                    });
+                    if (!featRes.ok) {
+                        const e = await featRes.json().catch(() => ({}));
+                        throw new Error(e.message || e.error || 'Feature extraction failed');
+                    }
+
+                    await fetch('/las_to_feature_bin/', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
+                        body: JSON.stringify({
+                            las_path: 'viewer/static/viewer/data/working/features.las',
+                            bin_path: 'viewer/static/viewer/data/working/features.bin',
+                        })
+                    });
+
+                    completeStep(currentStepIdx);
+
+                    // ── STEP: Classification ──────────────────────────────────
                     checkCancelled();
                     currentStepIdx = STEP_CLASSIFY;
                     activateStep(currentStepIdx);
@@ -4447,7 +4425,7 @@ export async function showClassifyModal(scene) {
                         headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
                         body: JSON.stringify({
                             model_savepath: modelPath,
-                            test_filepath: testFilepath,
+                            test_filepath: 'viewer/static/viewer/data/working/features.las', // Feature extraction output is our test file now
                             output_classify_name: outputClassifyName,
                             use_gpu: useGpu,
                             selected_features: modelFeatures,
@@ -4457,14 +4435,8 @@ export async function showClassifyModal(scene) {
                         const e = await classifyRes.json().catch(() => ({}));
                         throw new Error(e.message || e.error || 'Classification failed');
                     }
-                    completeStep(currentStepIdx);
 
-                    // ── STEP UPDATE BIN ───────────────────────────────────────
-                    checkCancelled();
-                    currentStepIdx = STEP_UPDATE_BIN;
-                    activateStep(currentStepIdx);
-
-                    const binRes2 = await fetch('/las_to_feature_bin/', {
+                    await fetch('/las_to_feature_bin/', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
                         body: JSON.stringify({
@@ -4472,24 +4444,42 @@ export async function showClassifyModal(scene) {
                             bin_path: 'viewer/static/viewer/data/working/features.bin',
                         })
                     });
-                    if (!binRes2.ok) {
-                        const e = await binRes2.json().catch(() => ({}));
-                        throw new Error(e.message || e.error || 'Feature bin update failed');
-                    }
                     completeStep(currentStepIdx);
 
-                    // ── STEP RELOAD VIEWER ────────────────────────────────────
+                    // ── STEP: Potree Conversion ───────────────────────────────
+                    checkCancelled();
+                    currentStepIdx = STEP_POTREE;
+                    activateStep(currentStepIdx);
+
+                    const potreeRes = await fetch('/potree_converter/', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
+                        body: JSON.stringify({
+                            input_filepath: outputClassifyName,
+                            output_filepath: 'viewer/static/viewer/data/working/potree/',
+                        })
+                    });
+                    if (!potreeRes.ok) throw new Error("Potree conversion failed.");
+                    completeStep(currentStepIdx);
+
+                    // ── STEP: Visualization Update ────────────────────────────
                     checkCancelled();
                     currentStepIdx = STEP_RELOAD;
                     activateStep(currentStepIdx);
                     try {
                         const featureBinLoader = window.__babylonScene?.potree2Loader;
                         if (featureBinLoader) {
+                            // Reload features from bin
                             const featureNames = await featureBinLoader.loadFeatureBin('/static/viewer/data/working/features.bin');
                             window.dispatchEvent(new CustomEvent('feature-bin-loaded', { detail: { names: featureNames } }));
+
+                            // Re-load the entire cloud points from new Potree output
+                            if (window.loadActiveCloud) {
+                                await window.loadActiveCloud('viewer/static/viewer/data/working/potree/metadata.json');
+                            }
                         }
                     } catch (binErr) {
-                        console.warn('⚠️ Feature bin not reloaded in viewer:', binErr.message);
+                        console.warn('⚠️ Visualization update failed:', binErr.message);
                     }
                     completeStep(currentStepIdx);
 
