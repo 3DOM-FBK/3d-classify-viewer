@@ -250,10 +250,31 @@ static void write_segment(const fs::path&              las_path,
     layout->registerDim(pdal::Dimension::Id::ScanDirectionFlag);
     layout->registerDim(pdal::Dimension::Id::EdgeOfFlightLine);
 
+    // POINT_ID — explicitly handled to ensure it is always present
+    pdal::Dimension::Id pointIdSrc = pdal::Dimension::Id::Unknown;
+    for (const auto& dimId : srcView->dims()) {
+        std::string dname = pdal::Dimension::name(dimId);
+        std::transform(dname.begin(), dname.end(), dname.begin(), ::tolower);
+        if (dname == "point_id" || dname == "pointid") {
+            pointIdSrc = dimId;
+            break;
+        }
+    }
+    pdal::Dimension::Id pointIdDst = layout->registerOrAssignDim("POINT_ID", pdal::Dimension::Type::Unsigned32);
+
     // Extra dims — registered with the NAME from VLR and TYPE from VLR
-    std::vector<pdal::Dimension::Id> dstExtraIds(nExtra);
-    for (size_t k = 0; k < nExtra; ++k)
-        dstExtraIds[k] = layout->registerOrAssignDim(vlrExtras[k].name, vlrExtras[k].type);
+    std::vector<pdal::Dimension::Id> dstExtraIds;
+    std::vector<pdal::Dimension::Id> filteredSrcExtraIds;
+    for (size_t k = 0; k < nExtra; ++k) {
+        std::string vname = vlrExtras[k].name;
+        std::string vname_low = vname;
+        std::transform(vname_low.begin(), vname_low.end(), vname_low.begin(), ::tolower);
+        // Skip POINT_ID if it's in vlrExtras to avoid double registration
+        if (vname_low == "point_id" || vname_low == "pointid") continue;
+
+        dstExtraIds.push_back(layout->registerOrAssignDim(vname, vlrExtras[k].type));
+        filteredSrcExtraIds.push_back(srcExtraIds[k]);
+    }
 
     // labels — our new extra dim
     pdal::Dimension::Id dimLabels =
@@ -285,10 +306,15 @@ static void write_segment(const fs::path&              las_path,
         view->setField(pdal::Dimension::Id::ScanDirectionFlag,out_idx, srcView->getFieldAs<uint8_t> (pdal::Dimension::Id::ScanDirectionFlag, i));
         view->setField(pdal::Dimension::Id::EdgeOfFlightLine, out_idx, srcView->getFieldAs<uint8_t> (pdal::Dimension::Id::EdgeOfFlightLine, i));
 
-        // Extra dims — copied by position using srcExtraIds → dstExtraIds
-        for (size_t k = 0; k < nExtra; ++k)
+        // Extra dims — copied by position
+        for (size_t k = 0; k < dstExtraIds.size(); ++k)
             view->setField(dstExtraIds[k], out_idx,
-                           srcView->getFieldAs<double>(srcExtraIds[k], i));
+                           srcView->getFieldAs<double>(filteredSrcExtraIds[k], i));
+
+        if (pointIdSrc != pdal::Dimension::Id::Unknown)
+            view->setField(pointIdDst, out_idx, srcView->getFieldAs<uint32_t>(pointIdSrc, i));
+        else
+            view->setField(pointIdDst, out_idx, (uint32_t)i);
 
         view->setField(dimLabels, out_idx, cls);
 
@@ -378,9 +404,29 @@ static void write_segment_for_classify(const fs::path&              las_path,
     layout->registerDim(pdal::Dimension::Id::ScanDirectionFlag);
     layout->registerDim(pdal::Dimension::Id::EdgeOfFlightLine);
 
-    std::vector<pdal::Dimension::Id> dstExtraIds(nExtra);
-    for (size_t k = 0; k < nExtra; ++k)
-        dstExtraIds[k] = layout->registerOrAssignDim(vlrExtras[k].name, vlrExtras[k].type);
+    // POINT_ID — explicitly handled
+    pdal::Dimension::Id pointIdSrc = pdal::Dimension::Id::Unknown;
+    for (const auto& dimId : srcView->dims()) {
+        std::string dname = pdal::Dimension::name(dimId);
+        std::transform(dname.begin(), dname.end(), dname.begin(), ::tolower);
+        if (dname == "point_id" || dname == "pointid") {
+            pointIdSrc = dimId;
+            break;
+        }
+    }
+    pdal::Dimension::Id pointIdDst = layout->registerOrAssignDim("POINT_ID", pdal::Dimension::Type::Unsigned32);
+
+    std::vector<pdal::Dimension::Id> dstExtraIds;
+    std::vector<pdal::Dimension::Id> filteredSrcExtraIds;
+    for (size_t k = 0; k < nExtra; ++k) {
+        std::string vname = vlrExtras[k].name;
+        std::string vname_low = vname;
+        std::transform(vname_low.begin(), vname_low.end(), vname_low.begin(), ::tolower);
+        if (vname_low == "point_id" || vname_low == "pointid") continue;
+
+        dstExtraIds.push_back(layout->registerOrAssignDim(vname, vlrExtras[k].type));
+        filteredSrcExtraIds.push_back(srcExtraIds[k]);
+    }
 
     // ── Populate PointView — keep all points that belong to seg_id ────────────
     pdal::PointViewPtr view(new pdal::PointView(table));
@@ -407,9 +453,14 @@ static void write_segment_for_classify(const fs::path&              las_path,
         view->setField(pdal::Dimension::Id::ScanDirectionFlag,out_idx, srcView->getFieldAs<uint8_t> (pdal::Dimension::Id::ScanDirectionFlag, i));
         view->setField(pdal::Dimension::Id::EdgeOfFlightLine, out_idx, srcView->getFieldAs<uint8_t> (pdal::Dimension::Id::EdgeOfFlightLine, i));
 
-        for (size_t k = 0; k < nExtra; ++k)
+        for (size_t k = 0; k < dstExtraIds.size(); ++k)
             view->setField(dstExtraIds[k], out_idx,
-                           srcView->getFieldAs<double>(srcExtraIds[k], i));
+                           srcView->getFieldAs<double>(filteredSrcExtraIds[k], i));
+
+        if (pointIdSrc != pdal::Dimension::Id::Unknown)
+            view->setField(pointIdDst, out_idx, srcView->getFieldAs<uint32_t>(pointIdSrc, i));
+        else
+            view->setField(pointIdDst, out_idx, (uint32_t)i);
 
         ++out_idx;
     }
