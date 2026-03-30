@@ -223,9 +223,9 @@ def mesh_to_point_cloud(mesh_path, out_path, num_points=5000000):
     command = ["/webapp/opt/mesh2pc", abs_input, abs_output, str(num_points)]
     job.launch_subprocess(command)
     
-    # Fix LAS header
-    if abs_output and abs_output.lower().endswith(".las") and os.path.exists(abs_output):
-        fix_las_header(abs_output)
+    # # Fix LAS header
+    # if abs_output and abs_output.lower().endswith(".las") and os.path.exists(abs_output):
+    #     fix_las_header(abs_output)
 
 
 def ply_to_las(ply_path, out_path=None):
@@ -238,9 +238,9 @@ def ply_to_las(ply_path, out_path=None):
     command = ["/webapp/opt/ply2las", abs_input, abs_output]
     job.launch_subprocess(command)
 
-    # Fix LAS header
-    if abs_output and abs_output.lower().endswith(".las") and os.path.exists(abs_output):
-        fix_las_header(abs_output)
+    # # Fix LAS header
+    # if abs_output and abs_output.lower().endswith(".las") and os.path.exists(abs_output):
+    #     fix_las_header(abs_output)
 
 def feature_extraction(input_filepath, output_filepath, feature_list, radius_list, sampling=0):
     print("\n[FUNCTION] ---- FEATURE EXTRACTION -----")
@@ -259,9 +259,9 @@ def feature_extraction(input_filepath, output_filepath, feature_list, radius_lis
     
     job.launch_subprocess(command)
 
-    # Fix LAS header
-    if abs_output and abs_output.lower().endswith(".las") and os.path.exists(abs_output):
-        fix_las_header(abs_output)
+    # # Fix LAS header
+    # if abs_output and abs_output.lower().endswith(".las") and os.path.exists(abs_output):
+    #     fix_las_header(abs_output)
 
 
 def Potree(input_filepath, output_filepath):
