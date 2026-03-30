@@ -429,6 +429,14 @@ def read_text_file(request):
             if not os.path.exists(file_path):
                 return JsonResponse({'status': 'error', 'message': 'File not found'}, status=404)
 
+            # If it's a directory, find the first .txt file inside it
+            if os.path.isdir(file_path):
+                txt_files = [f for f in os.listdir(file_path) if f.lower().endswith(".txt")]
+                if txt_files:
+                    file_path = os.path.join(file_path, txt_files[0])
+                else:
+                    return JsonResponse({'status': 'error', 'message': 'No .txt file found in directory'}, status=404)
+
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
 

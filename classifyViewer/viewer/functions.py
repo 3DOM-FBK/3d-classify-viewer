@@ -138,30 +138,6 @@ class JobManager:
 job = JobManager()
 
 
-def fix_las_header(las_path):
-    """
-    Repair the bounding box of a LAS file using laspy.
-    This is necessary because some C++ tools generate points slightly
-    outside the header's declared bounding box, which panics PotreeConverter.
-    """
-    print(f"Fixing LAS header bounding box for {las_path}...")
-    import laspy
-    import numpy as np
-    try:
-        # Legge il file LAS in ram
-        las = laspy.read(las_path)
-        
-        # Aggiorna forzatamente il bounding box leggendo le corrette coordinate min/max dei punti reali
-        las.header.mins = [np.min(las.x), np.min(las.y), np.min(las.z)]
-        las.header.maxs = [np.max(las.x), np.max(las.y), np.max(las.z)]
-        
-        # Sovrascrive il file salvando il nuovo bounding box
-        las.write(las_path)
-        print("Done fixing LAS header.")
-    except Exception as e:
-        import traceback
-        print(f"Warning: could not fix LAS header for {las_path}: {e}")
-        print(traceback.format_exc())
 
 
 def stop_processes():
@@ -185,15 +161,18 @@ def get_voxel_size(model_dir):
     Parses the 'Voxel distance value' from report_rt.txt or report.txt
     inside the given model directory.
     """
-    # Prefer report_rt.txt as requested, fallback to report.txt
-    report_rt = os.path.join(settings.BASE_DIR, model_dir, "report_rt.txt")
-    report_std = os.path.join(settings.BASE_DIR, model_dir, "report.txt")
+    # Get the first .txt file in the model directory (should be the only one)
+    folder_path = os.path.join(settings.BASE_DIR, model_dir)
+    if not os.path.exists(folder_path):
+        print(f"Warning: model directory not found {folder_path}")
+        return None
+
+    txt_files = [f for f in os.listdir(folder_path) if f.lower().endswith(".txt")]
+    if not txt_files:
+        print(f"Warning: No .txt report file found in {model_dir}")
+        return None
     
-    path = None
-    if os.path.exists(report_rt):
-        path = report_rt
-    elif os.path.exists(report_std):
-        path = report_std
+    path = os.path.join(folder_path, txt_files[0])
         
     if not path:
         print(f"Warning: No report file found in {model_dir}")
@@ -222,10 +201,6 @@ def mesh_to_point_cloud(mesh_path, out_path, num_points=5000000):
     
     command = ["/webapp/opt/mesh2pc", abs_input, abs_output, str(num_points)]
     job.launch_subprocess(command)
-    
-    # # Fix LAS header
-    # if abs_output and abs_output.lower().endswith(".las") and os.path.exists(abs_output):
-    #     fix_las_header(abs_output)
 
 
 def ply_to_las(ply_path, out_path=None):
@@ -238,9 +213,6 @@ def ply_to_las(ply_path, out_path=None):
     command = ["/webapp/opt/ply2las", abs_input, abs_output]
     job.launch_subprocess(command)
 
-    # # Fix LAS header
-    # if abs_output and abs_output.lower().endswith(".las") and os.path.exists(abs_output):
-    #     fix_las_header(abs_output)
 
 def feature_extraction(input_filepath, output_filepath, feature_list, radius_list, sampling=0):
     print("\n[FUNCTION] ---- FEATURE EXTRACTION -----")
@@ -259,9 +231,6 @@ def feature_extraction(input_filepath, output_filepath, feature_list, radius_lis
     
     job.launch_subprocess(command)
 
-    # # Fix LAS header
-    # if abs_output and abs_output.lower().endswith(".las") and os.path.exists(abs_output):
-    #     fix_las_header(abs_output)
 
 
 def Potree(input_filepath, output_filepath):

@@ -3022,8 +3022,8 @@ export function showTrainingModal(scene, onStart) {
                         }
                     } catch (e) { console.warn('[Report] Could not load class names:', e); }
 
-                    // ── Read report_RF.txt ──
-                    const reportPath = `${modelDir}report.txt`;
+                    // ── Read report text from first .txt found in modelDir ──
+                    const reportPath = modelDir;
                     let reportContent = null;
                     try {
                         const reportRes = await fetch(`/api/read-file/?path=${encodeURIComponent(reportPath)}`);
