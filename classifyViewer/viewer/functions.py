@@ -146,16 +146,22 @@ def fix_las_header(las_path):
     """
     print(f"Fixing LAS header bounding box for {las_path}...")
     import laspy
+    import numpy as np
     try:
-        # Re-saving with laspy 2.0+ automatically updates mins/maxs in the header
-        with laspy.open(las_path) as f:
-            las = f.read()
-            # Explicit update just in case
-            las.header.update_all()
-            las.write(las_path)
+        # Legge il file LAS in ram
+        las = laspy.read(las_path)
+        
+        # Aggiorna forzatamente il bounding box leggendo le corrette coordinate min/max dei punti reali
+        las.header.mins = [np.min(las.x), np.min(las.y), np.min(las.z)]
+        las.header.maxs = [np.max(las.x), np.max(las.y), np.max(las.z)]
+        
+        # Sovrascrive il file salvando il nuovo bounding box
+        las.write(las_path)
         print("Done fixing LAS header.")
     except Exception as e:
+        import traceback
         print(f"Warning: could not fix LAS header for {las_path}: {e}")
+        print(traceback.format_exc())
 
 
 def stop_processes():

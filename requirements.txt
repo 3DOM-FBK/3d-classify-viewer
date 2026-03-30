@@ -1,6 +1,6 @@
 django
 scikit-learn
-numpy
+numpy<2.0
 pandas
 joblib
 gunicorn
@@ -8,6 +8,5 @@ tqdm
 open3d
 trimesh
 pygltflib
-pathlib
 rtree
 laspy

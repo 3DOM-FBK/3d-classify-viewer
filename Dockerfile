@@ -61,7 +61,7 @@ RUN git clone --depth 1 --branch 2.7.1 https://github.com/PDAL/PDAL.git /tmp/PDA
     rm -rf /tmp/PDAL
 
 # ============================================================
-# STAGE 2 — runtime finale (~20 GB)
+# STAGE 2 — runtime finale
 # Base runtime (no compiler), copia solo i binari compilati.
 # ============================================================
 FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
@@ -80,7 +80,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     add-apt-repository universe && \
     apt-get update && apt-get install -y --no-install-recommends \
     python3.10 python3.10-venv python3-pip \
-    wget curl unzip \
+    wget curl unzip xz-utils \
     libgomp1 libomp5 \
     libgl1 libgl1-mesa-glx libglu1-mesa \
     libglib2.0-0 libsm6 libxrender1 libxext6 libx11-6 \
@@ -89,45 +89,68 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libboost-filesystem1.74.0 libboost-iostreams1.74.0 \
     libboost-program-options1.74.0 libboost-system1.74.0 \
     libboost-thread1.74.0 libboost-regex1.74.0 \
-    # Runtime GDAL/PDAL/PCL deps
-    libflann1.9 libjpeg8 libpng16-16 libtiff5 \
-    libpcl-common1.12 libpcl-io1.12 libpcl-filters1.12 \
-    libpq5 \
+    # Runtime PCL esteso + Librerie Matematiche
+    libpcl-common1.12 libpcl-io1.12 libpcl-filters1.12 libpcl-dev \
+    libqhull-r8.0 libarmadillo10 \
+    # Runtime VTK e Qt5 (richiesti da libpcl_visualization)
+    libqt5opengl5 libqt5widgets5 libqt5gui5 libqt5core5a \
+    # GDAL runtime avanzato (Formati vari, Database, GIS)
+    libproj22 libcurl4 libsqlite3-0 libxml2 zlib1g \
+    libgeotiff5 unixodbc libblosc1 libxerces-c3.2 libheif1 libpoppler118 \
+    libgif7 libcfitsio9 libopenjp2-7 libkmlbase1 libkmldom1 libkmlengine1 \
+    libfyba0 libspatialite7 libmysqlclient21 libfreexl1 \
+    libgeos-c1v5 libhdf4-0-alt \
+    # LASzip runtime (per PDAL)
+    liblaszip8 \
+    # PotreeConverter runtime
+    libtbb2 \
+    # Runtime GMP/MPFR/CGAL — richiesti dal binario mesh2pc
+    libgmp10 libgmpxx4ldbl \
+    libmpfr6 \
+    libcgal-dev \
+    # LLVM libc++ — richiesto dal binario mesh2pc
+    libc++1 libc++abi1 \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Python di default
+# Python di default e upgrade pip
 RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.10 1 && \
     update-alternatives --install /usr/bin/python  python  /usr/bin/python3.10 1 && \
     python3 -m pip install --upgrade pip --no-cache-dir
-
-# ── Dipendenze Python CPU ──────────────────────────────────
-COPY requirements.txt /app/
-RUN pip install --no-cache-dir -r requirements.txt && \
-    find /usr/local/lib/python3.10 -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
-
-# ── PyTorch + CUDA 11.8 (~5 GB) ───────────────────────────
-RUN pip install --no-cache-dir \
-    torch==2.3.0+cu118 torchvision==0.18.0+cu118 \
-    --index-url https://download.pytorch.org/whl/cu118 && \
-    find /usr/local/lib/python3.10 -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
-
-# ── CuPy ──────────────────────────────────────────────────
-RUN pip install --no-cache-dir cupy-cuda11x && \
-    find /usr/local/lib/python3.10 -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
-
-# ── cuML / RAPIDS (~4 GB) ─────────────────────────────────
-# Rimuovi questo blocco se non viene usato in produzione:
-# risparmio ~4 GB sull'immagine finale.
-RUN pip install --no-cache-dir \
-    --extra-index-url https://pypi.anaconda.org/rapidsai-wheels-nightly/simple \
-    cuml-cu11 && \
-    find /usr/local/lib/python3.10 -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 
 # ── Copia binari compilati dallo stage builder ─────────────
 COPY --from=builder /usr/local/lib     /usr/local/lib
 COPY --from=builder /usr/local/bin     /usr/local/bin
 COPY --from=builder /usr/local/share   /usr/local/share
 COPY --from=builder /usr/local/include /usr/local/include
+
+COPY requirements.txt /app/
+
+# ── STEP 1: Pacchetti standard da PyPI ────────────────────
+# --ignore-installed evita il conflitto con pacchetti di sistema installati
+# via apt/distutils (es. blinker 1.4) che pip non può disinstallare.
+RUN python3 -m pip install --no-cache-dir --ignore-installed -r /app/requirements.txt
+
+# ── STEP 2: PyTorch con indice dedicato ───────────────────
+RUN python3 -m pip install --no-cache-dir \
+    torch==2.3.0+cu118 \
+    torchvision==0.18.0+cu118 \
+    --index-url https://download.pytorch.org/whl/cu118
+
+# ── STEP 3: CuPy e RAPIDS (indice Anaconda) ───────────────
+# Separato da Torch per evitare conflitti di risoluzione delle dipendenze.
+RUN python3 -m pip install --no-cache-dir \
+    cupy-cuda11x \
+    cuml-cu11 \
+    --extra-index-url https://pypi.anaconda.org/rapidsai-wheels-nightly/simple
+
+# Pulisce cache bytecode
+RUN find /usr/local/lib/python3.10 -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+
+# Aggiorna cache librerie dinamiche
+# Rimuoviamo la liblaszip custom (manda in crash Potree) e usiamo quella di sistema
+RUN rm -f /usr/local/lib/liblaszip* && \
+    ln -s /usr/lib/x86_64-linux-gnu/liblaszip.so.8 /usr/local/lib/liblaszip.so && \
+    echo "/usr/local/lib" > /etc/ld.so.conf.d/local.conf && ldconfig
 
 # ── Open3D precompilata ────────────────────────────────────
 RUN wget -q https://github.com/isl-org/Open3D/releases/download/v0.19.0/open3d-devel-linux-x86_64-cxx11-abi-0.19.0.tar.xz && \
@@ -158,6 +181,6 @@ WORKDIR /webapp
 
 EXPOSE 8000
 
-# # Gunicorn — modifica classifyViewer.wsgi se il modulo wsgi è diverso
+# Gunicorn — modifica classifyViewer.wsgi se il modulo wsgi è diverso
 # CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "3", \
 #     "--timeout", "120", "classifyViewer.wsgi:application"]

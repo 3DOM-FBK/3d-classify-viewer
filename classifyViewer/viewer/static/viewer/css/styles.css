@@ -863,7 +863,7 @@ select.property-input option {
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    margin-left: 10px;
+    /* margin-left: 10px; */
     padding-right: 0px;
     padding: 6px 8px;
     border-radius: 6px;
