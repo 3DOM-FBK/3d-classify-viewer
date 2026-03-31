@@ -177,7 +177,7 @@ RUN echo "/usr/local/lib" > /etc/ld.so.conf.d/local.conf && ldconfig
 COPY classifyViewer/ /webapp/classifyViewer/
 COPY opt/            /webapp/opt/
 
-WORKDIR /webapp
+WORKDIR /webapp/classifyViewer
 
 EXPOSE 8000
 

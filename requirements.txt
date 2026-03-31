@@ -1,6 +1,6 @@
 django
 scikit-learn
-numpy<2.0
+numpy==2.2.6
 pandas
 joblib
 gunicorn
