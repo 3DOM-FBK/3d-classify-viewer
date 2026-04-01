@@ -1,62 +1,386 @@
 #include <open3d/Open3D.h>
 #include <iostream>
 #include <string>
+#include <vector>
+#include <fstream>
+#include <cmath>
+#include <algorithm>
+#include <cstring>
 
-std::string subsample_pc(const std::string& file_path, double voxel_size) {
-    std::cout << "Loading file for downsampling in C++: " << file_path << std::endl;
+// ============================================================
+// Read/Write helpers
+// ============================================================
+template<typename T>
+void write_val(std::ofstream& f, T val) {
+    f.write(reinterpret_cast<const char*>(&val), sizeof(T));
+}
+template<typename T>
+T read_val(std::ifstream& f) {
+    T val;
+    f.read(reinterpret_cast<char*>(&val), sizeof(T));
+    return val;
+}
+void skip(std::ifstream& f, int n) {
+    f.seekg(n, std::ios::cur);
+}
+void write_str(std::ofstream& f, const char* s, int len) {
+    std::vector<char> buf(len, 0);
+    int slen = (int)strlen(s);
+    memcpy(buf.data(), s, std::min(slen, len));
+    f.write(buf.data(), len);
+}
+void write_extra_bytes_record(std::ofstream& f, const char* name, const char* description) {
+    write_val<uint8_t>(f, 0); write_val<uint8_t>(f, 0);
+    write_val<uint8_t>(f, 9); write_val<uint8_t>(f, 0);
+    write_str(f, name, 32);
+    for (int i = 0; i < 4;  i++) write_val<uint8_t>(f, 0);
+    for (int i = 0; i < 72; i++) write_val<uint8_t>(f, 0);
+    for (int i = 0; i < 48; i++) write_val<uint8_t>(f, 0);
+    write_str(f, description, 32);
+}
+void write_extra_bytes_record_uint32(std::ofstream& f, const char* name, const char* description) {
+    write_val<uint8_t>(f, 0); write_val<uint8_t>(f, 0);
+    write_val<uint8_t>(f, 6); write_val<uint8_t>(f, 0);
+    write_str(f, name, 32);
+    for (int i = 0; i < 4;  i++) write_val<uint8_t>(f, 0);
+    for (int i = 0; i < 72; i++) write_val<uint8_t>(f, 0);
+    for (int i = 0; i < 48; i++) write_val<uint8_t>(f, 0);
+    write_str(f, description, 32);
+}
 
-    auto pcd = std::make_shared<open3d::geometry::PointCloud>();
-    if (!open3d::io::ReadPointCloud(file_path, *pcd)) {
-        throw std::runtime_error("Failed to read point cloud: " + file_path);
+// ============================================================
+// read_las — legge header sequenzialmente (niente seekg intermedi)
+// LAS 1.2, Point Format 3 + extra bytes NormalX/Y/Z + POINT_ID
+// ============================================================
+struct LasData {
+    std::vector<Eigen::Vector3d> points;
+    std::vector<Eigen::Vector3d> colors;
+    std::vector<Eigen::Vector3d> normals;
+    bool has_colors  = false;
+    bool has_normals = false;
+};
+
+LasData read_las(const std::string& path) {
+    LasData data;
+    std::ifstream f(path, std::ios::binary);
+    if (!f) throw std::runtime_error("Cannot open: " + path);
+
+    // Leggi header sequenzialmente seguendo la spec LAS 1.2
+    // offset 0
+    char sig[4]; f.read(sig, 4);
+    if (std::string(sig, 4) != "LASF")
+        throw std::runtime_error("Not a valid LAS file: " + path);
+
+    // offset 4
+    skip(f, 2);  // file_source_id
+    skip(f, 2);  // global_encoding
+    skip(f, 4);  // project_id_1
+    skip(f, 2);  // project_id_2
+    skip(f, 2);  // project_id_3
+    skip(f, 8);  // project_id_4
+    skip(f, 1);  // version_major
+    skip(f, 1);  // version_minor
+    skip(f, 32); // system_identifier
+    skip(f, 32); // generating_software
+    skip(f, 2);  // file_creation_day
+    skip(f, 2);  // file_creation_year
+    // offset 94
+    uint16_t header_size    = read_val<uint16_t>(f); // 94
+    uint32_t offset_to_data = read_val<uint32_t>(f); // 96
+    skip(f, 4);  // num_vlrs                          // 100
+    uint8_t  point_format   = read_val<uint8_t>(f);  // 104
+    uint16_t point_length   = read_val<uint16_t>(f); // 105
+    uint32_t num_points     = read_val<uint32_t>(f); // 107
+    skip(f, 20); // num_points_by_return (5*4)        // 111
+    // offset 131
+    double scale_x = read_val<double>(f); // 131
+    double scale_y = read_val<double>(f); // 139
+    double scale_z = read_val<double>(f); // 147
+    double off_x   = read_val<double>(f); // 155
+    double off_y   = read_val<double>(f); // 163
+    double off_z   = read_val<double>(f); // 171
+    // skip max/min (6*8=48 bytes)        // 179
+    skip(f, 48);
+    // offset 227 = fine header
+
+    // extra bytes = point_length - 34 (base format 3)
+    int extra_size = (int)point_length - 34;
+    // 12 (normali) + 4 (POINT_ID) = 16 → ha normali
+    // 4 (solo POINT_ID) → no normali
+    bool has_normals_in_file = (extra_size >= 16);
+    bool has_point_id        = (extra_size >= 4);
+
+    data.has_colors  = true;
+    data.has_normals = has_normals_in_file;
+
+    std::cout << "  LAS header: " << num_points << " points"
+              << "  format=" << (int)point_format
+              << "  point_length=" << point_length
+              << "  extra=" << extra_size
+              << "  offset_to_data=" << offset_to_data
+              << "  scale=(" << scale_x << "," << scale_y << "," << scale_z << ")"
+              << "  offset=(" << off_x << "," << off_y << "," << off_z << ")"
+              << std::endl;
+
+    // Vai direttamente ai point records
+    f.seekg(offset_to_data);
+
+    data.points.resize(num_points);
+    data.colors.resize(num_points);
+    if (has_normals_in_file) data.normals.resize(num_points, {0,0,0});
+
+    for (uint32_t i = 0; i < num_points; ++i) {
+        // XYZ int32 → double
+        int32_t ix = read_val<int32_t>(f);
+        int32_t iy = read_val<int32_t>(f);
+        int32_t iz = read_val<int32_t>(f);
+        data.points[i] = {
+            ix * scale_x + off_x,
+            iy * scale_y + off_y,
+            iz * scale_z + off_z
+        };
+        skip(f, 2); // intensity
+        skip(f, 1); // return bits
+        skip(f, 1); // classification
+        skip(f, 1); // scan angle
+        skip(f, 1); // user data
+        skip(f, 2); // point source ID
+        skip(f, 8); // GPS time
+        // RGB uint16 → [0,1]
+        uint16_t r = read_val<uint16_t>(f);
+        uint16_t g = read_val<uint16_t>(f);
+        uint16_t b = read_val<uint16_t>(f);
+        data.colors[i] = { r / 65535.0, g / 65535.0, b / 65535.0 };
+        // Extra bytes
+        if (has_normals_in_file) {
+            float nx = read_val<float>(f);
+            float ny = read_val<float>(f);
+            float nz = read_val<float>(f);
+            data.normals[i] = { (double)nx, (double)ny, (double)nz };
+        }
+        if (has_point_id) {
+            skip(f, 4); // POINT_ID
+        }
     }
+
+    f.close();
+    return data;
+}
+
+// ============================================================
+// write_las
+// ============================================================
+void write_las(const std::string& out_file,
+               const std::vector<Eigen::Vector3d>& points,
+               const std::vector<Eigen::Vector3d>& colors,
+               const std::vector<Eigen::Vector3d>& normals,
+               bool has_colors,
+               bool has_normals)
+{
+    std::ofstream f(out_file, std::ios::binary);
+    if (!f) { std::cerr << "Cannot open: " << out_file << std::endl; return; }
+
+    uint32_t n = (uint32_t)points.size();
+    double min_x = 1e18, min_y = 1e18, min_z = 1e18;
+    double max_x = -1e18, max_y = -1e18, max_z = -1e18;
+    for (auto& p : points) {
+        min_x = std::min(min_x, p[0]); max_x = std::max(max_x, p[0]);
+        min_y = std::min(min_y, p[1]); max_y = std::max(max_y, p[1]);
+        min_z = std::min(min_z, p[2]); max_z = std::max(max_z, p[2]);
+    }
+
+    double scale_xyz = 0.0001;
+    uint32_t extra_bytes_payload = 0;
+    if (has_normals) extra_bytes_payload += 3 * 192;
+    extra_bytes_payload += 192; // POINT_ID
+    uint16_t header_size    = 227;
+    uint32_t vlr_total      = 54 + extra_bytes_payload;
+    uint32_t offset_to_data = header_size + vlr_total;
+    uint16_t point_data_length = 34;
+    if (has_normals) point_data_length += 12;
+    point_data_length += 4; // POINT_ID
+
+    write_str(f, "LASF", 4);
+    write_val<uint16_t>(f, 0); write_val<uint16_t>(f, 0);
+    write_val<uint32_t>(f, 0); write_val<uint16_t>(f, 0); write_val<uint16_t>(f, 0);
+    for (int i = 0; i < 8; i++) write_val<uint8_t>(f, 0);
+    write_val<uint8_t>(f, 1); write_val<uint8_t>(f, 2);
+    write_str(f, "OTHER", 32);
+    write_str(f, "subsample_cpp", 32);
+    write_val<uint16_t>(f, 0); write_val<uint16_t>(f, 0);
+    write_val<uint16_t>(f, header_size);
+    write_val<uint32_t>(f, offset_to_data);
+    write_val<uint32_t>(f, 1);
+    write_val<uint8_t>(f, 3);
+    write_val<uint16_t>(f, point_data_length);
+    write_val<uint32_t>(f, n); write_val<uint32_t>(f, n);
+    for (int i = 0; i < 4; i++) write_val<uint32_t>(f, 0);
+    write_val<double>(f, scale_xyz); write_val<double>(f, scale_xyz); write_val<double>(f, scale_xyz);
+    write_val<double>(f, 0.0); write_val<double>(f, 0.0); write_val<double>(f, 0.0);
+    write_val<double>(f, max_x); write_val<double>(f, min_x);
+    write_val<double>(f, max_y); write_val<double>(f, min_y);
+    write_val<double>(f, max_z); write_val<double>(f, min_z);
+
+    write_val<uint16_t>(f, 0);
+    write_str(f, "LASF_Spec", 16);
+    write_val<uint16_t>(f, 4);
+    write_val<uint16_t>(f, (uint16_t)extra_bytes_payload);
+    write_str(f, "Extra Bytes Record", 32);
+    if (has_normals) {
+        write_extra_bytes_record(f, "NormalX", "Normal X");
+        write_extra_bytes_record(f, "NormalY", "Normal Y");
+        write_extra_bytes_record(f, "NormalZ", "Normal Z");
+    }
+    write_extra_bytes_record_uint32(f, "POINT_ID", "Point ID");
+
+    for (uint32_t i = 0; i < n; ++i) {
+        write_val<int32_t>(f, (int32_t)std::round(points[i][0] / scale_xyz));
+        write_val<int32_t>(f, (int32_t)std::round(points[i][1] / scale_xyz));
+        write_val<int32_t>(f, (int32_t)std::round(points[i][2] / scale_xyz));
+        write_val<uint16_t>(f, 0); write_val<uint8_t>(f, 0); write_val<uint8_t>(f, 0);
+        write_val<uint8_t>(f, 0);  write_val<uint8_t>(f, 0); write_val<uint16_t>(f, 0);
+        write_val<double>(f, 0.0);
+        if (has_colors) {
+            write_val<uint16_t>(f, (uint16_t)(std::clamp(colors[i][0], 0.0, 1.0) * 65535));
+            write_val<uint16_t>(f, (uint16_t)(std::clamp(colors[i][1], 0.0, 1.0) * 65535));
+            write_val<uint16_t>(f, (uint16_t)(std::clamp(colors[i][2], 0.0, 1.0) * 65535));
+        } else {
+            write_val<uint16_t>(f, 0); write_val<uint16_t>(f, 0); write_val<uint16_t>(f, 0);
+        }
+        if (has_normals) {
+            write_val<float>(f, (float)normals[i][0]);
+            write_val<float>(f, (float)normals[i][1]);
+            write_val<float>(f, (float)normals[i][2]);
+        }
+        write_val<uint32_t>(f, i);
+    }
+    f.close();
+}
+
+// ============================================================
+// Estensione
+// ============================================================
+std::string get_extension(const std::string& path) {
+    size_t pos = path.rfind('.');
+    if (pos == std::string::npos) return "";
+    std::string ext = path.substr(pos + 1);
+    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+    return ext;
+}
+
+// ============================================================
+// Subsample PLY → PLY (invariato)
+// ============================================================
+std::string subsample_ply(const std::string& file_path, double voxel_size) {
+    std::cout << "Loading PLY: " << file_path << std::endl;
+    auto pcd = std::make_shared<open3d::geometry::PointCloud>();
+    if (!open3d::io::ReadPointCloud(file_path, *pcd))
+        throw std::runtime_error("Failed to read: " + file_path);
     std::cout << "Original Points N: " << pcd->points_.size() << std::endl;
 
     auto pcd_down = pcd->VoxelDownSample(voxel_size);
 
-    // Logica cm/mm identica al Python
     int voxel_size_cm = (int)(voxel_size * 100);
     int voxel_size_mm = (int)(voxel_size * 1000);
-
     std::string suffix;
     if (voxel_size_cm >= 1) {
-        std::cout << "Points N after voxel_down_sample ("
-                  << voxel_size_cm << " cm): "
+        std::cout << "Points N after voxel_down_sample (" << voxel_size_cm << " cm): "
                   << pcd_down->points_.size() << std::endl;
         suffix = "_" + std::to_string(voxel_size_cm) + "cm.ply";
     } else {
-        std::cout << "Points N after voxel_down_sample ("
-                  << voxel_size_mm << " mm): "
+        std::cout << "Points N after voxel_down_sample (" << voxel_size_mm << " mm): "
                   << pcd_down->points_.size() << std::endl;
         suffix = "_" + std::to_string(voxel_size_mm) + "mm.ply";
     }
 
-    // Costruzione output path
-    std::string output_filepath;
     size_t pos = file_path.rfind(".ply");
-    if (pos == std::string::npos) {
-        output_filepath = file_path + suffix;
-    } else {
-        output_filepath = file_path.substr(0, pos) + suffix;
-    }
+    std::string out = (pos == std::string::npos)
+                      ? file_path + suffix
+                      : file_path.substr(0, pos) + suffix;
 
-    if (!open3d::io::WritePointCloud(output_filepath, *pcd_down)) {
-        throw std::runtime_error("Failed to write point cloud: " + output_filepath);
-    }
+    if (!open3d::io::WritePointCloud(out, *pcd_down))
+        throw std::runtime_error("Failed to write: " + out);
 
-    std::cout << "Subsampled point cloud saved to: " << output_filepath << std::endl;
-    return output_filepath;
+    std::cout << "Subsampled point cloud saved to: " << out << std::endl;
+    return out;
 }
 
+// ============================================================
+// Subsample LAS → LAS
+// ============================================================
+std::string subsample_las(const std::string& file_path, double voxel_size) {
+    std::cout << "Loading LAS: " << file_path << std::endl;
+
+    LasData las_data = read_las(file_path);
+    std::cout << "Original Points N: " << las_data.points.size() << std::endl;
+
+    auto pcd = std::make_shared<open3d::geometry::PointCloud>();
+    pcd->points_ = las_data.points;
+    if (las_data.has_colors) pcd->colors_ = las_data.colors;
+
+    auto pcd_down = pcd->VoxelDownSample(voxel_size);
+
+    int voxel_size_cm = (int)(voxel_size * 100);
+    int voxel_size_mm = (int)(voxel_size * 1000);
+    std::string suffix;
+    if (voxel_size_cm >= 1) {
+        std::cout << "Points N after voxel_down_sample (" << voxel_size_cm << " cm): "
+                  << pcd_down->points_.size() << std::endl;
+        suffix = "_" + std::to_string(voxel_size_cm) + "cm";
+    } else {
+        std::cout << "Points N after voxel_down_sample (" << voxel_size_mm << " mm): "
+                  << pcd_down->points_.size() << std::endl;
+        suffix = "_" + std::to_string(voxel_size_mm) + "mm";
+    }
+
+    size_t pos = file_path.rfind(".las");
+    std::string out = (pos == std::string::npos)
+                      ? file_path + suffix + ".las"
+                      : file_path.substr(0, pos) + suffix + ".las";
+
+    bool has_colors = pcd_down->HasColors();
+
+    std::cout << "Computing normals..." << std::endl;
+    pcd_down->EstimateNormals(open3d::geometry::KDTreeSearchParamHybrid(0.02, 30));
+    pcd_down->OrientNormalsTowardsCameraLocation();
+    bool has_normals = pcd_down->HasNormals();
+
+    for (auto& n : pcd_down->normals_) {
+        if (std::isnan(n[0]) || std::isnan(n[1]) || std::isnan(n[2]))
+            n = {0.0, 0.0, 0.0};
+    }
+
+    write_las(out, pcd_down->points_, pcd_down->colors_, pcd_down->normals_,
+              has_colors, has_normals);
+
+    std::cout << "Subsampled point cloud saved to: " << out << std::endl;
+    return out;
+}
+
+// ============================================================
+// main
+// ============================================================
 int main(int argc, char* argv[]) {
     try {
         if (argc < 2) {
-            std::cerr << "Usage: " << argv[0] << " <file_path> [voxel_size]" << std::endl;
+            std::cerr << "Usage: " << argv[0] << " <file.ply|file.las> [voxel_size]" << std::endl;
             return 1;
         }
         std::string file_path = argv[1];
         double voxel_size = (argc >= 3) ? std::stod(argv[2]) : 0.002;
 
-        std::string output = subsample_pc(file_path, voxel_size);
+        std::string ext = get_extension(file_path);
+        std::string output;
+
+        if (ext == "ply") {
+            output = subsample_ply(file_path, voxel_size);
+        } else if (ext == "las") {
+            output = subsample_las(file_path, voxel_size);
+        } else {
+            std::cerr << "ERROR: unsupported format '" << ext << "' (use .ply or .las)" << std::endl;
+            return 1;
+        }
+
         std::cout << output << std::endl;
         return 0;
     }
