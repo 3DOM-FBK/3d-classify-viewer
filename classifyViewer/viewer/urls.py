@@ -1,6 +1,6 @@
 from django.urls import path
 from . import views
-from .request_functions import save_file, launch_RF_training, launch_RF_classify, subsample_pc, stop_process, get_model_voxel_size
+from .request_functions import save_file, launch_RF_training, launch_RF_classify, subsample_pc, stop_process, get_model_voxel_size, checking_point_id
 from .request_functions import mesh2pc, ply2las, feat_extraction, potree_converter, _split_las_by_binary, las_to_feature_bin_view, read_text_file, model_exists, models_list, delete_model, extract_segment_las_view
 
 
@@ -21,6 +21,7 @@ urlpatterns = [
     path("get_model_voxel_size/", get_model_voxel_size),
     path("mesh2pc/", mesh2pc),
     path("ply2las/", ply2las),
+    path("check_point_id/", checking_point_id),
     path("feature_extraction/", feat_extraction), 
     path("potree_converter/", potree_converter),
     path("split_las_by_binary/", _split_las_by_binary),

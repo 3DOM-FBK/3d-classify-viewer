@@ -1,7 +1,7 @@
 from django.shortcuts import render
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
-from .functions import launch_training_RF, launch_classify_RF, subsampling_point_cloud, stop_processes, get_voxel_size
+from .functions import launch_training_RF, launch_classify_RF, subsampling_point_cloud, stop_processes, get_voxel_size, check_point_id
 from .functions import mesh_to_point_cloud, ply_to_las, feature_extraction, Potree, split_las_by_binary, las_to_feature_bin, extract_segment_las
 import base64
 import os
@@ -107,6 +107,28 @@ def mesh2pc(request):
 
         except Exception as e:
             print("\n[REQUEST FUNCTION] Mesh to Point Cloud ERROR " + str(e))
+            print(traceback.format_exc())
+            return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+
+    return JsonResponse({'status': 'error', 'message': 'Method not allowed'}, status=405) 
+
+@csrf_exempt
+def checking_point_id(request):
+    if request.method == 'POST':
+        try:
+            print("\n[REQUEST FUNCTION] CHECK POINT ID:", request.body[:200]) 
+            data = json.loads(request.body)
+
+            input_path = data['input_path']
+            output_path = data['output_path']
+
+            check_point_id(input_path, out_path=output_path)
+            print("\n")
+
+            return JsonResponse({"status": 'success', "message": "CHECK POINT ID completed."})
+
+        except Exception as e:
+            print("\n[REQUEST FUNCTION] CHECK POINT ID ERROR " + str(e))
             print(traceback.format_exc())
             return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
 

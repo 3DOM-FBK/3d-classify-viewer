@@ -213,6 +213,15 @@ def ply_to_las(ply_path, out_path=None):
     command = ["/webapp/opt/ply2las", abs_input, abs_output]
     job.launch_subprocess(command)
 
+def check_point_id(in_path, out_path=None):
+    print("\n[FUNCTION] ---- CHECK POINT ID -----")
+    
+    # Make paths absolute
+    abs_input = os.path.abspath(os.path.join(settings.BASE_DIR, in_path))
+    abs_output = os.path.abspath(os.path.join(settings.BASE_DIR, out_path)) if out_path else None
+    
+    command = ["/webapp/opt/check_point_id", abs_input, abs_output]
+    job.launch_subprocess(command)
 
 def feature_extraction(input_filepath, output_filepath, feature_list, radius_list, sampling=0):
     print("\n[FUNCTION] ---- FEATURE EXTRACTION -----")

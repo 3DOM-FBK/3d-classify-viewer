@@ -148,7 +148,7 @@ testGButton.addEventListener("click", async () => {
 
     console.log("Sending request for testing the function...");
 
-    const which_function = "launch_RF_classify/";
+    const which_function = "check_point_id/";
     let body = null;
     let file_path = "";
     let use_gpu = false;
@@ -236,6 +236,17 @@ testGButton.addEventListener("click", async () => {
             body = JSON.stringify({
                 file_path: file_path,
                 out_path: out_path
+            });
+            break;
+        }
+        case "check_point_id/": {
+            // CHECK ID PARAMETERS
+            file_path = folder_path + "c78_no_p_id.las";
+            const out_path = folder_path + "c78_point_id.las";
+
+            body = JSON.stringify({
+                input_path: file_path,
+                output_path: out_path
             });
             break;
         }
