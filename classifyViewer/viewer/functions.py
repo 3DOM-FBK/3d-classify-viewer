@@ -257,17 +257,17 @@ def launch_training_RF(data):
     print("\n[FUNCTION] ---- TRAINING RANDOM FOREST -----")
 
     selected_features = data.get('selected_features', [])
-    training_filepath = data.get('training_filepath', '')
-    val_filepath = data.get('val_filepath', '')
+    training_filepath = os.path.abspath(os.path.join(settings.BASE_DIR, data.get('training_filepath', ''))) 
+    val_filepath = os.path.abspath(os.path.join(settings.BASE_DIR, data.get('val_filepath', ''))) 
     n_jobs = data.get('n_jobs', -1)
     n_estimators = data.get('n_estimators', data.get('nr_estimators', 100))
     max_depth = data.get('max_depth', None)
     min_samples_split = data.get('min_samples_split', 2)
     max_features = data.get('max_features', 'sqrt')
     use_gpu = data.get('use_gpu', False)
-    output_training_name = data.get('output_training_name', 'model')
-    model_savepath = data.get('model_savepath', '')
-    report_savepath = data.get('report_savepath', os.path.join(os.path.dirname(model_savepath), 'report_RF.txt') if model_savepath else '')
+    output_training_name = os.path.abspath(os.path.join(settings.BASE_DIR, data.get('output_training_name', 'model')))
+    model_savepath = os.path.abspath(os.path.join(settings.BASE_DIR, data.get('model_savepath', '')))
+    report_savepath = os.path.abspath(os.path.join(settings.BASE_DIR, data.get('report_savepath', os.path.join(os.path.dirname(model_savepath), 'report_RF.txt') if model_savepath else '')))
 
     script_path = os.path.abspath(os.path.join(settings.BASE_DIR, "viewer/utils_functions/RF_training.py"))
 
@@ -293,9 +293,9 @@ def launch_training_RF(data):
 def launch_classify_RF(data):
     print("\n[FUNCTION] ---- CLASSIFYING RANDOM FOREST -----")
     
-    model_savepath = data["model_savepath"]
-    test_filepath = data["test_filepath"]
-    output_classify_name = data["output_classify_name"]
+    model_savepath = os.path.abspath(os.path.join(settings.BASE_DIR, data["model_savepath"]))
+    test_filepath = os.path.abspath(os.path.join(settings.BASE_DIR, data["test_filepath"]))
+    output_classify_name = os.path.abspath(os.path.join(settings.BASE_DIR, data["output_classify_name"]))
     use_gpu = data['use_gpu']
     selected_features = data["selected_features"]
     
