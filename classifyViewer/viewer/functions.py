@@ -6,14 +6,10 @@ import threading
 import time
 from tqdm import tqdm 
 from django.conf import settings
-
-
 import laspy
 import json
 from pathlib import Path
-import threading
-import signal
-from django.conf import settings
+
 
 
 def launch_subprocess(command):
@@ -145,16 +141,16 @@ def stop_processes():
 
     job.stop()
 
-def subsampling_point_cloud(file_path, voxel_size=0.002):
+def subsampling_point_cloud(file_path, out_path, voxel_size=0.002):
     print("\n[FUNCTION] ---- SUBSAMPLING POINT CLOUD -----")
     
-    # Make paths absolute relative to project root
+    # Make paths absolute
     abs_input = os.path.abspath(os.path.join(settings.BASE_DIR, file_path))
+    abs_output = os.path.abspath(os.path.join(settings.BASE_DIR, out_path)) if out_path else None
     
-    command = ["/webapp/opt/subsample_pc", abs_input, str(voxel_size)]
-    output_filepath = job.launch_subprocess(command)
+    command = ["/webapp/opt/subsample_pc", abs_input, abs_output, str(voxel_size)]
+    job.launch_subprocess(command)
     
-    return output_filepath
 
 def get_voxel_size(model_dir):
     """

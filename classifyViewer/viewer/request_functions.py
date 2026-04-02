@@ -51,9 +51,10 @@ def subsample_pc(request):
             data = json.loads(request.body)
 
             file_path = data['file_path']
+            out_path = data['out_path']
             voxel_size = data['voxel_size'] 
 
-            output_file_path = subsampling_point_cloud(file_path, voxel_size)
+            output_file_path = subsampling_point_cloud(file_path, out_path, voxel_size)
             print("\n")
 
             return JsonResponse({"status": 'success', "message": "Subsampling completed.", "output_file_path": output_file_path})

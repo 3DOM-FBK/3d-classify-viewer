@@ -271,7 +271,7 @@ std::string get_extension(const std::string& path) {
 // ============================================================
 // Subsample PLY → PLY (invariato)
 // ============================================================
-std::string subsample_ply(const std::string& file_path, double voxel_size) {
+std::string subsample_ply(const std::string& file_path, const std::string& output_path, double voxel_size) {
     std::cout << "Loading PLY: " << file_path << std::endl;
     auto pcd = std::make_shared<open3d::geometry::PointCloud>();
     if (!open3d::io::ReadPointCloud(file_path, *pcd))
@@ -282,33 +282,25 @@ std::string subsample_ply(const std::string& file_path, double voxel_size) {
 
     int voxel_size_cm = (int)(voxel_size * 100);
     int voxel_size_mm = (int)(voxel_size * 1000);
-    std::string suffix;
     if (voxel_size_cm >= 1) {
         std::cout << "Points N after voxel_down_sample (" << voxel_size_cm << " cm): "
                   << pcd_down->points_.size() << std::endl;
-        suffix = "_" + std::to_string(voxel_size_cm) + "cm.ply";
     } else {
         std::cout << "Points N after voxel_down_sample (" << voxel_size_mm << " mm): "
                   << pcd_down->points_.size() << std::endl;
-        suffix = "_" + std::to_string(voxel_size_mm) + "mm.ply";
     }
 
-    size_t pos = file_path.rfind(".ply");
-    std::string out = (pos == std::string::npos)
-                      ? file_path + suffix
-                      : file_path.substr(0, pos) + suffix;
+    if (!open3d::io::WritePointCloud(output_path, *pcd_down))
+        throw std::runtime_error("Failed to write: " + output_path);
 
-    if (!open3d::io::WritePointCloud(out, *pcd_down))
-        throw std::runtime_error("Failed to write: " + out);
-
-    std::cout << "Subsampled point cloud saved to: " << out << std::endl;
-    return out;
+    std::cout << "Subsampled point cloud saved to: " << std::endl;
+    return output_path;
 }
 
 // ============================================================
 // Subsample LAS → LAS
 // ============================================================
-std::string subsample_las(const std::string& file_path, double voxel_size) {
+std::string subsample_las(const std::string& file_path, const std::string& output_path, double voxel_size) {
     std::cout << "Loading LAS: " << file_path << std::endl;
 
     LasData las_data = read_las(file_path);
@@ -322,21 +314,13 @@ std::string subsample_las(const std::string& file_path, double voxel_size) {
 
     int voxel_size_cm = (int)(voxel_size * 100);
     int voxel_size_mm = (int)(voxel_size * 1000);
-    std::string suffix;
     if (voxel_size_cm >= 1) {
         std::cout << "Points N after voxel_down_sample (" << voxel_size_cm << " cm): "
                   << pcd_down->points_.size() << std::endl;
-        suffix = "_" + std::to_string(voxel_size_cm) + "cm";
     } else {
         std::cout << "Points N after voxel_down_sample (" << voxel_size_mm << " mm): "
                   << pcd_down->points_.size() << std::endl;
-        suffix = "_" + std::to_string(voxel_size_mm) + "mm";
     }
-
-    size_t pos = file_path.rfind(".las");
-    std::string out = (pos == std::string::npos)
-                      ? file_path + suffix + ".las"
-                      : file_path.substr(0, pos) + suffix + ".las";
 
     bool has_colors = pcd_down->HasColors();
 
@@ -350,11 +334,11 @@ std::string subsample_las(const std::string& file_path, double voxel_size) {
             n = {0.0, 0.0, 0.0};
     }
 
-    write_las(out, pcd_down->points_, pcd_down->colors_, pcd_down->normals_,
+    write_las(output_path, pcd_down->points_, pcd_down->colors_, pcd_down->normals_,
               has_colors, has_normals);
 
-    std::cout << "Subsampled point cloud saved to: " << out << std::endl;
-    return out;
+    std::cout << "Subsampled point cloud saved to: " << std::endl;
+    return output_path;
 }
 
 // ============================================================
@@ -362,20 +346,21 @@ std::string subsample_las(const std::string& file_path, double voxel_size) {
 // ============================================================
 int main(int argc, char* argv[]) {
     try {
-        if (argc < 2) {
-            std::cerr << "Usage: " << argv[0] << " <file.ply|file.las> [voxel_size]" << std::endl;
+        if (argc < 3) {
+            std::cerr << "Usage: " << argv[0] << " <file.ply|file.las> <output.ply|output.las> [voxel_size]" << std::endl;
             return 1;
         }
         std::string file_path = argv[1];
-        double voxel_size = (argc >= 3) ? std::stod(argv[2]) : 0.002;
+        std::string output_path = argv[2];
+        double voxel_size = (argc >= 4) ? std::stod(argv[3]) : 0.002;
 
         std::string ext = get_extension(file_path);
         std::string output;
 
         if (ext == "ply") {
-            output = subsample_ply(file_path, voxel_size);
+            output = subsample_ply(file_path, output_path, voxel_size);
         } else if (ext == "las") {
-            output = subsample_las(file_path, voxel_size);
+            output = subsample_las(file_path, output_path, voxel_size);
         } else {
             std::cerr << "ERROR: unsupported format '" << ext << "' (use .ply or .las)" << std::endl;
             return 1;

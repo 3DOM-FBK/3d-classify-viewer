@@ -148,7 +148,7 @@ testGButton.addEventListener("click", async () => {
 
     console.log("Sending request for testing the function...");
 
-    const which_function = "check_point_id/";
+    const which_function = "subsample_pc/";
     let body = null;
     let file_path = "";
     let use_gpu = false;
@@ -204,11 +204,13 @@ testGButton.addEventListener("click", async () => {
         }
         case "subsample_pc/": {
             // SUBSAMPLING PARAMETERS
-            file_path = folder_path + "c78_pc.ply";
+            file_path = folder_path + "c78_pc.las";
+            const out_path = folder_path + "c78_pc_subsampled.las";
             const voxel_size = 0.05; // 5cm
 
             body = JSON.stringify({
                 file_path: file_path,
+                out_path: out_path, 
                 voxel_size: voxel_size
             });
             break;
