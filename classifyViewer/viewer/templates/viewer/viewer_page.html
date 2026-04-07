@@ -10,6 +10,16 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{% static 'viewer/css/styles.css' %}">
+    <style>
+        .dropdown-option-danger {
+            color: #f87171;
+        }
+
+        .dropdown-option-danger:hover {
+            background: rgba(220, 38, 38, 0.15);
+            color: #fca5a5;
+        }
+    </style>
     <!-- Load BabylonJS from your app's static files -->
     <script src="{% static 'viewer/js/babylon_js/babylon.js' %}"></script>
     <script src="{% static 'viewer/js/babylon_js/materialsLibrary/babylonjs.materials.min.js' %}"></script>
@@ -28,6 +38,8 @@
                 <div id="file-dropdown" class="dropdown-content" style="top: 100%;">
                     <button class="dropdown-option" id="menu-load-data">Load Data</button>
                     <button class="dropdown-option" id="menu-download-data">Download Data</button>
+                    <div class="dropdown-separator"></div>
+                    <button class="dropdown-option dropdown-option-danger" id="menu-reset-scene">Reset Scene</button>
                 </div>
             </div>
         </div>

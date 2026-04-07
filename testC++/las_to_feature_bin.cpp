@@ -1,29 +1,36 @@
 /**
  * las_to_feature_bin.cpp
  *
- * Reads a LAS file (raw binary, no dependencies) and writes a compact
- * binary lookup file for the Babylon.js viewer.
+ * Reads a LAS file and writes features + annotation slots to a unified binary
+ * store (.pcbin) for the Babylon.js viewer.
  *
  * Usage:
- *   las_to_feature_bin <input.las> <output.bin>
+ *   las_to_feature_bin <input.las> <output.pcbin>
  *
  * Compile:
  *   g++ -std=c++17 -O2 las_to_feature_bin.cpp -o las_to_feature_bin
  *
- * ─── Output binary format ────────────────────────────────────────────────────
+ * ─── .pcbin binary format ────────────────────────────────────────────────────
  *
- *  [HEADER]
- *   4 bytes        magic   "FEAT"
- *   4 bytes        N       uint32  max(POINT_ID) + 1
- *   4 bytes        F       uint32  number of features
- *   F × 32 bytes   names   char[32] null-padded ASCII
- *   F × 4 bytes    vmin    float32 per feature
- *   F × 4 bytes    vmax    float32 per feature
+ * Header (fixed):
+ *   [0-3]           magic: "PCBN"
+ *   [4]             version: uint8 = 1
+ *   [5-7]           reserved: 3 bytes = 0
+ *   [8-11]          point_count: uint32  (= max_point_id + 1, number of slots)
+ *   [12-15]         feature_count: uint32  (= F)
+ *   [16 .. +F*32]   feature_names: char[32] × F  (null-padded)
+ *   [.. +F*4]       vmin: float32 × F
+ *   [.. +F*4]       vmax: float32 × F
+ *   Header size = 16 + F*40
  *
- *  [DATA]
- *   N × F × 4 bytes  float32
- *   data[point_id * F + fi] = feature value
- *   NaN = point not present (gap in POINT_ID space)
+ * Records (N records, one per POINT_ID slot, indexed positionally):
+ *   [0 .. F*4-1]    features: float32 × F  (NaN = no data / gap)
+ *   [F*4]           segment_id: uint8      (0xFF = unassigned)
+ *   [F*4+1]         manual_class_id: uint8 (0xFF = unassigned)
+ *   [F*4+2]         predicted_class_id: uint8 (0xFF = unassigned)
+ *   [F*4+3]         padding: uint8 = 0
+ *   [F*4+4..F*4+7]  confidence: float32    (NaN = no prediction)
+ *   Record size = F*4 + 8
  */
 
 #include <algorithm>
@@ -294,47 +301,79 @@ static void convert(const fs::path& las_path, const fs::path& out_path)
     for (uint32_t fi = 0; fi < F; ++fi)
         if (vmin[fi] > vmax[fi]) { vmin[fi] = 0.f; vmax[fi] = 1.f; }
 
-    // ── Write binary file ─────────────────────────────────────────────────────
+    // ── Write .pcbin binary file ─────────────────────────────────────────────
     std::cout << "\nWriting: " << out_path << "\n";
+
     std::ofstream out(out_path, std::ios::binary);
     if (!out) throw std::runtime_error("Cannot write: " + out_path.string());
 
-    // Header
-    out.write("FEAT", 4);
+    // ── Header ────────────────────────────────────────────────────────────────
+    // magic "PCBN"
+    const char magic[4] = {'P', 'C', 'B', 'N'};
+    out.write(magic, 4);
+
+    // version (uint8) + 3 reserved bytes
+    uint8_t version = 1;
+    uint8_t reserved[3] = {0, 0, 0};
+    out.write(reinterpret_cast<const char*>(&version), 1);
+    out.write(reinterpret_cast<const char*>(reserved), 3);
+
+    // point_count (uint32) — number of slots (= max_pid + 1)
     out.write(reinterpret_cast<const char*>(&N), 4);
+
+    // feature_count (uint32)
     out.write(reinterpret_cast<const char*>(&F), 4);
 
-    // Feature names (32 bytes each, null-padded)
+    // feature_names: F × 32 bytes, null-padded
     for (uint32_t fi = 0; fi < F; ++fi) {
-        char buf[32] = {};
-        std::memcpy(buf, features[fi].name.c_str(),
-                    std::min(features[fi].name.size(), size_t(31)));
-        out.write(buf, 32);
+        char name_buf[32] = {};
+        const std::string& nm = features[fi].name;
+        std::memcpy(name_buf, nm.data(), std::min(nm.size(), size_t(31)));
+        out.write(name_buf, 32);
     }
 
-    // vmin, vmax
+    // vmin: F × float32
     out.write(reinterpret_cast<const char*>(vmin.data()), F * 4);
+
+    // vmax: F × float32
     out.write(reinterpret_cast<const char*>(vmax.data()), F * 4);
 
-    // Data
-    out.write(reinterpret_cast<const char*>(data.data()),
-              static_cast<std::streamsize>(data.size()) * 4);
+    // ── Records: one per point_id slot ────────────────────────────────────────
+    // Record layout (F*4 + 8 bytes each):
+    //   features[F]          float32 × F  (NaN = no data)
+    //   segment_id           uint8        (0xFF = unassigned)
+    //   manual_class_id      uint8        (0xFF = unassigned)
+    //   predicted_class_id   uint8        (0xFF = unassigned)
+    //   padding              uint8 = 0
+    //   confidence           float32      (NaN = no prediction)
+
+    const float kConfNaN = std::numeric_limits<float>::quiet_NaN();
+    const uint8_t kUnassigned = 0xFF;
+    const uint8_t kPadding    = 0x00;
+
+    for (size_t pid = 0; pid < N; ++pid) {
+        // features
+        const float* row = data.data() + pid * F;
+        out.write(reinterpret_cast<const char*>(row), F * 4);
+        // annotation bytes
+        out.write(reinterpret_cast<const char*>(&kUnassigned), 1);  // segment_id
+        out.write(reinterpret_cast<const char*>(&kUnassigned), 1);  // manual_class_id
+        out.write(reinterpret_cast<const char*>(&kUnassigned), 1);  // predicted_class_id
+        out.write(reinterpret_cast<const char*>(&kPadding),    1);  // padding
+        out.write(reinterpret_cast<const char*>(&kConfNaN),    4);  // confidence
+    }
+
     out.close();
 
     // ── Summary ───────────────────────────────────────────────────────────────
-    const size_t total_bytes = 4 + 4 + 4 + F*32 + F*4 + F*4 + data.size()*4;
-    std::cout << "  File size : " << (total_bytes / 1024 / 1024) << " MB\n\n";
-    std::cout << std::left
-              << std::setw(4)  << "Idx"
-              << std::setw(32) << "Feature"
-              << std::setw(14) << "Min"
-              << "Max\n";
-    std::cout << std::string(64, '-') << "\n";
-    for (uint32_t fi = 0; fi < F; ++fi)
-        std::cout << std::setw(4)  << fi
-                  << std::setw(32) << features[fi].name
-                  << std::setw(14) << vmin[fi]
-                  << vmax[fi] << "\n";
+    const size_t header_bytes = 16 + static_cast<size_t>(F) * 40;
+    const size_t record_bytes = static_cast<size_t>(F) * 4 + 8;
+    const size_t total_bytes  = header_bytes + static_cast<size_t>(N) * record_bytes;
+    std::cout << "  .pcbin written successfully\n";
+    std::cout << "  Point slots : " << N  << ", Features: " << F << "\n";
+    std::cout << "  Header size : " << header_bytes << " bytes\n";
+    std::cout << "  Record size : " << record_bytes << " bytes  (F×4 + 8)\n";
+    std::cout << "  Total size  : " << (total_bytes / 1024 / 1024) << " MB\n\n";
 
     // Last line = output path (for Python caller)
     std::cout << "\n" << out_path.string() << "\n";
@@ -345,7 +384,7 @@ static void convert(const fs::path& las_path, const fs::path& out_path)
 int main(int argc, char* argv[])
 {
     if (argc < 3) {
-        std::cerr << "Usage: " << argv[0] << " <features.las> <output.bin>\n";
+        std::cerr << "Usage: " << argv[0] << " <features.las> <output.pcbin>\n";
         return 1;
     }
     try {

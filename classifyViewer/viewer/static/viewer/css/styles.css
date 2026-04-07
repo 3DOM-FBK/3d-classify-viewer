@@ -760,6 +760,15 @@ select.property-input {
     background-color: rgba(0, 0, 0, 0.5);
 }
 
+/* Remove autofill background color */
+input.property-input:-webkit-autofill,
+input.property-input:-webkit-autofill:hover,
+input.property-input:-webkit-autofill:focus {
+    -webkit-box-shadow: 0 0 0 1000px rgba(0, 0, 0, 0.3) inset !important;
+    -webkit-text-fill-color: var(--text-primary) !important;
+    background-color: transparent !important;
+}
+
 select.property-input option {
     background-color: #1a1a1c;
     color: var(--text-primary);

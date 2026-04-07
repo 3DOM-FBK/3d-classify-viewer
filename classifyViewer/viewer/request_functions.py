@@ -2,10 +2,11 @@ from django.shortcuts import render
 from django.http import HttpResponse, StreamingHttpResponse, Http404,JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from .functions import launch_training_RF, launch_classify_RF, subsampling_point_cloud, stop_processes, get_voxel_size, check_point_id
-from .functions import mesh_to_point_cloud, ply_to_las, feature_extraction, Potree, split_las_by_binary, las_to_feature_bin, extract_segment_las
+from .functions import mesh_to_point_cloud, ply_to_las, feature_extraction, Potree, split_las_by_store, las_to_feature_bin, extract_segment_las
 import base64
 import os
 import json
+import struct
 import traceback
 import re
 import datetime
@@ -175,9 +176,10 @@ def feat_extraction(request):
             output_filepath = data['output_filepath']
             feature_list = data['feature_list']
             radius_list = data['radius_list']
-            sampling = data.get('sampling', 0)  # Optional, default to 0 if not provided
+            sampling = data.get('sampling', 0)
+            use_gpu = data.get('use_gpu', True)
         
-            feature_extraction(input_filepath, output_filepath, feature_list, radius_list, sampling)
+            feature_extraction(input_filepath, output_filepath, feature_list, radius_list, sampling, use_gpu=use_gpu)
             print("\n")
 
             return JsonResponse({"status": 'success', "message": "Feature extraction completed."})
@@ -270,23 +272,46 @@ def save_file(request):
 
 @csrf_exempt
 def _split_las_by_binary(request):
+    """
+    Split LAS point cloud by segment annotations from the .pcbin store.
+
+    POST body (JSON):
+        las_path   - path to features.las
+        pcbin_path - path to features.pcbin (unified binary store)
+        output_dir - destination directory for output segment_*.las files
+    """
     if request.method == 'POST':
         try:
-            print("\n[REQUEST FUNCTION] SPLIT LAS BY BINARY:", request.body[:200]) 
+            print("\n[REQUEST FUNCTION] SPLIT LAS BY PCBIN:", request.body[:200])
             data = json.loads(request.body)
 
-            las_path = data['las_path']
-            bin_path = data['bin_path']
-            meta_path = data['meta_path']
+            las_path   = data['las_path']
+            pcbin_path = data.get('pcbin_path') or data.get('mapping_path')  # backward compat
             output_dir = data['output_dir']
 
-            split_las_by_binary(las_path, bin_path, meta_path, output_dir)
+            if not pcbin_path:
+                raise ValueError("pcbin_path is required")
+
+            split_las_by_store(las_path, pcbin_path, output_dir)
+
+            # Rename segment files to training.las / validation.las if mapping provided
+            segment_names = data.get('segment_names')  # e.g. {"1": "training", "2": "validation"}
+            if segment_names:
+                abs_outdir = os.path.abspath(os.path.join(settings.BASE_DIR, output_dir) if not os.path.isabs(output_dir) else output_dir)
+                for seg_id_str, role_name in segment_names.items():
+                    src = os.path.join(abs_outdir, f"segment_{seg_id_str}.las")
+                    dst = os.path.join(abs_outdir, f"{role_name}.las")
+                    if os.path.isfile(src):
+                        os.replace(src, dst)
+                        print(f"[SPLIT] Renamed {src} -> {dst}")
+                    else:
+                        print(f"[SPLIT] Warning: expected {src} not found")
             print("\n")
 
-            return JsonResponse({"status": 'success', "message": "Split LAS by binary completed."})
+            return JsonResponse({"status": 'success', "message": "Split LAS completed."})
 
         except Exception as e:
-            print("\n[REQUEST FUNCTION] Split LAS by binary ERROR " + str(e))
+            print("\n[REQUEST FUNCTION] Split LAS ERROR " + str(e))
             print(traceback.format_exc())
             return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
 
@@ -294,21 +319,31 @@ def _split_las_by_binary(request):
 
 @csrf_exempt
 def las_to_feature_bin_view(request):
+    """
+    Generate .pcbin feature store from a LAS file.
+
+    POST body (JSON):
+        las_path   - path to features.las
+        pcbin_path - destination path for features.pcbin
+    """
     if request.method == 'POST':
         try:
-            print("\n[REQUEST FUNCTION] LAS TO FEATURE BIN:", request.body[:200])
+            print("\n[REQUEST FUNCTION] LAS TO FEATURES PCBIN:", request.body[:200])
             data = json.loads(request.body)
 
-            las_path = data['las_path']
-            bin_path = data['bin_path']
+            las_path   = data['las_path']
+            pcbin_path = data.get('pcbin_path')
 
-            las_to_feature_bin(las_path, bin_path)
+            if not pcbin_path:
+                raise ValueError("pcbin_path is required")
+
+            las_to_feature_bin(las_path, pcbin_path)
             print("\n")
 
-            return JsonResponse({"status": 'success', "message": "Feature bin generated successfully."})
+            return JsonResponse({"status": 'success', "message": "Features pcbin generated successfully."})
 
         except Exception as e:
-            print("\n[REQUEST FUNCTION] LAS TO FEATURE BIN ERROR " + str(e))
+            print("\n[REQUEST FUNCTION] LAS TO FEATURES PCBIN ERROR " + str(e))
             print(traceback.format_exc())
             return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
 
@@ -406,25 +441,28 @@ def delete_model(request):
 def extract_segment_las_view(request):
     """
     Extract all points for a single segment from features.las into a new .las
-    file suitable for classification (no 'labels' dim added).
+    file, using the .pcbin store for annotation lookup.
 
     POST body (JSON):
-        las_path  - path to features.las
-        bin_path  - path to the .bin buffer (2 bytes/point: [seg_id, class_id])
-        seg_id    - integer segment ID to extract
-        out_path  - destination .las path
+        las_path   - path to features.las
+        pcbin_path - path to features.pcbin (unified binary store)
+        seg_id     - integer segment ID to extract
+        out_path   - destination .las path
     """
     if request.method == 'POST':
         try:
             print("\n[REQUEST FUNCTION] EXTRACT SEGMENT LAS:", request.body[:200])
             data = json.loads(request.body)
 
-            las_path = data['las_path']
-            bin_path = data['bin_path']
-            seg_id   = int(data['seg_id'])
-            out_path = data['out_path']
+            las_path   = data['las_path']
+            pcbin_path = data.get('pcbin_path') or data.get('mapping_path')  # backward compat
+            seg_id     = int(data['seg_id'])
+            out_path   = data['out_path']
 
-            extract_segment_las(las_path, bin_path, seg_id, out_path)
+            if not pcbin_path:
+                raise ValueError("pcbin_path is required")
+
+            extract_segment_las(las_path, pcbin_path, seg_id, out_path)
             print("\n")
 
             return JsonResponse({"status": 'success', "message": "Segment extraction completed."})
@@ -484,7 +522,7 @@ def serve_range_file(request, filepath):
     which crashes the browser for large files.
     """
     # Security: restrict to specific binary files in the data directory
-    ALLOWED_EXTENSIONS = ('.bin', '.json')
+    ALLOWED_EXTENSIONS = ('.bin', '.json', '.pcbin')
     BASE_DATA_DIR = os.path.join(
                 os.path.dirname(os.path.abspath(__file__)),
         'static', 'viewer', 'data'
@@ -633,6 +671,27 @@ def upload_data(request):
                 for chunk in uploaded_file.chunks():
                     destination.write(chunk)
 
+            # --- Validation & Enhancement for LAS files ---
+            if uploaded_file.name.lower().endswith('.las'):
+                try:
+                    print(f"Validating upload: {file_path}")
+                    # check_point_id(in, out=None) will overwrite by default with my change
+                    # or I can pass a separate path for safety.
+                    fixed_path = file_path.replace('.las', '_fix.las')
+                    result_path = check_point_id(file_path, out_path=fixed_path)
+                    
+                    if result_path == fixed_path:
+                        # File was actually changed/fixed, replace the original
+                        os.replace(fixed_path, file_path)
+                        print(f"File validated and enhanced: {file_path}")
+                    else:
+                        # No change needed, cleanup temp if it was created
+                        if os.path.exists(fixed_path):
+                            os.remove(fixed_path)
+                        print("File already valid.")
+                except Exception as ex:
+                    print(f"Validation error (ignored): {ex}")
+
             return JsonResponse({
                 "message": "File uploaded successfully",
                 "filename": uploaded_file.name,
@@ -696,6 +755,109 @@ def start_training(request):
             }, status=200)
 
         except Exception as e:
+            return JsonResponse({"error": str(e)}, status=500)
+
+    return JsonResponse({"error": "Method not allowed. Use POST."}, status=405)
+
+
+@csrf_exempt
+def export_mapping(request):
+    """
+    Update segmentation annotations inside the unified .pcbin store.
+
+    Reads the existing features.pcbin, patches segment_id and manual_class_id
+    for each annotated point (where buffer segment_id != 0), then writes the
+    file back atomically via a temp file + rename.
+
+    Expects FormData with:
+    - 'buffer'      : Binary blob (2 bytes per point: segment_id, class_id)
+    - 'point_count' : Integer (total number of points in the buffer)
+    - 'pcbin_path'  : Relative path to features.pcbin (defaults to
+                      'viewer/static/viewer/data/working/features.pcbin')
+
+    Returns JSON:
+    - pcbin_path    : same relative path that was updated
+    - point_count   : number of annotated points written
+    """
+    if request.method == 'POST':
+        try:
+            print("\n[REQUEST FUNCTION] EXPORT MAPPING (pcbin update)")
+            buffer_file = request.FILES.get('buffer')
+            point_count_str = request.POST.get('point_count')
+            pcbin_path = request.POST.get(
+                'pcbin_path',
+                'viewer/static/viewer/data/working/features.pcbin'
+            )
+
+            if not buffer_file:
+                return JsonResponse({"error": "Missing 'buffer' binary data"}, status=400)
+            if not point_count_str:
+                return JsonResponse({"error": "Missing 'point_count'"}, status=400)
+
+            try:
+                point_count = int(point_count_str)
+            except ValueError:
+                return JsonResponse({"error": "Invalid point_count (must be integer)"}, status=400)
+
+            # Read binary buffer
+            buffer_data = b''.join(buffer_file.chunks())
+
+            if len(buffer_data) != point_count * 2:
+                return JsonResponse({
+                    "error": f"Buffer size mismatch: expected {point_count * 2} bytes, got {len(buffer_data)}"
+                }, status=400)
+
+            # Resolve absolute path (pcbin_path is relative to BASE_DIR)
+            abs_pcbin = os.path.normpath(os.path.join(settings.BASE_DIR, pcbin_path))
+
+            # Security: must stay inside BASE_DIR
+            if not abs_pcbin.startswith(os.path.normpath(settings.BASE_DIR)):
+                return JsonResponse({"error": "Invalid pcbin_path"}, status=400)
+
+            if not os.path.isfile(abs_pcbin):
+                return JsonResponse({"error": f"pcbin file not found: {pcbin_path}"}, status=404)
+
+            # Read existing pcbin into mutable bytearray
+            with open(abs_pcbin, 'rb') as f:
+                raw = f.read()
+
+            # Validate magic
+            if raw[:4] != b'PCBN':
+                return JsonResponse({"error": "Invalid pcbin file (bad magic)"}, status=400)
+
+            N = struct.unpack_from('<I', raw, 8)[0]   # number of point slots
+            F = struct.unpack_from('<I', raw, 12)[0]  # number of features
+            header_size = 16 + F * 40                 # magic/ver/reserved/N/F + F*(name32+vmin+vmax)
+            record_size = F * 4 + 8                   # F floats + 4 annotation bytes + 4 confidence bytes
+
+            data = bytearray(raw)
+
+            annotated = 0
+            for pid in range(min(point_count, N)):
+                seg_id_buf = buffer_data[pid * 2]      # 1-based in buffer (0 = unannotated)
+                class_id   = buffer_data[pid * 2 + 1]
+                if seg_id_buf != 0:
+                    rec_off = header_size + pid * record_size
+                    data[rec_off + F * 4]     = seg_id_buf - 1  # restore 0-based segment_id
+                    data[rec_off + F * 4 + 1] = class_id        # manual_class_id
+                    annotated += 1
+
+            # Atomic write
+            tmp_path = abs_pcbin + '.tmp'
+            with open(tmp_path, 'wb') as f:
+                f.write(data)
+            os.replace(tmp_path, abs_pcbin)
+
+            print(f"[REQUEST FUNCTION] pcbin updated: {annotated} annotated points → {abs_pcbin}")
+
+            return JsonResponse({
+                "pcbin_path": pcbin_path,
+                "point_count": annotated,
+            }, status=200)
+
+        except Exception as e:
+            print(f"[REQUEST FUNCTION] Export mapping ERROR: {str(e)}")
+            print(traceback.format_exc())
             return JsonResponse({"error": str(e)}, status=500)
 
     return JsonResponse({"error": "Method not allowed. Use POST."}, status=405)

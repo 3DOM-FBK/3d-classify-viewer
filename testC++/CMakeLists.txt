@@ -14,6 +14,9 @@ find_package(OpenMP REQUIRED)
 find_package(Open3D REQUIRED)
 find_package(CGAL REQUIRED)
 
+# --- tinygltf / stb ---
+set(TINYGLTF_INCLUDE_DIR /app/tinygltf)
+
 # --- LASzip & laz-perf (manual includes) ---
 # Se hai installato in /usr/local, puoi fare così:
 include_directories(/usr/local/include /usr/include)
@@ -32,16 +35,38 @@ get_filename_component(open3d_lib_dir ${open3d_lib} DIRECTORY)
 # Executables
 # =======================================
 
-# --- Feature Extraction Viewer ---
-add_executable(feature_extraction_viewer feature_extraction_viewer.cpp)
-target_include_directories(feature_extraction_viewer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(feature_extraction_viewer
+# --- Feature Extraction Viewer CPU ---
+add_executable(feature_extraction_viewer_cpu feature_extraction_viewer_cpu.cpp)
+target_include_directories(feature_extraction_viewer_cpu PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(feature_extraction_viewer_cpu
     PRIVATE
         ${PCL_LIBRARIES}
         ${PDAL_LIBRARIES}
         OpenMP::OpenMP_CXX
 )
-target_compile_options(feature_extraction_viewer PRIVATE ${OpenMP_CXX_FLAGS})
+target_compile_options(feature_extraction_viewer_cpu PRIVATE ${OpenMP_CXX_FLAGS})
+
+# --- Feature Extraction Viewer GPU (CUDA-accelerated, tiled) ---
+enable_language(CUDA)
+find_package(CUDAToolkit REQUIRED)
+
+add_executable(feature_extraction_viewer_gpu
+    feature_extraction_viewer_gpu.cpp
+    gpu_features.cu
+)
+target_include_directories(feature_extraction_viewer_gpu PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(feature_extraction_viewer_gpu PROPERTIES
+    CUDA_SEPARABLE_COMPILATION ON
+    CUDA_ARCHITECTURES "75"
+)
+target_link_libraries(feature_extraction_viewer_gpu
+    PRIVATE
+        CUDA::cudart
+        OpenMP::OpenMP_CXX
+)
+target_compile_options(feature_extraction_viewer_gpu PRIVATE
+    $<$<COMPILE_LANGUAGE:CXX>:${OpenMP_CXX_FLAGS}>
+)
 
 # --- Subsample PC ---
 add_executable(subsample_pc subsample_pc.cpp)
@@ -97,3 +122,12 @@ target_link_libraries(las_to_feature_bin PRIVATE
     OpenMP::OpenMP_CXX
 )
 target_compile_options(las_to_feature_bin PRIVATE ${OpenMP_CXX_FLAGS})
+
+# --- Check POINT ID ---
+add_executable(check_point_id check_point_id.cpp)
+target_link_libraries(check_point_id PRIVATE Open3D::Open3D)
+set_target_properties(check_point_id PROPERTIES
+    BUILD_WITH_INSTALL_RPATH TRUE
+    INSTALL_RPATH "${open3d_lib_dir}"
+    INSTALL_RPATH_USE_LINK_PATH TRUE
+)

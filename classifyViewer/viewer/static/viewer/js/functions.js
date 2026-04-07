@@ -1247,6 +1247,164 @@ export function createModal(title, contentCallback, footerCallback) {
     return overlay;
 }
 
+export function showResetSceneModal() {
+    const overlay = createModal(
+        "Reset Scene",
+        (body) => {
+            const warn = document.createElement('div');
+            warn.style.cssText = "display:flex;align-items:flex-start;gap:12px;margin-bottom:16px;";
+
+            const icon = document.createElement('div');
+            icon.innerHTML = `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0;margin-top:2px;">
+                <path d="M12 9v4M12 17h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"
+                    stroke="#f59e0b" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>`;
+
+            const msg = document.createElement('div');
+            msg.style.cssText = "font-size:0.78rem;line-height:1.55;color:var(--text-primary);";
+            msg.innerHTML = `<strong style="display:block;margin-bottom:4px;">This action cannot be undone.</strong>
+                All files in <code style="background:var(--bg-input,#1e1e22);padding:1px 5px;border-radius:4px;font-size:0.75rem;">/data/working</code>
+                will be permanently deleted, including the loaded point cloud, computed features, and any unsaved data.
+                <br><br>The scene will be reset to its initial empty state.`;
+
+            warn.appendChild(icon);
+            warn.appendChild(msg);
+            body.appendChild(warn);
+        },
+        (footer, overlay) => {
+            const cancelBtn = document.createElement('button');
+            cancelBtn.classList.add('btn');
+            cancelBtn.style.cssText = "background:transparent;border:1px solid var(--border-color);";
+            cancelBtn.textContent = "Cancel";
+            cancelBtn.onclick = () => {
+                overlay.classList.remove('active');
+                setTimeout(() => overlay.remove(), 300);
+            };
+
+            const confirmBtn = document.createElement('button');
+            confirmBtn.classList.add('btn');
+            confirmBtn.style.cssText = "background:#dc2626;border:none;";
+            confirmBtn.textContent = "Reset Scene";
+            confirmBtn.onclick = async () => {
+                const body = overlay.querySelector('.modal-body');
+                const modalCloseBtn = overlay.querySelector('.modal-close');
+                if (modalCloseBtn) modalCloseBtn.style.display = 'none';
+
+                footer.innerHTML = '';
+                body.innerHTML = '';
+
+                const stepList = document.createElement('div');
+                stepList.classList.add('pipeline-step-list');
+
+                const STEPS = ["Clearing Working Directory", "Resetting Viewer"];
+                const stepEls = STEPS.map((label) => {
+                    const item = document.createElement('div');
+                    item.classList.add('pipeline-step-item', 'step-idle');
+                    item.innerHTML = `
+                        <div class="step-icon-wrap">
+                            <svg class="step-svg" viewBox="0 0 32 32">
+                                <circle class="step-track" cx="16" cy="16" r="13"/>
+                                <circle class="step-arc"   cx="16" cy="16" r="13"/>
+                            </svg>
+                            <div class="step-check">
+                                <svg viewBox="0 0 12 12" fill="none">
+                                    <polyline points="2,6 5,9 10,3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                                </svg>
+                            </div>
+                            <div class="step-cross">
+                                <svg viewBox="0 0 12 12" fill="none">
+                                    <line x1="2.5" y1="2.5" x2="9.5" y2="9.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                                    <line x1="9.5" y1="2.5" x2="2.5" y2="9.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                                </svg>
+                            </div>
+                        </div>
+                        <span class="step-label">${label}</span>`;
+                    stepList.appendChild(item);
+                    return item;
+                });
+                body.appendChild(stepList);
+
+                const activateStep = (i) => {
+                    stepEls[i].classList.remove('step-idle', 'step-done', 'step-error');
+                    stepEls[i].classList.add('step-running');
+                };
+                const completeStep = (i) => {
+                    stepEls[i].classList.remove('step-running');
+                    stepEls[i].classList.add('step-done');
+                };
+                const failStep = (i) => {
+                    stepEls[i].classList.remove('step-running');
+                    stepEls[i].classList.add('step-error');
+                };
+
+                try {
+                    // STEP 1: Clear working directory
+                    activateStep(0);
+                    const clearRes = await fetch('/api/clear-data/', {
+                        method: 'POST',
+                        headers: { 'X-CSRFToken': getCSRFToken() }
+                    });
+                    if (!clearRes.ok) {
+                        const errData = await clearRes.json().catch(() => ({}));
+                        throw new Error(errData.error || "Failed to clear working directory");
+                    }
+                    completeStep(0);
+
+                    // STEP 2: Reset viewer state
+                    activateStep(1);
+                    const scene = window.__babylonScene;
+                    if (scene) {
+                        const loader = scene.potree2Loader;
+                        if (loader && typeof loader.dispose === 'function') {
+                            loader.dispose();
+                        }
+                        scene.potree2Loader = null;
+                    }
+                    const sceneObjects = window.__sceneObjects;
+                    if (sceneObjects) {
+                        if (sceneObjects.currentPointCloud) {
+                            try { sceneObjects.currentPointCloud.dispose(); } catch (_) { }
+                            sceneObjects.currentPointCloud = null;
+                        }
+                    }
+                    window.dispatchEvent(new CustomEvent('scene-reset'));
+                    completeStep(1);
+
+                    await new Promise(r => setTimeout(r, 700));
+                    overlay.classList.remove('active');
+                    setTimeout(() => overlay.remove(), 300);
+
+                } catch (err) {
+                    console.error("❌ Reset Scene Error:", err);
+                    failStep(0);
+
+                    const errorDiv = document.createElement('div');
+                    errorDiv.classList.add('pipeline-error-msg');
+                    errorDiv.innerHTML = `
+                        <div style="font-weight:600;margin-bottom:4px;">⚠️ Reset Failed</div>
+                        <div style="font-family:monospace;font-size:0.8em;white-space:pre-wrap;word-break:break-word;opacity:0.8;">${err.message || err.toString()}</div>
+                    `;
+                    body.appendChild(errorDiv);
+
+                    if (modalCloseBtn) modalCloseBtn.style.display = '';
+                    const closeBtn = document.createElement('button');
+                    closeBtn.classList.add('btn');
+                    closeBtn.textContent = "Close";
+                    closeBtn.onclick = () => {
+                        overlay.classList.remove('active');
+                        setTimeout(() => overlay.remove(), 300);
+                    };
+                    footer.appendChild(closeBtn);
+                }
+            };
+
+            footer.appendChild(cancelBtn);
+            footer.appendChild(confirmBtn);
+        }
+    );
+    return overlay;
+}
+
 export function showDownloadModal() {
     createModal(
         "Download Data",
@@ -1436,25 +1594,11 @@ export function showDownloadModal() {
                         });
 
                         downloadBtn.textContent = 'Exporting Segments...';
-                        const exportResult = await loader.exportAllTrainingData(segmentMap);
-                        if (!exportResult || !exportResult.buffer)
+                        const exportResult = await loader.exportAllTrainingDataAsMapping(segmentMap);
+                        if (!exportResult || !exportResult.mapping_path)
                             throw new Error('No segment data found. Make sure segments have been created.');
 
-                        // Salva il buffer sul server tramite /api/start-training/
-                        // (stesso endpoint usato dal training, restituisce bin_path)
-                        downloadBtn.textContent = 'Saving Segment Data...';
-                        const classMap = {};
-                        classRegistry.forEach((val, id) => { classMap[id] = val.name; });
-                        const formData = new FormData();
-                        formData.append('labels', JSON.stringify({ segments: exportResult.segmentMap, classes: classMap }));
-                        formData.append('buffer', new Blob([exportResult.buffer], { type: 'application/octet-stream' }));
-                        const saveRes = await fetch('/api/start-training/', { method: 'POST', body: formData });
-                        if (!saveRes.ok) {
-                            const e = await saveRes.json().catch(() => ({}));
-                            throw new Error(e.error || 'Failed to save segment buffer');
-                        }
-                        const saveData = await saveRes.json();
-                        segmentBinPath = saveData.bin_path;
+                        let segmentMappingPath = exportResult.mapping_path;
                     }
 
                     downloadBtn.textContent = 'Preparing Package...';
@@ -1468,7 +1612,7 @@ export function showDownloadModal() {
                             segments,
                             models,
                             las_path: window.__currentProjectLAS,
-                            bin_path: segmentBinPath  // bin corretto con [segId, classId]
+                            mapping_path: segmentMappingPath
                         })
                     });
 
@@ -1880,17 +2024,17 @@ export function showLoadModal() {
 
                     // Store for download logic
                     window.__currentProjectLAS = lasPath;
-                    window.__currentProjectBIN = 'viewer/static/viewer/data/working/features.bin';
+                    window.__currentProjectBIN = 'viewer/static/viewer/data/working/features.pcbin';
 
                     // Load feature bin if available (populated by Calculate Features)
                     try {
                         const featureBinLoader = window.__babylonScene?.potree2Loader;
                         if (featureBinLoader) {
-                            const featureNames = await featureBinLoader.loadFeatureBin(`/static/viewer/data/working/features.bin`);
+                            const featureNames = await featureBinLoader.loadPcBin(`/static/viewer/data/working/features.pcbin`);
                             window.dispatchEvent(new CustomEvent('feature-bin-loaded', { detail: { names: featureNames } }));
                         }
                     } catch (binErr) {
-                        console.warn("⚠️ Feature bin not loaded:", binErr.message);
+                        console.warn("⚠️ .pcbin store not loaded:", binErr.message);
                     }
 
                     await new Promise(r => setTimeout(r, 800));
@@ -2458,6 +2602,11 @@ export function showTrainingModal(scene, onStart) {
                 const radiusOrder = [];
 
                 validFeatures.forEach(featName => {
+                    // Filter out normal and prediction features
+                    if (featName.toLowerCase().includes('normal') || featName.toLowerCase().includes('prediction')) {
+                        return;
+                    }
+                    
                     // Split on underscore, find where numeric part starts
                     const parts = featName.split('_');
                     // Find split point: last index where prefix is all non-numeric
@@ -2903,65 +3052,35 @@ export function showTrainingModal(scene, onStart) {
                     });
                     const classMap = {};
                     classRegistry.forEach((val, id) => { classMap[id] = val.name; });
-                    const exportResult = await loader.exportAllTrainingData(segmentMap);
-                    if (!exportResult || !exportResult.buffer) {
+                    const exportResult = await loader.exportAllTrainingDataAsMapping(segmentMap);
+                    if (!exportResult || !exportResult.mapping_path) {
                         throw new Error('No points were identified in the selected regions.');
                     }
                     completeStep(0);
 
-                    // STEP 2: Save training data
+                    // STEP 2: Mapping already saved by exportAllTrainingDataAsMapping
                     checkCancelled();
                     currentStepIdx = 1;
                     activateStep(1);
-                    const metadata = {
-                        segments: exportResult.segmentMap,
-                        classes: classMap,
-                        split: params.split,
-                        rf_params: params.rf_params,
-                        features: params.features
-                    };
-                    const formData = new FormData();
-                    formData.append('labels', JSON.stringify(metadata));
-                    formData.append('buffer', new Blob([exportResult.buffer], { type: 'application/octet-stream' }));
-                    const saveResponse = await fetch('/api/start-training/', { method: 'POST', body: formData });
-                    if (!saveResponse.ok) {
-                        const errData = await saveResponse.json().catch(() => ({}));
-                        throw new Error(errData.error || 'Failed to save training data');
-                    }
-                    const saveData = await saveResponse.json();
+                    const mappingPath = exportResult.mapping_path;
                     completeStep(1);
 
-                    // ── Persist a copy of metadata.json in modelDir so the report
-                    //    popup can always find class names next to the model ──
-                    if (saveData && saveData.json_path) {
-                        try {
-                            const metaReadRes = await fetch(`/api/read-file/?path=${encodeURIComponent(saveData.json_path)}`);
-                            if (metaReadRes.ok) {
-                                const metaRd = await metaReadRes.json();
-                                const metaBytes = new TextEncoder().encode(metaRd.content || '{}');
-                                const metaB64 = btoa(String.fromCharCode(...metaBytes));
-                                await fetch('/save_file/', {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
-                                    body: JSON.stringify({ filepath: `${modelDir}metadata.json`, data: metaB64 })
-                                });
-                            }
-                        } catch (_) { /* non-fatal */ }
-                    }
-
-                    // STEP 3: Split LAS by binary labels
+                    // STEP 3: Split LAS by .pcbin annotations
                     checkCancelled();
                     currentStepIdx = 2;
                     activateStep(2);
                     const lasSourcePath = 'viewer/static/viewer/data/working/features.las';
+                    const segmentNames = {};
+                    segmentNames[trainId] = 'training';
+                    segmentNames[valId]   = 'validation';
                     const splitResponse = await fetch('/split_las_by_binary/', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
                         body: JSON.stringify({
                             las_path: lasSourcePath,
-                            bin_path: saveData.bin_path,
-                            meta_path: saveData.json_path,
-                            output_dir: workingDir
+                            pcbin_path: 'viewer/static/viewer/data/working/features.pcbin',
+                            output_dir: workingDir,
+                            segment_names: segmentNames
                         })
                     });
                     if (!splitResponse.ok) {
@@ -2999,28 +3118,40 @@ export function showTrainingModal(scene, onStart) {
                         throw new Error(errData.message || errData.error || 'RF training failed');
                     }
                     completeStep(3);
+
+                    // ── Save model metadata.json ──
+                    const modelMeta = {
+                        segments: segmentMap,
+                        classes: classMap,
+                        split: params.split,
+                        rf_params: params.rf_params,
+                        features: params.features,
+                    };
+                    try {
+                        await saveFile(
+                            `${modelDir}metadata.json`,
+                            new Blob([JSON.stringify(modelMeta, null, 2)], { type: 'application/json' })
+                        );
+                        console.log('[Training] metadata.json saved:', modelDir);
+                    } catch (e) {
+                        console.warn('[Training] Could not save metadata.json:', e);
+                    }
+
                     if (onStart) onStart(params);
 
-                    // ── Read class names from metadata JSON ──
+                    // ── Build class names from classMap (in-memory) ──
                     // classNames: ordered array matching report class indices 0,1,2,...
-                    let classNames = [];
+                    let classNames = ['Unclassified'];  // Index 0 = unclassified
                     try {
-                        if (saveData && saveData.json_path) {
-                            const metaRes = await fetch(`/api/read-file/?path=${encodeURIComponent(saveData.json_path)}`);
-                            if (metaRes.ok) {
-                                const metaData = await metaRes.json();
-                                const meta = JSON.parse(metaData.content || '{}');
-                                const rawClasses = meta.classes || {};
-                                console.log('[Report] raw classes from JSON:', rawClasses);
-                                // rawClasses keys start from 1 (user-defined classes).
-                                // The RF report uses class 0 = unclassified points, class 1 = first user class.
-                                // Prepend 'Unclassified' so indices align correctly.
-                                const entries = Object.entries(rawClasses).sort((a, b) => Number(a[0]) - Number(b[0]));
-                                classNames = ['Unclassified', ...entries.map(([, name]) => name)];
-                                console.log('[Report] ordered classNames (with Unclassified at 0):', classNames);
+                        // Build sorted array of class names from classMap
+                        const classIds = Object.keys(classMap).map(Number).sort((a, b) => a - b);
+                        for (const id of classIds) {
+                            if (id !== 0 && classMap[id]) {  // Skip 0 (unclassified), already added
+                                classNames.push(classMap[id]);
                             }
                         }
-                    } catch (e) { console.warn('[Report] Could not load class names:', e); }
+                        console.log('[Report] ordered classNames (with Unclassified at 0):', classNames);
+                    } catch (e) { console.warn('[Report] Could not build class names:', e); }
 
                     // ── Read report text from first .txt found in modelDir ──
                     const reportPath = modelDir;
@@ -3742,13 +3873,20 @@ export function showCalculateFeaturesModal(scene, onConfirm) {
             const radiiInputs = [];
             for (let i = 0; i < 5; i++) {
                 const row = document.createElement('div');
-                row.classList.add('property-row');
-                row.style.alignItems = 'center';
+                row.style.cssText = 'display:flex; justify-content:space-between; align-items:center; gap:8px;';
 
                 const label = document.createElement('span');
                 label.classList.add('property-label');
                 label.style.width = '80px';
                 label.textContent = `Radius ${i + 1}:`;
+
+                const rightSection = document.createElement('div');
+                rightSection.style.cssText = 'display:flex; gap:6px; align-items:center; flex-shrink:0;';
+
+                const infoIcon = document.createElement('img');
+                infoIcon.src = '/static/viewer/icons/info.png';
+                infoIcon.style.cssText = 'display:none; width:16px; height:16px; cursor:help; flex-shrink:0;';
+                infoIcon.title = 'Value is too small and may cause errors';
 
                 const input = document.createElement('input');
                 input.type = 'number';
@@ -3756,12 +3894,33 @@ export function showCalculateFeaturesModal(scene, onConfirm) {
                 input.min = '0';
                 input.classList.add('property-input');
                 input.placeholder = "— empty —";
-                if (i === 0) input.value = "0.1";
-                if (i === 1) input.value = "0.2";
-                if (i === 2) input.value = "0.5";
+                input.style.width = '100px';
+                if (i === 0) input.value = "0.5";
+                if (i === 1) input.value = "1";
+                if (i === 2) input.value = "2";
+
+                // Validation: highlight in orange if < 0.5
+                const updateInputStyle = () => {
+                    const val = parseFloat(input.value);
+                    if (!isNaN(val) && val > 0 && val < 0.5) {
+                        input.style.backgroundColor = 'rgba(255, 165, 0, 0.3)';
+                        input.style.borderColor = '#ffa500';
+                        infoIcon.style.display = 'block';
+                    } else {
+                        input.style.backgroundColor = '';
+                        input.style.borderColor = '';
+                        infoIcon.style.display = 'none';
+                    }
+                };
+
+                input.addEventListener('input', updateInputStyle);
+                input.addEventListener('change', updateInputStyle);
+
+                rightSection.appendChild(infoIcon);
+                rightSection.appendChild(input);
 
                 row.appendChild(label);
-                row.appendChild(input);
+                row.appendChild(rightSection);
                 radiiContainer.appendChild(row);
                 radiiInputs.push(input);
             }
@@ -3769,9 +3928,46 @@ export function showCalculateFeaturesModal(scene, onConfirm) {
 
             body.appendChild(radiiSection);
 
+            // --- GPU Toggle ---
+            const gpuTitle = document.createElement('div');
+            gpuTitle.classList.add('modal-section-title');
+            gpuTitle.style.marginTop = '16px';
+            gpuTitle.textContent = 'Options';
+            body.appendChild(gpuTitle);
+
+            const gpuSection = document.createElement('div');
+            gpuSection.classList.add('modal-section');
+            gpuSection.style.paddingTop = '6px';
+
+            const gpuRow = document.createElement('div');
+            gpuRow.classList.add('property-row');
+            gpuRow.style.padding = '0 4px';
+            gpuRow.innerHTML = `<span class="property-label">Accelerate with GPU:</span>`;
+
+            const gpuToggleWrap = document.createElement('div');
+            gpuToggleWrap.classList.add('rf-toggle-wrap');
+
+            const gpuToggle = document.createElement('button');
+            gpuToggle.id = 'calc-features-gpu-toggle';
+            gpuToggle.classList.add('rf-toggle-btn');
+            gpuToggle.setAttribute('data-on', 'false');
+            gpuToggle.textContent = 'OFF';
+            gpuToggle.onclick = () => {
+                const isOn = gpuToggle.getAttribute('data-on') === 'true';
+                gpuToggle.setAttribute('data-on', String(!isOn));
+                gpuToggle.textContent = isOn ? 'OFF' : 'ON';
+                gpuToggle.classList.toggle('on', !isOn);
+            };
+
+            gpuToggleWrap.appendChild(gpuToggle);
+            gpuRow.appendChild(gpuToggleWrap);
+            gpuSection.appendChild(gpuRow);
+            body.appendChild(gpuSection);
+
             // Attach getters to body for footer access
             body._getFeatSection = () => featSection;
             body._getRadiiInputs = () => radiiInputs;
+            body._getUseGpu = () => document.getElementById('calc-features-gpu-toggle')?.getAttribute('data-on') === 'true';
         },
         (footer, overlay) => {
             const cancelBtn = document.createElement('button');
@@ -3791,6 +3987,7 @@ export function showCalculateFeaturesModal(scene, onConfirm) {
                 const body = overlay.querySelector('.modal-body');
                 const featSection = body._getFeatSection();
                 const radiiInputs = body._getRadiiInputs();
+                const useGpu = body._getUseGpu ? body._getUseGpu() : false;
 
                 const selectedFeatures = featSection._getSelected
                     ? featSection._getSelected()
@@ -3927,7 +4124,8 @@ export function showCalculateFeaturesModal(scene, onConfirm) {
                             input_filepath: 'viewer/static/viewer/data/working/features.las',
                             output_filepath: 'viewer/static/viewer/data/working/features.las',
                             feature_list: selectedFeatures,
-                            radius_list: radii
+                            radius_list: radii,
+                            use_gpu: useGpu
                         })
                     });
                     if (!featResponse.ok) {
@@ -3937,17 +4135,17 @@ export function showCalculateFeaturesModal(scene, onConfirm) {
                     completeStep(0);
                     console.log("✅ Feature extraction completed");
 
-                    // STEP 2: Generate Feature Bin
+                    // STEP 2: Generate Features pcbin
                     checkCancelled();
                     currentStepIdx = 1;
                     activateStep(1);
-                    console.log("📦 Step 2: Generating feature bin...");
+                    console.log("📦 Step 2: Generating features pcbin...");
                     const binResponse = await fetch('/las_to_feature_bin/', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
                         body: JSON.stringify({
                             las_path: 'viewer/static/viewer/data/working/features.las',
-                            bin_path: 'viewer/static/viewer/data/working/features.bin'
+                            pcbin_path: 'viewer/static/viewer/data/working/features.pcbin'
                         })
                     });
                     if (!binResponse.ok) {
@@ -3955,7 +4153,7 @@ export function showCalculateFeaturesModal(scene, onConfirm) {
                         throw new Error(errData.message || errData.error || "Feature bin generation failed");
                     }
                     completeStep(1);
-                    console.log("✅ Feature bin generated");
+                    console.log("✅ Features pcbin generated");
 
                     // STEP 3: Load Features in Viewer
                     checkCancelled();
@@ -3965,7 +4163,7 @@ export function showCalculateFeaturesModal(scene, onConfirm) {
                     try {
                         const featureBinLoader = window.__babylonScene?.potree2Loader;
                         if (featureBinLoader) {
-                            const featureNames = await featureBinLoader.loadFeatureBin(`/static/viewer/data/working/features.bin`);
+                            const featureNames = await featureBinLoader.loadPcBin(`/static/viewer/data/working/features.pcbin`);
                             window.dispatchEvent(new CustomEvent('feature-bin-loaded', { detail: { names: featureNames } }));
                         }
                     } catch (binErr) {
@@ -4349,15 +4547,11 @@ export async function showClassifyModal(scene) {
                         });
                         const classMap = {};
                         classRegistry.forEach((val, id) => { classMap[id] = val.name; });
-                        const exportResult = await loader.exportAllTrainingData(segmentMap);
-                        if (!exportResult || !exportResult.buffer)
+                        const exportResult = await loader.exportAllTrainingDataAsMapping(segmentMap);
+                        if (!exportResult || !exportResult.mapping_path)
                             throw new Error('No points found for the selected segment.');
 
-                        const formData = new FormData();
-                        formData.append('labels', JSON.stringify({ segments: exportResult.segmentMap, classes: classMap }));
-                        formData.append('buffer', new Blob([exportResult.buffer], { type: 'application/octet-stream' }));
-                        const saveRes = await fetch('/api/start-training/', { method: 'POST', body: formData });
-                        const saveData = await saveRes.json();
+                        const mappingPath = exportResult.mapping_path;
 
                         const segmentOutPath = `${classifyWorkingDir}segment_${splitValue}.las`;
                         await fetch('/api/extract-segment-las/', {
@@ -4365,7 +4559,7 @@ export async function showClassifyModal(scene) {
                             headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
                             body: JSON.stringify({
                                 las_path: 'viewer/static/viewer/data/working/features.las',
-                                bin_path: saveData.bin_path,
+                                pcbin_path: 'viewer/static/viewer/data/working/features.pcbin',
                                 seg_id: parseInt(splitValue, 10),
                                 out_path: segmentOutPath,
                             })
@@ -4388,30 +4582,24 @@ export async function showClassifyModal(scene) {
                     const voxelData = await voxelRes.json();
                     const voxelSize = voxelData.voxel_size || 0;
 
+                    const featExtractedPath = `${classifyWorkingDir}features_extracted.las`;
+
                     const featRes = await fetch('/feature_extraction/', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
                         body: JSON.stringify({
                             input_filepath: testFilepath,
-                            output_filepath: 'viewer/static/viewer/data/working/features.las',
+                            output_filepath: featExtractedPath,
                             feature_list: featureList,
                             radius_list: radiusList,
                             sampling: voxelSize,
+                            use_gpu: useGpu,
                         })
                     });
                     if (!featRes.ok) {
                         const e = await featRes.json().catch(() => ({}));
                         throw new Error(e.message || e.error || 'Feature extraction failed');
                     }
-
-                    await fetch('/las_to_feature_bin/', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
-                        body: JSON.stringify({
-                            las_path: 'viewer/static/viewer/data/working/features.las',
-                            bin_path: 'viewer/static/viewer/data/working/features.bin',
-                        })
-                    });
 
                     completeStep(currentStepIdx);
 
@@ -4425,7 +4613,7 @@ export async function showClassifyModal(scene) {
                         headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
                         body: JSON.stringify({
                             model_savepath: modelPath,
-                            test_filepath: 'viewer/static/viewer/data/working/features.las', // Feature extraction output is our test file now
+                            test_filepath: featExtractedPath,
                             output_classify_name: outputClassifyName,
                             use_gpu: useGpu,
                             selected_features: modelFeatures,
@@ -4441,7 +4629,7 @@ export async function showClassifyModal(scene) {
                         headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
                         body: JSON.stringify({
                             las_path: outputClassifyName,
-                            bin_path: 'viewer/static/viewer/data/working/features.bin',
+                            pcbin_path: 'viewer/static/viewer/data/working/features.pcbin',
                         })
                     });
                     completeStep(currentStepIdx);
@@ -4470,7 +4658,7 @@ export async function showClassifyModal(scene) {
                         const featureBinLoader = window.__babylonScene?.potree2Loader;
                         if (featureBinLoader) {
                             // Reload features from bin
-                            const featureNames = await featureBinLoader.loadFeatureBin('/static/viewer/data/working/features.bin');
+                            const featureNames = await featureBinLoader.loadPcBin('/static/viewer/data/working/features.pcbin');
                             window.dispatchEvent(new CustomEvent('feature-bin-loaded', { detail: { names: featureNames } }));
 
                             // Re-load the entire cloud points from new Potree output

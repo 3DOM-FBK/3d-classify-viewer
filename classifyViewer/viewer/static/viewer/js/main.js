@@ -11,6 +11,7 @@ import {
     frameCameraOnMesh,
     showDownloadModal,
     showLoadModal,
+    showResetSceneModal,
     showTrainingModal,
     showCalculateFeaturesModal,
     selectPoints,
@@ -282,7 +283,7 @@ function initColormapPicker() {
 initColormapPicker();
 
 /**
- * Called after loadFeatureBin() completes. Adds/refreshes the Features section
+ * Called after loadPcBin() completes. Adds/refreshes the Features section
  * in the color menu. Safe to call multiple times (e.g. after calculate).
  * @param {string[]} featureNames
  */
@@ -1860,6 +1861,14 @@ if (navFileBtn && fileDropdown) {
         fileDropdown.classList.remove('show');
         showDownloadModal();
     });
+
+    const resetSceneBtn = document.getElementById("menu-reset-scene");
+    if (resetSceneBtn) {
+        resetSceneBtn.addEventListener("click", () => {
+            fileDropdown.classList.remove('show');
+            showResetSceneModal();
+        });
+    }
 }
 
 engine.runRenderLoop(() => {
@@ -2124,4 +2133,41 @@ document.querySelectorAll('.nav-mode-btn').forEach(btn => {
         const mode = btn.dataset.mode || btn.textContent.trim().toLowerCase();
         setLayoutMode(mode);
     });
+});
+// ---------------------------------------------------------------------------
+// SCENE RESET — front-end cleanup triggered by showResetSceneModal()
+// ---------------------------------------------------------------------------
+window.addEventListener('scene-reset', () => {
+    // 1. Outline: remove all items and reset state
+    outlineContent.innerHTML = '';
+    outlineItem = null;
+    cutSegmentCounter = 1;
+
+    // 2. Color menu: remove features section, restore default label
+    if (_colorMenuDropdown) {
+        const featSection = _colorMenuDropdown.querySelector('.dropdown-feature-section');
+        if (featSection) featSection.remove();
+        _colorMenuDropdown.style.minWidth = '';
+    }
+    if (_colorMenuBtn) {
+        _colorMenuBtn.textContent = 'Classification View';
+    }
+
+    // 3. Color mode: back to default
+    currentColorMode = 'classification';
+
+    // 4. Feature range slider: hide and reset
+    if (featureRangeControl) {
+        featureRangeControl.style.display = 'none';
+        if (rangeMin) rangeMin.value = 0;
+        if (rangeMax) rangeMax.value = 100;
+    }
+
+    // 5. Snap layout back to Training mode if in Classify
+    const trainingBtn = document.querySelector('.nav-mode-btn[data-mode="training"], #nav-mode-training');
+    if (trainingBtn && !trainingBtn.classList.contains('active')) {
+        trainingBtn.click();
+    }
+
+    console.log('🔄 Scene reset: front-end state cleared.');
 });

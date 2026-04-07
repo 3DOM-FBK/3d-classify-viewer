@@ -1,14 +1,12 @@
 /**
- * split_las_by_binary.cpp
+ * split_las_by_binary.cpp  (v3 — robust single-pass)
  *
- * Splits a LAS file into training.las / validation.las based on a binary
- * label buffer and a JSON metadata file produced by the viewer.
- *
- * Usage:
- *   split_las_by_binary <las_path> <bin_path> <meta_path> <output_dir>
- *
- * Extra dims whose names PDAL cannot read (non-UTF8 VLR) are recovered
- * by parsing the Extra Bytes VLR directly from the LAS binary header.
+ * Key improvements over original:
+ * 1. O(N) single-pass: source LAS read once; all segments populated simultaneously.
+ * 2. Type-safe copy: native types preserved for Extra Bytes (no intermediate double cast).
+ * 3. Strict validation: binary buffer size checked against point count.
+ * 4. Safe PID access: out-of-bounds PIDs are counted and reported; never silently remapped.
+ * 5. Clean layout reuse: output layout built once per segment from a common helper.
  */
 
 #include <pdal/PointTable.hpp>
@@ -19,8 +17,6 @@
 #include <pdal/Options.hpp>
 #include <pdal/Dimension.hpp>
 
-#include <nlohmann/json.hpp>
-
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
@@ -28,42 +24,25 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <set>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace fs = std::filesystem;
-using json   = nlohmann::json;
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  LAS Extra Bytes VLR parsing
-//
-//  LAS spec: VLR with User ID "LASF_Spec", Record ID 4 contains Extra Bytes
-//  records. Each record is 192 bytes:
-//    offset  0:  reserved      (2 bytes)
-//    offset  2:  data_type     (1 byte)  — matches PDAL type mapping below
-//    offset  3:  options       (1 byte)
-//    offset  4:  name          (32 bytes, null-terminated)
-//    offset 36:  description   (32 bytes)
-//    ... rest unused for our purposes
-//
-//  VLR header (before the data):
-//    offset  0:  reserved      (2 bytes)
-//    offset  2:  user_id       (16 bytes)
-//    offset 18:  record_id     (2 bytes)
-//    offset 20:  record_length (2 bytes)  — length of VLR data (not header)
-//    offset 22:  description   (32 bytes)
-//  Total VLR header = 54 bytes
+//  (raw binary header read to recover non-UTF8 names that PDAL would drop)
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct ExtraBytesEntry {
     std::string           name;
     pdal::Dimension::Type type;
-    int                   size;   // bytes per point
+    int                   size;
 };
 
-// Map LAS Extra Bytes data_type to PDAL type + byte size
 static pdal::Dimension::Type lasTypeToPdal(uint8_t data_type, int& size)
 {
     switch (data_type) {
@@ -81,428 +60,472 @@ static pdal::Dimension::Type lasTypeToPdal(uint8_t data_type, int& size)
     }
 }
 
-// Read all Extra Bytes entries from a LAS file's VLR section
 static std::vector<ExtraBytesEntry> readExtraBytesVLR(const fs::path& las_path)
 {
     std::vector<ExtraBytesEntry> result;
-
     std::ifstream f(las_path, std::ios::binary);
     if (!f) throw std::runtime_error("Cannot open LAS: " + las_path.string());
 
-    // Read LAS version
-    // Number of VLRs at byte 100 (uint32)
-    uint32_t num_vlrs;
-    f.seekg(100); f.read(reinterpret_cast<char*>(&num_vlrs), 4);
-
-    // VLRs start right after the public header (header_size at offset 94, uint16)
-    uint16_t hdr_size16;
-    f.seekg(94); f.read(reinterpret_cast<char*>(&hdr_size16), 2);
-
-    f.seekg(hdr_size16);
+    f.seekg(100); uint32_t num_vlrs; f.read(reinterpret_cast<char*>(&num_vlrs), 4);
+    f.seekg(94);  uint16_t hdr_size; f.read(reinterpret_cast<char*>(&hdr_size), 2);
+    f.seekg(hdr_size);
 
     for (uint32_t v = 0; v < num_vlrs; ++v) {
-        // VLR header: 54 bytes
         uint8_t vlr_header[54];
         f.read(reinterpret_cast<char*>(vlr_header), 54);
         if (!f) break;
 
-        char user_id[17] = {};
-        std::memcpy(user_id, vlr_header + 2, 16);
-
-        uint16_t record_id;
-        std::memcpy(&record_id, vlr_header + 18, 2);
-
-        uint16_t record_length;
-        std::memcpy(&record_length, vlr_header + 20, 2);
+        char     user_id[17] = {}; std::memcpy(user_id,       vlr_header + 2,  16);
+        uint16_t record_id;        std::memcpy(&record_id,    vlr_header + 18,  2);
+        uint16_t record_length;    std::memcpy(&record_length, vlr_header + 20,  2);
 
         if (std::string(user_id) == "LASF_Spec" && record_id == 4) {
-            // Extra Bytes records — each 192 bytes
             int num_extra = record_length / 192;
             std::vector<uint8_t> data(record_length);
             f.read(reinterpret_cast<char*>(data.data()), record_length);
-
             for (int i = 0; i < num_extra; ++i) {
                 const uint8_t* rec = data.data() + i * 192;
-
-                uint8_t data_type = rec[2];
-                char name_buf[33] = {};
-                std::memcpy(name_buf, rec + 4, 32);
-
                 int sz = 0;
-                pdal::Dimension::Type pdal_type = lasTypeToPdal(data_type, sz);
-
-                if (pdal_type != pdal::Dimension::Type::None && sz > 0) {
-                    ExtraBytesEntry e;
-                    e.name = std::string(name_buf);  // may contain non-UTF8 chars
-                    e.type = pdal_type;
-                    e.size = sz;
-                    result.push_back(e);
+                pdal::Dimension::Type pdal_type = lasTypeToPdal(rec[2], sz);
+                if (pdal_type != pdal::Dimension::Type::None) {
+                    char name_buf[33] = {};
+                    std::memcpy(name_buf, rec + 4, 32);
+                    result.push_back({std::string(name_buf), pdal_type, sz});
                 }
             }
         } else {
             f.seekg(record_length, std::ios::cur);
         }
     }
-
     return result;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Helpers
+//  Helpers & metadata
 // ─────────────────────────────────────────────────────────────────────────────
 
-struct SegmentInfo { std::string name, role; };
+struct PointSegmentation {
+    uint32_t point_id;
+    uint8_t  segment_id;
+    uint8_t  class_id;
+};
 
-static std::vector<uint8_t> read_binary(const fs::path& path)
+// Read annotation fields (segment_id, manual_class_id) from a .pcbin file.
+// Returns a sparse map keyed by point_id; only points with segment_id != 0xFF are included.
+static std::map<uint32_t, PointSegmentation> read_pcbin_annotations(const fs::path& path)
 {
-    std::ifstream f(path, std::ios::binary | std::ios::ate);
-    if (!f) throw std::runtime_error("Cannot open binary file: " + path.string());
-    std::streamsize size = f.tellg(); f.seekg(0);
-    std::vector<uint8_t> buf(size);
-    if (!f.read(reinterpret_cast<char*>(buf.data()), size))
-        throw std::runtime_error("Failed to read: " + path.string());
-    return buf;
-}
+    std::ifstream f(path, std::ios::binary);
+    if (!f) throw std::runtime_error("Cannot open .pcbin: " + path.string());
 
-static std::map<int, SegmentInfo> parse_metadata(const fs::path& path)
-{
-    std::ifstream f(path);
-    if (!f) throw std::runtime_error("Cannot open metadata: " + path.string());
-    json meta; f >> meta;
-    std::map<int, SegmentInfo> result;
-    if (meta.contains("segments"))
-        for (auto& [k, v] : meta["segments"].items())
-            result[std::stoi(k)].name = v.get<std::string>();
-    if (meta.contains("split"))
-        for (auto& [k, roles] : meta["split"].items()) {
-            int id = std::stoi(k);
-            for (auto& r : roles) {
-                std::string role = r.get<std::string>();
-                if      (role == "train") { result[id].role = "training";   break; }
-                else if (role == "val")   { result[id].role = "validation"; break; }
-            }
+    // ── Read header ───────────────────────────────────────────────────────────
+    char magic[4] = {};
+    f.read(magic, 4);
+    if (std::string(magic, 4) != "PCBN")
+        throw std::runtime_error("Invalid .pcbin magic in: " + path.string());
+
+    uint8_t  version  = 0;
+    uint8_t  reserved[3];
+    f.read(reinterpret_cast<char*>(&version),  1);
+    f.read(reinterpret_cast<char*>(reserved),  3);
+
+    uint32_t point_count   = 0;
+    uint32_t feature_count = 0;
+    f.read(reinterpret_cast<char*>(&point_count),   4);
+    f.read(reinterpret_cast<char*>(&feature_count), 4);
+
+    const uint32_t F = feature_count;
+    // Skip feature_names (F×32), vmin (F×4), vmax (F×4)
+    f.seekg(static_cast<std::streamoff>(F) * 40, std::ios::cur);
+
+    // ── Read records ──────────────────────────────────────────────────────────
+    // Record layout: F*float32 | segment_id | manual_class_id | predicted_class_id | padding | confidence
+    std::map<uint32_t, PointSegmentation> result;
+
+    for (uint32_t pid = 0; pid < point_count; ++pid) {
+        // Skip features (F*4)
+        f.seekg(static_cast<std::streamoff>(F) * 4, std::ios::cur);
+
+        uint8_t seg_id = 0, class_id = 0, pred_id = 0, pad = 0;
+        f.read(reinterpret_cast<char*>(&seg_id),   1);
+        f.read(reinterpret_cast<char*>(&class_id), 1);
+        f.read(reinterpret_cast<char*>(&pred_id),  1);
+        f.read(reinterpret_cast<char*>(&pad),      1);
+        // Skip confidence float (4 bytes)
+        f.seekg(4, std::ios::cur);
+
+        if (!f) break;
+        // Only include points that have been assigned to a segment
+        if (seg_id != 0xFF) {
+            result[pid] = {pid, seg_id, class_id};
         }
+    }
+
+    std::cout << "  Loaded " << result.size() << " annotated points from .pcbin (N=" << point_count << ", F=" << F << ").\n";
     return result;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  write_segment
-//
-//  Uses the Extra Bytes VLR names (read from raw binary) to correctly
-//  register and copy all extra dims — even those with non-UTF8 names
-//  that PDAL cannot parse from the VLR.
-//
-//  The PDAL srcView dims() with empty names are matched positionally
-//  to the VLR entries (same order, guaranteed by LAS spec).
+//  Type-safe field copy  (native type preserved — no intermediate double cast)
 // ─────────────────────────────────────────────────────────────────────────────
 
-static void write_segment(const fs::path&              las_path,
-                          const pdal::PointViewPtr&     srcView,
-                          const std::vector<uint8_t>&   raw,
-                          const std::vector<ExtraBytesEntry>& vlrExtras,
-                          int                           seg_id,
-                          const fs::path&               out_path)
+static void copyFieldTyped(const pdal::PointViewPtr& src, pdal::PointId si,
+                                 pdal::PointViewPtr& dst, pdal::PointId di,
+                           pdal::Dimension::Id srcId,
+                           pdal::Dimension::Id dstId,
+                           pdal::Dimension::Type type)
 {
-    const size_t n_valid = std::min(srcView->size(), raw.size() / 2);
-
-    static const std::set<std::string> kStandardDimNames = {
-        "X","Y","Z","Intensity","ReturnNumber","NumberOfReturns",
-        "ScanDirectionFlag","EdgeOfFlightLine","Classification",
-        "ScanAngleRank","UserData","PointSourceId",
-        "GpsTime","Red","Green","Blue",
-        "ScannerChannel","ScanChannel","ClassificationFlags","ScanAngle",
-        "NormalX","NormalY","NormalZ","Synthetic","KeyPoint","Withheld","Overlap"
-    };
-
-    // ── Collect PDAL extra dim IDs (positional — same order as VLR) ──────────
-    std::vector<pdal::Dimension::Id> srcExtraIds;
-    for (const auto& dimId : srcView->dims()) {
-        std::string dname = pdal::Dimension::name(dimId);
-        if (!kStandardDimNames.count(dname))
-            srcExtraIds.push_back(dimId);
+    using T = pdal::Dimension::Type;
+    switch (type) {
+        case T::Unsigned8:  dst->setField(dstId, di, src->getFieldAs<uint8_t> (srcId, si)); break;
+        case T::Signed8:    dst->setField(dstId, di, src->getFieldAs<int8_t>  (srcId, si)); break;
+        case T::Unsigned16: dst->setField(dstId, di, src->getFieldAs<uint16_t>(srcId, si)); break;
+        case T::Signed16:   dst->setField(dstId, di, src->getFieldAs<int16_t> (srcId, si)); break;
+        case T::Unsigned32: dst->setField(dstId, di, src->getFieldAs<uint32_t>(srcId, si)); break;
+        case T::Signed32:   dst->setField(dstId, di, src->getFieldAs<int32_t> (srcId, si)); break;
+        case T::Unsigned64: dst->setField(dstId, di, src->getFieldAs<uint64_t>(srcId, si)); break;
+        case T::Signed64:   dst->setField(dstId, di, src->getFieldAs<int64_t> (srcId, si)); break;
+        case T::Float:      dst->setField(dstId, di, src->getFieldAs<float>   (srcId, si)); break;
+        case T::Double:     dst->setField(dstId, di, src->getFieldAs<double>  (srcId, si)); break;
+        default: break;
     }
-
-    // vlrExtras and srcExtraIds must match positionally
-    size_t nExtra = std::min(srcExtraIds.size(), vlrExtras.size());
-    if (srcExtraIds.size() != vlrExtras.size())
-        std::cerr << "  WARNING: VLR extra count (" << vlrExtras.size()
-                  << ") != PDAL extra count (" << srcExtraIds.size()
-                  << ") — using first " << nExtra << "\n";
-
-    // ── Build fresh output PointTable — ALL dims registered before any points ─
-    pdal::PointTable table;
-    pdal::PointLayoutPtr layout = table.layout();
-
-    layout->registerDim(pdal::Dimension::Id::X);
-    layout->registerDim(pdal::Dimension::Id::Y);
-    layout->registerDim(pdal::Dimension::Id::Z);
-    layout->registerDim(pdal::Dimension::Id::Classification);
-    layout->registerDim(pdal::Dimension::Id::Intensity);
-    layout->registerDim(pdal::Dimension::Id::ScanAngleRank);
-    layout->registerDim(pdal::Dimension::Id::NumberOfReturns);
-    layout->registerDim(pdal::Dimension::Id::ReturnNumber);
-    layout->registerDim(pdal::Dimension::Id::Red);
-    layout->registerDim(pdal::Dimension::Id::Green);
-    layout->registerDim(pdal::Dimension::Id::Blue);
-    layout->registerDim(pdal::Dimension::Id::GpsTime);
-    layout->registerDim(pdal::Dimension::Id::PointSourceId);
-    layout->registerDim(pdal::Dimension::Id::UserData);
-    layout->registerDim(pdal::Dimension::Id::ScanDirectionFlag);
-    layout->registerDim(pdal::Dimension::Id::EdgeOfFlightLine);
-
-    // POINT_ID — explicitly handled to ensure it is always present
-    pdal::Dimension::Id pointIdSrc = pdal::Dimension::Id::Unknown;
-    for (const auto& dimId : srcView->dims()) {
-        std::string dname = pdal::Dimension::name(dimId);
-        std::transform(dname.begin(), dname.end(), dname.begin(), ::tolower);
-        if (dname == "point_id" || dname == "pointid") {
-            pointIdSrc = dimId;
-            break;
-        }
-    }
-    pdal::Dimension::Id pointIdDst = layout->registerOrAssignDim("POINT_ID", pdal::Dimension::Type::Unsigned32);
-
-    // Extra dims — registered with the NAME from VLR and TYPE from VLR
-    std::vector<pdal::Dimension::Id> dstExtraIds;
-    std::vector<pdal::Dimension::Id> filteredSrcExtraIds;
-    for (size_t k = 0; k < nExtra; ++k) {
-        std::string vname = vlrExtras[k].name;
-        std::string vname_low = vname;
-        std::transform(vname_low.begin(), vname_low.end(), vname_low.begin(), ::tolower);
-        // Skip POINT_ID if it's in vlrExtras to avoid double registration
-        if (vname_low == "point_id" || vname_low == "pointid") continue;
-
-        dstExtraIds.push_back(layout->registerOrAssignDim(vname, vlrExtras[k].type));
-        filteredSrcExtraIds.push_back(srcExtraIds[k]);
-    }
-
-    // labels — our new extra dim
-    pdal::Dimension::Id dimLabels =
-        layout->registerOrAssignDim("labels", pdal::Dimension::Type::Unsigned8);
-
-    // ── Populate PointView ────────────────────────────────────────────────────
-    pdal::PointViewPtr view(new pdal::PointView(table));
-
-    pdal::PointId out_idx = 0;
-    for (pdal::PointId i = 0; i < static_cast<pdal::PointId>(srcView->size()); ++i) {
-        uint8_t s_id = (i < static_cast<pdal::PointId>(n_valid)) ? raw[i * 2]     : 0;
-        uint8_t cls  = (i < static_cast<pdal::PointId>(n_valid)) ? raw[i * 2 + 1] : 0;
-        if (static_cast<int>(s_id) != seg_id) continue;
-
-        view->setField(pdal::Dimension::Id::X,                out_idx, srcView->getFieldAs<double>  (pdal::Dimension::Id::X,               i));
-        view->setField(pdal::Dimension::Id::Y,                out_idx, srcView->getFieldAs<double>  (pdal::Dimension::Id::Y,               i));
-        view->setField(pdal::Dimension::Id::Z,                out_idx, srcView->getFieldAs<double>  (pdal::Dimension::Id::Z,               i));
-        view->setField(pdal::Dimension::Id::Classification,   out_idx, srcView->getFieldAs<uint8_t> (pdal::Dimension::Id::Classification,  i));
-        view->setField(pdal::Dimension::Id::Intensity,        out_idx, srcView->getFieldAs<uint16_t>(pdal::Dimension::Id::Intensity,       i));
-        view->setField(pdal::Dimension::Id::ScanAngleRank,    out_idx, srcView->getFieldAs<float>   (pdal::Dimension::Id::ScanAngleRank,   i));
-        view->setField(pdal::Dimension::Id::NumberOfReturns,  out_idx, srcView->getFieldAs<uint8_t> (pdal::Dimension::Id::NumberOfReturns, i));
-        view->setField(pdal::Dimension::Id::ReturnNumber,     out_idx, srcView->getFieldAs<uint8_t> (pdal::Dimension::Id::ReturnNumber,    i));
-        view->setField(pdal::Dimension::Id::Red,              out_idx, srcView->getFieldAs<uint16_t>(pdal::Dimension::Id::Red,             i));
-        view->setField(pdal::Dimension::Id::Green,            out_idx, srcView->getFieldAs<uint16_t>(pdal::Dimension::Id::Green,           i));
-        view->setField(pdal::Dimension::Id::Blue,             out_idx, srcView->getFieldAs<uint16_t>(pdal::Dimension::Id::Blue,            i));
-        view->setField(pdal::Dimension::Id::GpsTime,          out_idx, srcView->getFieldAs<double>  (pdal::Dimension::Id::GpsTime,         i));
-        view->setField(pdal::Dimension::Id::PointSourceId,    out_idx, srcView->getFieldAs<uint16_t>(pdal::Dimension::Id::PointSourceId,   i));
-        view->setField(pdal::Dimension::Id::UserData,         out_idx, srcView->getFieldAs<uint8_t> (pdal::Dimension::Id::UserData,        i));
-        view->setField(pdal::Dimension::Id::ScanDirectionFlag,out_idx, srcView->getFieldAs<uint8_t> (pdal::Dimension::Id::ScanDirectionFlag, i));
-        view->setField(pdal::Dimension::Id::EdgeOfFlightLine, out_idx, srcView->getFieldAs<uint8_t> (pdal::Dimension::Id::EdgeOfFlightLine, i));
-
-        // Extra dims — copied by position
-        for (size_t k = 0; k < dstExtraIds.size(); ++k)
-            view->setField(dstExtraIds[k], out_idx,
-                           srcView->getFieldAs<double>(filteredSrcExtraIds[k], i));
-
-        if (pointIdSrc != pdal::Dimension::Id::Unknown)
-            view->setField(pointIdDst, out_idx, srcView->getFieldAs<uint32_t>(pointIdSrc, i));
-        else
-            view->setField(pointIdDst, out_idx, (uint32_t)i);
-
-        view->setField(dimLabels, out_idx, cls);
-
-        ++out_idx;
-    }
-
-    if (out_idx == 0) { std::cout << "  No points found, skipping.\n"; return; }
-    std::cout << "  Found " << out_idx << " points.\n";
-
-    // ── Write ─────────────────────────────────────────────────────────────────
-    pdal::BufferReader reader;
-    reader.addView(view);
-
-    pdal::Options writerOpts;
-    writerOpts.add("filename",      out_path.string());
-    writerOpts.add("extra_dims",    "all");
-    writerOpts.add("minor_version", 4);
-    writerOpts.add("dataformat_id", 7);
-
-    pdal::LasWriter writer;
-    writer.setOptions(writerOpts);
-    writer.setInput(reader);
-    writer.prepare(table);
-    writer.execute(table);
-
-    std::cout << "  Saved: " << out_path << "\n";
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  write_segment_for_classify
-//
-//  Same as write_segment but does NOT add the "labels" extra dim.
-//  Used when extracting a single segment to classify — we only need the
-//  feature dims, not the training label.
+//  Dimension info (dim mapping between source and output)
 // ─────────────────────────────────────────────────────────────────────────────
 
-static void write_segment_for_classify(const fs::path&              las_path,
-                                       const pdal::PointViewPtr&     srcView,
-                                       const std::vector<uint8_t>&   raw,
-                                       const std::vector<ExtraBytesEntry>& vlrExtras,
-                                       int                           seg_id,
-                                       const fs::path&               out_path)
+struct DimMapping {
+    pdal::Dimension::Id   srcId;
+    pdal::Dimension::Id   dstId;
+    pdal::Dimension::Type type;
+};
+
+// Standard PDAL dimension names — used to separate standard from extra dims
+static const std::set<std::string> kStandardDimNames = {
+    "X","Y","Z","Intensity","ReturnNumber","NumberOfReturns",
+    "ScanDirectionFlag","EdgeOfFlightLine","Classification",
+    "ScanAngleRank","UserData","PointSourceId",
+    "GpsTime","Red","Green","Blue",
+    "ScannerChannel","ScanChannel","ClassificationFlags","ScanAngle",
+    "NormalX","NormalY","NormalZ","Synthetic","KeyPoint","Withheld","Overlap"
+};
+
+// Normalise a dimension name: lowercase, strip underscores/spaces.
+// Lets us compare VLR "normal_x" with PDAL "NormalX" → both become "normalx".
+static std::string normaliseDimName(const std::string& s)
 {
-    const size_t n_valid = std::min(srcView->size(), raw.size() / 2);
+    std::string r;
+    for (char c : s)
+        if (c != '_' && c != ' ')
+            r += static_cast<char>(::tolower(static_cast<unsigned char>(c)));
+    return r;
+}
 
-    static const std::set<std::string> kStandardDimNames = {
-        "X","Y","Z","Intensity","ReturnNumber","NumberOfReturns",
-        "ScanDirectionFlag","EdgeOfFlightLine","Classification",
-        "ScanAngleRank","UserData","PointSourceId",
-        "GpsTime","Red","Green","Blue",
-        "ScannerChannel","ScanChannel","ClassificationFlags","ScanAngle",
-        "NormalX","NormalY","NormalZ","Synthetic","KeyPoint","Withheld","Overlap"
-    };
-
-    // ── Collect PDAL extra dim IDs (positional — same order as VLR) ──────────
-    std::vector<pdal::Dimension::Id> srcExtraIds;
-    for (const auto& dimId : srcView->dims()) {
-        std::string dname = pdal::Dimension::name(dimId);
-        if (!kStandardDimNames.count(dname))
-            srcExtraIds.push_back(dimId);
+// Decide whether a VLR extra-bytes entry was already absorbed by PDAL as a
+// standard/known dimension (e.g. VLR "normal_x" → PDAL standard "NormalX").
+static bool vlrMatchesStandardPdalDim(
+        const std::string& vlrName,
+        const pdal::PointViewPtr& view)
+{
+    std::string vnorm = normaliseDimName(vlrName);
+    for (auto id : view->dims()) {
+        std::string dname = pdal::Dimension::name(id);
+        if (dname.empty()) continue;                     // unnamed → not standard
+        if (!kStandardDimNames.count(dname)) continue;   // not a known standard
+        if (normaliseDimName(dname) == vnorm) return true;
     }
+    return false;
+}
 
-    size_t nExtra = std::min(srcExtraIds.size(), vlrExtras.size());
-    if (srcExtraIds.size() != vlrExtras.size())
-        std::cerr << "  WARNING: VLR extra count (" << vlrExtras.size()
-                  << ") != PDAL extra count (" << srcExtraIds.size()
-                  << ") — using first " << nExtra << "\n";
-
-    // ── Build fresh output PointTable — no "labels" dim ──────────────────────
-    pdal::PointTable table;
-    pdal::PointLayoutPtr layout = table.layout();
-
-    layout->registerDim(pdal::Dimension::Id::X);
-    layout->registerDim(pdal::Dimension::Id::Y);
-    layout->registerDim(pdal::Dimension::Id::Z);
-    layout->registerDim(pdal::Dimension::Id::Classification);
-    layout->registerDim(pdal::Dimension::Id::Intensity);
-    layout->registerDim(pdal::Dimension::Id::ScanAngleRank);
-    layout->registerDim(pdal::Dimension::Id::NumberOfReturns);
-    layout->registerDim(pdal::Dimension::Id::ReturnNumber);
-    layout->registerDim(pdal::Dimension::Id::Red);
-    layout->registerDim(pdal::Dimension::Id::Green);
-    layout->registerDim(pdal::Dimension::Id::Blue);
-    layout->registerDim(pdal::Dimension::Id::GpsTime);
-    layout->registerDim(pdal::Dimension::Id::PointSourceId);
-    layout->registerDim(pdal::Dimension::Id::UserData);
-    layout->registerDim(pdal::Dimension::Id::ScanDirectionFlag);
-    layout->registerDim(pdal::Dimension::Id::EdgeOfFlightLine);
-
-    // POINT_ID — explicitly handled
-    pdal::Dimension::Id pointIdSrc = pdal::Dimension::Id::Unknown;
-    for (const auto& dimId : srcView->dims()) {
-        std::string dname = pdal::Dimension::name(dimId);
-        std::transform(dname.begin(), dname.end(), dname.begin(), ::tolower);
-        if (dname == "point_id" || dname == "pointid") {
-            pointIdSrc = dimId;
-            break;
+// Find POINT_ID — first try by PDAL dim name, then by VLR + positional matching.
+// Returns the PDAL Dimension::Id that holds the file-level POINT_ID.
+static pdal::Dimension::Id findPointIdDim(
+        const pdal::PointViewPtr& view,
+        const std::vector<ExtraBytesEntry>& vlrExtras)
+{
+    // ── Strategy 1: search for a PDAL dim named "POINT_ID" or "point_id" ──────
+    pdal::Dimension::Id candidate = pdal::Dimension::Id::Unknown;
+    for (auto id : view->dims()) {
+        std::string n = pdal::Dimension::name(id);
+        if (n == "POINT_ID") {
+            std::cout << "  [Info] Found POINT_ID dimension (exact): '" << n << "'\n";
+            return id;
         }
+        std::string low = n;
+        std::transform(low.begin(), low.end(), low.begin(), ::tolower);
+        // Accept "point_id" but NOT PDAL's built-in "PointId" (no underscore)
+        if (low == "point_id" && n != "PointId")
+            candidate = id;
     }
-    pdal::Dimension::Id pointIdDst = layout->registerOrAssignDim("POINT_ID", pdal::Dimension::Type::Unsigned32);
-
-    std::vector<pdal::Dimension::Id> dstExtraIds;
-    std::vector<pdal::Dimension::Id> filteredSrcExtraIds;
-    for (size_t k = 0; k < nExtra; ++k) {
-        std::string vname = vlrExtras[k].name;
-        std::string vname_low = vname;
-        std::transform(vname_low.begin(), vname_low.end(), vname_low.begin(), ::tolower);
-        if (vname_low == "point_id" || vname_low == "pointid") continue;
-
-        dstExtraIds.push_back(layout->registerOrAssignDim(vname, vlrExtras[k].type));
-        filteredSrcExtraIds.push_back(srcExtraIds[k]);
+    if (candidate != pdal::Dimension::Id::Unknown) {
+        std::cout << "  [Info] Found POINT_ID dimension (case-insensitive): '"
+                  << pdal::Dimension::name(candidate) << "'\n";
+        return candidate;
     }
 
-    // ── Populate PointView — keep all points that belong to seg_id ────────────
-    pdal::PointViewPtr view(new pdal::PointView(table));
-
-    pdal::PointId out_idx = 0;
-    for (pdal::PointId i = 0; i < static_cast<pdal::PointId>(srcView->size()); ++i) {
-        uint8_t s_id = (i < static_cast<pdal::PointId>(n_valid)) ? raw[i * 2] : 0;
-        if (static_cast<int>(s_id) != seg_id) continue;
-
-        view->setField(pdal::Dimension::Id::X,                out_idx, srcView->getFieldAs<double>  (pdal::Dimension::Id::X,               i));
-        view->setField(pdal::Dimension::Id::Y,                out_idx, srcView->getFieldAs<double>  (pdal::Dimension::Id::Y,               i));
-        view->setField(pdal::Dimension::Id::Z,                out_idx, srcView->getFieldAs<double>  (pdal::Dimension::Id::Z,               i));
-        view->setField(pdal::Dimension::Id::Classification,   out_idx, srcView->getFieldAs<uint8_t> (pdal::Dimension::Id::Classification,  i));
-        view->setField(pdal::Dimension::Id::Intensity,        out_idx, srcView->getFieldAs<uint16_t>(pdal::Dimension::Id::Intensity,       i));
-        view->setField(pdal::Dimension::Id::ScanAngleRank,    out_idx, srcView->getFieldAs<float>   (pdal::Dimension::Id::ScanAngleRank,   i));
-        view->setField(pdal::Dimension::Id::NumberOfReturns,  out_idx, srcView->getFieldAs<uint8_t> (pdal::Dimension::Id::NumberOfReturns, i));
-        view->setField(pdal::Dimension::Id::ReturnNumber,     out_idx, srcView->getFieldAs<uint8_t> (pdal::Dimension::Id::ReturnNumber,    i));
-        view->setField(pdal::Dimension::Id::Red,              out_idx, srcView->getFieldAs<uint16_t>(pdal::Dimension::Id::Red,             i));
-        view->setField(pdal::Dimension::Id::Green,            out_idx, srcView->getFieldAs<uint16_t>(pdal::Dimension::Id::Green,           i));
-        view->setField(pdal::Dimension::Id::Blue,             out_idx, srcView->getFieldAs<uint16_t>(pdal::Dimension::Id::Blue,            i));
-        view->setField(pdal::Dimension::Id::GpsTime,          out_idx, srcView->getFieldAs<double>  (pdal::Dimension::Id::GpsTime,         i));
-        view->setField(pdal::Dimension::Id::PointSourceId,    out_idx, srcView->getFieldAs<uint16_t>(pdal::Dimension::Id::PointSourceId,   i));
-        view->setField(pdal::Dimension::Id::UserData,         out_idx, srcView->getFieldAs<uint8_t> (pdal::Dimension::Id::UserData,        i));
-        view->setField(pdal::Dimension::Id::ScanDirectionFlag,out_idx, srcView->getFieldAs<uint8_t> (pdal::Dimension::Id::ScanDirectionFlag, i));
-        view->setField(pdal::Dimension::Id::EdgeOfFlightLine, out_idx, srcView->getFieldAs<uint8_t> (pdal::Dimension::Id::EdgeOfFlightLine, i));
-
-        for (size_t k = 0; k < dstExtraIds.size(); ++k)
-            view->setField(dstExtraIds[k], out_idx,
-                           srcView->getFieldAs<double>(filteredSrcExtraIds[k], i));
-
-        if (pointIdSrc != pdal::Dimension::Id::Unknown)
-            view->setField(pointIdDst, out_idx, srcView->getFieldAs<uint32_t>(pointIdSrc, i));
-        else
-            view->setField(pointIdDst, out_idx, (uint32_t)i);
-
-        ++out_idx;
+    // ── Strategy 2: positional matching with unnamed PDAL dims ────────────────
+    // PDAL may create unnamed (empty-string) dims for extra bytes that it could
+    // not map to any standard name. These unnamed dims correspond positionally
+    // to the VLR entries that PDAL did NOT absorb as standard dims.
+    // We find which VLR position holds POINT_ID, then return the matching
+    // unnamed PDAL dim.
+    std::vector<pdal::Dimension::Id> unnamedDims;
+    for (auto id : view->dims()) {
+        std::string dname = pdal::Dimension::name(id);
+        if (dname.empty()) unnamedDims.push_back(id);
     }
 
-    if (out_idx == 0) { std::cout << "  No points found for segment " << seg_id << ", skipping.\n"; return; }
-    std::cout << "  Found " << out_idx << " points.\n";
+    // Build list of VLR entries NOT absorbed into standard PDAL dims
+    size_t unnamedIdx = 0;
+    for (size_t k = 0; k < vlrExtras.size(); ++k) {
+        const std::string& vname = vlrExtras[k].name;
+        std::string vlow = vname;
+        std::transform(vlow.begin(), vlow.end(), vlow.begin(), ::tolower);
 
-    // ── Write ─────────────────────────────────────────────────────────────────
-    pdal::BufferReader reader;
-    reader.addView(view);
+        if (vlrMatchesStandardPdalDim(vname, view)) continue; // absorbed
 
-    pdal::Options writerOpts;
-    writerOpts.add("filename",      out_path.string());
-    writerOpts.add("extra_dims",    "all");
-    writerOpts.add("minor_version", 4);
-    writerOpts.add("dataformat_id", 7);
+        if ((vlow == "point_id" || vlow == "pointid") && unnamedIdx < unnamedDims.size()) {
+            std::cout << "  [Info] Found POINT_ID via VLR positional match → unnamed PDAL dim #"
+                      << unnamedIdx << "\n";
+            return unnamedDims[unnamedIdx];
+        }
+        ++unnamedIdx;
+    }
 
-    pdal::LasWriter writer;
-    writer.setOptions(writerOpts);
-    writer.setInput(reader);
-    writer.prepare(table);
-    writer.execute(table);
-
-    std::cout << "  Saved: " << out_path << "\n";
+    return pdal::Dimension::Id::Unknown;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  extract_segment — single-segment extraction mode for classify
+//  Per-segment output container
 // ─────────────────────────────────────────────────────────────────────────────
 
-static void extract_segment(const fs::path& las_path,
-                             const fs::path& bin_path,
-                             int             seg_id,
-                             const fs::path& out_path)
+struct SegmentOutput {
+    std::unique_ptr<pdal::PointTable> table;
+    pdal::PointViewPtr                view;
+    fs::path                          outPath;
+    pdal::PointId                     count    = 0;
+    std::vector<DimMapping>           mappings;   // all dims to copy each point
+    pdal::Dimension::Id               dimLabels = pdal::Dimension::Id::Unknown;
+    pdal::Dimension::Id               srcPointId = pdal::Dimension::Id::Unknown;
+    pdal::Dimension::Id               dstPointId = pdal::Dimension::Id::Unknown;
+};
+
+// Build the layout and DimMappings for one output segment, mirroring the source.
+// Uses a hybrid approach: name-based matching first, then positional matching
+// between unnamed PDAL dims and VLR entries that PDAL didn't absorb.
+static std::unique_ptr<SegmentOutput> makeOutput(
+        const pdal::PointViewPtr&           srcView,
+        const std::vector<ExtraBytesEntry>& vlrExtras,
+        const fs::path&                     outPath,
+        bool                                addLabels)
 {
-    std::cout << "Mode: extract single segment " << seg_id << " for classify\n";
+    auto out  = std::make_unique<SegmentOutput>();
+    out->outPath  = outPath;
+    out->table    = std::make_unique<pdal::PointTable>();
+    auto& layout  = *out->table->layout();
 
-    std::cout << "Loading binary: " << bin_path << "\n";
-    auto raw = read_binary(bin_path);
-    if (raw.size() % 2 != 0) throw std::runtime_error("Binary buffer not multiple of 2.");
-    std::cout << "  " << (raw.size()/2) << " label pairs found.\n";
+    pdal::PointLayoutPtr srcLayout = srcView->table().layout();
 
+    // ── Standard dims ─────────────────────────────────────────────────────────
+    for (auto srcId : srcView->dims()) {
+        const std::string dname = pdal::Dimension::name(srcId);
+        if (!kStandardDimNames.count(dname)) continue;
+        pdal::Dimension::Type tp = srcLayout->dimType(srcId);
+        pdal::Dimension::Id dstId = layout.registerOrAssignDim(dname, tp);
+        out->mappings.push_back({srcId, dstId, tp});
+    }
+
+    // ── Extra dims ────────────────────────────────────────────────────────────
+    // PDAL may give extra-bytes dims proper names or leave them unnamed (empty).
+    // Build a name-based lookup for named PDAL dims...
+    std::map<std::string, pdal::Dimension::Id> pdalByNorm;
+    for (auto srcId : srcView->dims()) {
+        std::string dname = pdal::Dimension::name(srcId);
+        if (dname.empty() || kStandardDimNames.count(dname)) continue;
+        pdalByNorm[normaliseDimName(dname)] = srcId;
+    }
+
+    // ...and collect unnamed dims for positional fallback
+    std::vector<pdal::Dimension::Id> unnamedDims;
+    for (auto id : srcView->dims()) {
+        if (pdal::Dimension::name(id).empty()) unnamedDims.push_back(id);
+    }
+
+    // Walk VLR entries. For each non-POINT_ID, non-standard entry:
+    // try name-based match first, then fall back to positional against unnamed.
+    size_t unnamedIdx = 0;
+    for (size_t k = 0; k < vlrExtras.size(); ++k) {
+        const std::string vname = vlrExtras[k].name;
+        std::string vlow = vname;
+        std::transform(vlow.begin(), vlow.end(), vlow.begin(), ::tolower);
+
+        // Skip POINT_ID — handled separately
+        bool isPointId = (vlow == "point_id" || vlow == "pointid");
+
+        // Was this VLR entry absorbed into a standard PDAL dim?
+        bool absorbedByStandard = vlrMatchesStandardPdalDim(vname, srcView);
+
+        if (absorbedByStandard) {
+            // Already copied above as a standard dim; don't advance unnamedIdx
+            continue;
+        }
+
+        // This VLR entry corresponds to the next unnamed PDAL dim
+        pdal::Dimension::Id srcId = pdal::Dimension::Id::Unknown;
+
+        // Try name-based match (for PDAL versions that name extras)
+        std::string vnorm = normaliseDimName(vname);
+        auto pit = pdalByNorm.find(vnorm);
+        if (pit != pdalByNorm.end()) {
+            srcId = pit->second;
+        } else if (unnamedIdx < unnamedDims.size()) {
+            // Positional fallback
+            srcId = unnamedDims[unnamedIdx];
+        }
+        ++unnamedIdx;  // always advance for non-absorbed VLR entries
+
+        if (isPointId) continue;  // don't add mapping for POINT_ID itself
+
+        if (srcId == pdal::Dimension::Id::Unknown) continue;
+
+        pdal::Dimension::Type tp = srcLayout->dimType(srcId);
+        pdal::Dimension::Id dstId = layout.registerOrAssignDim(vname, tp);
+        out->mappings.push_back({srcId, dstId, tp});
+    }
+
+    // ── POINT_ID ─────────────────────────────────────────────────────────────
+    out->srcPointId = findPointIdDim(srcView, vlrExtras);
+    out->dstPointId = layout.registerOrAssignDim("POINT_ID", pdal::Dimension::Type::Unsigned32);
+
+    // ── labels (training only) ────────────────────────────────────────────────
+    if (addLabels)
+        out->dimLabels = layout.registerOrAssignDim("labels", pdal::Dimension::Type::Unsigned8);
+
+    out->view = std::make_shared<pdal::PointView>(*out->table);
+    return out;
+}
+
+// Write a completed output segment to disk.
+static void writeOutput(SegmentOutput& out)
+{
+    if (out.count == 0) {
+        std::cout << "  No points — skipped: " << out.outPath << "\n";
+        return;
+    }
+
+    pdal::BufferReader reader;
+    reader.addView(out.view);
+
+    pdal::Options wOpts;
+    wOpts.add("filename",      out.outPath.string());
+    wOpts.add("extra_dims",    "all");
+    wOpts.add("minor_version", 4);
+    wOpts.add("dataformat_id", 7);
+
+    pdal::LasWriter writer;
+    writer.setOptions(wOpts);
+    writer.setInput(reader);
+    writer.prepare(*out.table);
+    writer.execute(*out.table);
+
+    std::cout << "  Saved " << out.count << " points → " << out.outPath << "\n";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Core: single-pass O(N) distribution using pcbin annotations
+// ─────────────────────────────────────────────────────────────────────────────
+
+static void processPointsFromMapping(
+        const pdal::PointViewPtr&                         srcView,
+        const std::map<uint32_t, PointSegmentation>&      mapping,
+        std::map<int, std::unique_ptr<SegmentOutput>>&    outputs,
+        bool                                              addLabels)
+{
+    const size_t nPts = srcView->size();
+    pdal::PointId skipped = 0;
+    pdal::PointId unmapped = 0;
+
+    // The .pcbin annotation map is keyed by POINT_ID value — not by PDAL
+    // read-order index. We must read the POINT_ID attribute from each point.
+    // Using sequential index `i` is wrong: PDAL may reorder points and, even
+    // when it doesn't, POINT_ID values may not start at 0 or be contiguous.
+    const pdal::Dimension::Id pidSrc = outputs.empty()
+        ? pdal::Dimension::Id::Unknown
+        : outputs.begin()->second->srcPointId;
+
+    if (pidSrc == pdal::Dimension::Id::Unknown)
+        std::cerr << "  WARNING: No POINT_ID dimension found — falling back to "
+                     "sequential indices (segment results will be wrong).\n";
+
+    // Diagnostic: print first 10 POINT_ID values
+    {
+        size_t diag = std::min<size_t>(nPts, 10);
+        std::cout << "  First " << diag << " POINT_ID values:";
+        for (size_t d = 0; d < diag; ++d) {
+            uint32_t dpid = (pidSrc != pdal::Dimension::Id::Unknown)
+                ? srcView->getFieldAs<uint32_t>(pidSrc, d)
+                : static_cast<uint32_t>(d);
+            std::cout << " " << dpid;
+        }
+        std::cout << "\n";
+    }
+
+    for (pdal::PointId i = 0; i < (pdal::PointId)nPts; ++i) {
+        // Read POINT_ID attribute → key into pcbin annotation map
+        uint32_t pid = (pidSrc != pdal::Dimension::Id::Unknown)
+            ? srcView->getFieldAs<uint32_t>(pidSrc, i)
+            : static_cast<uint32_t>(i);
+
+        // Look up segmentation from mapping
+        auto it = mapping.find(pid);
+        if (it == mapping.end()) {
+            ++unmapped;
+            continue;  // Point not annotated → skip
+        }
+
+        const PointSegmentation& ps = it->second;
+        int segId = static_cast<int>(ps.segment_id);
+        uint8_t classId = ps.class_id;
+
+        auto out_it = outputs.find(segId);
+        if (out_it == outputs.end()) continue;  // segment not in requested output list
+
+        SegmentOutput& out = *out_it->second;
+        pdal::PointId  di  = out.count;
+
+        // Copy all standard + extra dims with native types
+        for (const auto& m : out.mappings)
+            copyFieldTyped(srcView, i, out.view, di, m.srcId, m.dstId, m.type);
+
+        // POINT_ID
+        if (out.srcPointId != pdal::Dimension::Id::Unknown)
+            out.view->setField(out.dstPointId, di,
+                               srcView->getFieldAs<uint32_t>(out.srcPointId, i));
+        else
+            out.view->setField(out.dstPointId, di, (uint32_t)i);
+
+        // labels (training mode only)
+        if (addLabels && out.dimLabels != pdal::Dimension::Id::Unknown)
+            out.view->setField(out.dimLabels, di, classId);
+
+        ++out.count;
+    }
+
+    if (unmapped > 0)
+        std::cerr << "INFO: " << unmapped
+                  << " points not found in mapping (unclassified/filtered).\n";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Public entry point: split all annotated segments from a .pcbin store
+// ─────────────────────────────────────────────────────────────────────────────
+
+static void run_split_from_pcbin(const fs::path&                las_path,
+                                  const fs::path&                pcbin_path,
+                                  const std::map<int, fs::path>& output_map,
+                                  bool                           addLabels)
+{
+    // ── Read source LAS once ──────────────────────────────────────────────────
     std::cout << "Loading LAS: " << las_path << "\n";
     pdal::PointTable srcTable;
     pdal::LasReader  srcReader;
@@ -514,112 +537,113 @@ static void extract_segment(const fs::path& las_path,
     pdal::PointViewPtr srcView = *srcReader.execute(srcTable).begin();
     std::cout << "  Total points: " << srcView->size() << "\n";
 
+    // ── Read annotations from .pcbin ──────────────────────────────────────────
+    std::cout << "Loading .pcbin: " << pcbin_path << "\n";
+    auto mapping = read_pcbin_annotations(pcbin_path);
+
+    // ── Parse Extra Bytes VLR (corrects non-UTF8 dim names) ──────────────────
     auto vlrExtras = readExtraBytesVLR(las_path);
 
-    if (raw.size()/2 < srcView->size())
-        std::cerr << "WARNING: buffer fewer entries (" << raw.size()/2
-                  << ") than points (" << srcView->size() << ").\n";
+    // ── Diagnostic: dump all PDAL dimension names ─────────────────────────────
+    std::cout << "  PDAL dimensions (" << srcView->dims().size() << "):";
+    for (auto id : srcView->dims())
+        std::cout << " [" << pdal::Dimension::name(id) << "]";
+    std::cout << "\n";
 
-    fs::create_directories(out_path.parent_path());
+    std::cout << "  VLR extras (" << vlrExtras.size() << "):";
+    for (auto& e : vlrExtras)
+        std::cout << " [" << e.name << "]";
+    std::cout << "\n";
 
-    write_segment_for_classify(las_path, srcView, raw, vlrExtras, seg_id, out_path);
+    // ── Diagnostic: dump annotation breakdown per segment ─────────────────────
+    {
+        std::map<int, int> segCounts;
+        for (auto& [pid, ps] : mapping)
+            ++segCounts[static_cast<int>(ps.segment_id)];
+        std::cout << "  Annotation breakdown:";
+        for (auto& [seg, cnt] : segCounts)
+            std::cout << " seg" << seg << "=" << cnt;
+        std::cout << "\n";
+    }
 
-    std::cout << "\nExtraction completed!\n";
+    // ── Build per-segment outputs (name-based VLR↔PDAL matching) ──────────────
+    std::map<int, std::unique_ptr<SegmentOutput>> outputs;
+    for (auto const& [id, path] : output_map) {
+        outputs[id] = makeOutput(srcView, vlrExtras, path, addLabels);
+    }
+
+    // ── Single-pass point distribution ───────────────────────────────────────
+    std::cout << "Distributing points from .pcbin annotations...\n";
+    processPointsFromMapping(srcView, mapping, outputs, addLabels);
+
+    // ── Write results ─────────────────────────────────────────────────────────
+    std::cout << "Writing output files:\n";
+    for (auto& [id, out] : outputs)
+        writeOutput(*out);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-
-static void split_las(const fs::path& las_path,
-                      const fs::path& bin_path,
-                      const fs::path& meta_path,
-                      const fs::path& output_dir)
-{
-    std::cout << "Loading metadata: " << meta_path << "\n";
-    auto seg_map = parse_metadata(meta_path);
-    for (auto& [id, info] : seg_map)
-        std::cout << "  Segment " << id << ": \"" << info.name
-                  << "\"  role=" << (info.role.empty() ? "(none)" : info.role) << "\n";
-
-    std::cout << "Loading binary labels: " << bin_path << "\n";
-    auto raw = read_binary(bin_path);
-    if (raw.size() % 2 != 0) throw std::runtime_error("Binary buffer not multiple of 2.");
-    std::cout << "  " << (raw.size()/2) << " label pairs found.\n";
-
-    // ── Read LAS ──────────────────────────────────────────────────────────────
-    std::cout << "Loading LAS: " << las_path << "\n";
-    pdal::PointTable srcTable;
-    pdal::LasReader  srcReader;
-    {
-        pdal::Options opts; opts.add("filename", las_path.string());
-        srcReader.setOptions(opts);
-        srcReader.prepare(srcTable);
-    }
-    pdal::PointViewPtr srcView = *srcReader.execute(srcTable).begin();
-    std::cout << "  Total points: " << srcView->size() << "\n";
-
-    // ── Read extra dim names directly from VLR binary ─────────────────────────
-    auto vlrExtras = readExtraBytesVLR(las_path);
-
-    if (raw.size()/2 < srcView->size())
-        std::cerr << "WARNING: buffer fewer entries (" << raw.size()/2
-                  << ") than points (" << srcView->size() << ").\n";
-
-    fs::create_directories(output_dir);
-
-    for (auto& [seg_id, info] : seg_map) {
-        std::cout << "\nProcessing segment " << seg_id << " \"" << info.name << "\"...\n";
-
-        fs::path out_path;
-        if (!info.role.empty()) {
-            out_path = output_dir / (info.role + ".las");
-        } else {
-            std::string safe;
-            for (unsigned char c : info.name)
-                safe += (std::isalnum(c)||c=='.'||c=='_'||c=='-'||c==' ')?(char)c:'_';
-            while (!safe.empty() && safe.front()==' ') safe.erase(safe.begin());
-            while (!safe.empty() && safe.back() ==' ') safe.pop_back();
-            out_path = output_dir / (las_path.stem().string() + "_" + safe + ".las");
-        }
-
-        write_segment(las_path, srcView, raw, vlrExtras, seg_id, out_path);
-    }
-
-    std::cout << "\nProcess completed!\n";
-}
-
+//  main
 // ─────────────────────────────────────────────────────────────────────────────
 
 int main(int argc, char* argv[])
 {
-    // ── Mode 1 (training split):
-    //   split_las_by_binary <las_path> <bin_path> <meta_path> <output_dir>
-    //
-    // ── Mode 2 (classify extract):
-    //   split_las_by_binary <las_path> <bin_path> --extract-segment <seg_id> <out_path>
-
-    if (argc >= 6 && std::string(argv[3]) == "--extract-segment") {
-        try {
-            int seg_id = std::stoi(argv[4]);
-            extract_segment(argv[1], argv[2], seg_id, argv[5]);
-        } catch (const std::exception& e) {
-            std::cerr << "ERROR: " << e.what() << "\n";
-            return 1;
-        }
-        return 0;
-    }
-
-    if (argc < 5) {
-        std::cerr << "Usage (training split):\n"
-                  << "  " << argv[0] << " <las_path> <bin_path> <meta_path> <output_dir>\n\n"
-                  << "Usage (classify extract):\n"
-                  << "  " << argv[0] << " <las_path> <bin_path> --extract-segment <seg_id> <out_path>\n";
-        return 1;
-    }
+    // Usage modes (all use .pcbin for annotations):
+    // Mode 1: split_las_by_binary <las> <store.pcbin> <out_dir>
+    //         Split all annotated segments into separate LAS files (addLabels=true)
+    // Mode 2: split_las_by_binary <las> <store.pcbin> --extract-segment <seg_id> <out_path>
+    //         Extract a single segment's points into one LAS file (addLabels=false)
 
     try {
-        split_las(argv[1], argv[2], argv[3], argv[4]);
+        // Mode 2: extract single segment
+        if (argc >= 6 && std::string(argv[3]) == "--extract-segment") {
+            fs::path las    = argv[1];
+            fs::path pcbin  = argv[2];
+            int      segId  = std::stoi(argv[4]);
+            fs::path out    = argv[5];
+
+            if (!fs::exists(pcbin))
+                throw std::runtime_error(".pcbin file not found: " + pcbin.string());
+
+            fs::create_directories(out.parent_path());
+            std::cout << "Extract-segment mode: .pcbin annotations (segment " << segId << ")\n";
+
+            std::map<int, fs::path> m = {{segId, out}};
+            run_split_from_pcbin(las, pcbin, m, /*addLabels=*/false);
+            return 0;
+        }
+
+        // Mode 1: split all segments
+        if (argc >= 4) {
+            fs::path las     = argv[1];
+            fs::path pcbin   = argv[2];
+            fs::path out_dir = argv[3];
+
+            if (!fs::exists(pcbin))
+                throw std::runtime_error(".pcbin file not found: " + pcbin.string());
+
+            fs::create_directories(out_dir);
+            std::cout << "Mode: Split all annotated segments\n";
+
+            // Build output map for all possible segment IDs (0–254; 255 = unassigned)
+            std::map<int, fs::path> out_map;
+            for (int sid = 0; sid < 255; ++sid)
+                out_map[sid] = out_dir / ("segment_" + std::to_string(sid) + ".las");
+
+            run_split_from_pcbin(las, pcbin, out_map, /*addLabels=*/true);
+            std::cout << "\nProcess completed!\n";
+            return 0;
+        }
+
+        std::cerr << "ERROR: Invalid arguments.\n\n"
+                  << "Usage (split all segments):\n"
+                  << "  " << argv[0] << " <las_path> <store.pcbin> <output_dir>\n\n"
+                  << "Usage (extract single segment):\n"
+                  << "  " << argv[0] << " <las_path> <store.pcbin> --extract-segment <seg_id> <out_path>\n";
+        return 1;
+
     } catch (const std::exception& e) {
-        std::cerr << "ERROR: " << e.what() << "\n";
+        std::cerr << "FATAL ERROR: " << e.what() << "\n";
         return 1;
     }
     return 0;

@@ -461,16 +461,47 @@ export class Potree2Loader {
         }
     }
 
-    async loadFeatureBin(url) {
-        console.log("Loading feature bin: " + url);
+    /**
+     * Load the unified point cloud binary store (.pcbin).
+     *
+     * .pcbin binary format
+     * ─────────────────────
+     * Header:
+     *   [0-3]          magic: "PCBN"
+     *   [4]            version: uint8
+     *   [5-7]          reserved: 3 bytes
+     *   [8-11]         point_count: uint32  (= max_point_id + 1)
+     *   [12-15]        feature_count: uint32 (= F)
+     *   [16..+F*32]    feature_names: char[32] × F (null-padded)
+     *   [..+F*4]       vmin: float32 × F
+     *   [..+F*4]       vmax: float32 × F
+     *   Header size = 16 + F*40
+     *
+     * Records (N records, indexed by point_id):
+     *   [0..F*4-1]     features: float32 × F  (NaN = no data)
+     *   [F*4]          segment_id: uint8       (0xFF = unassigned)
+     *   [F*4+1]        manual_class_id: uint8  (0xFF = unassigned)
+     *   [F*4+2]        predicted_class_id: uint8 (0xFF = unassigned)
+     *   [F*4+3]        padding: uint8
+     *   [F*4+4..+3]    confidence: float32     (NaN = no prediction)
+     *   Record size = F*4 + 8
+     */
+    async loadPcBin(url) {
+        console.log("Loading .pcbin store: " + url);
         const response = await fetch(url);
-        if (!response.ok) throw new Error("Failed to fetch feature bin: " + response.status);
+        if (!response.ok) throw new Error("Failed to fetch .pcbin: " + response.status);
         const buffer = await response.arrayBuffer();
         const dv = new DataView(buffer);
+
+        // ── Header ──────────────────────────────────────────────────────────
         const magic = String.fromCharCode(dv.getUint8(0), dv.getUint8(1), dv.getUint8(2), dv.getUint8(3));
-        if (magic !== 'FEAT') throw new Error("Invalid feature bin magic: " + magic);
-        const N = dv.getUint32(4, true), F = dv.getUint32(8, true);
-        let offset = 12;
+        if (magic !== 'PCBN') throw new Error("Invalid .pcbin magic: " + magic);
+
+        // version (1) + reserved (3) = 4 bytes at offset 4
+        const N = dv.getUint32(8,  true);   // point_count
+        const F = dv.getUint32(12, true);   // feature_count
+
+        let offset = 16;
         const decoder = new TextDecoder('utf-8', { fatal: false });
         const names = [];
         for (let f = 0; f < F; f++) {
@@ -482,9 +513,31 @@ export class Potree2Loader {
         }
         const vmin = new Float32Array(buffer.slice(offset, offset + F * 4)); offset += F * 4;
         const vmax = new Float32Array(buffer.slice(offset, offset + F * 4)); offset += F * 4;
-        const data = new Float32Array(buffer.slice(offset));
-        this.featureBin = { N, F, names, vmin, vmax, data };
-        console.log("Feature bin loaded: " + F + " features, " + N + " points");
+
+        // ── Records ─────────────────────────────────────────────────────────
+        const recSize = F * 4 + 8;  // features + 4 annotation bytes + float confidence
+        const featData    = new Float32Array(N * F);
+        const segIds      = new Uint8Array(N);
+        const classIds    = new Uint8Array(N);
+        const predIds     = new Uint8Array(N);
+        const confidence  = new Float32Array(N);
+
+        for (let pid = 0; pid < N; pid++) {
+            const recOff = offset + pid * recSize;
+            for (let f = 0; f < F; f++) {
+                featData[pid * F + f] = dv.getFloat32(recOff + f * 4, true);
+            }
+            segIds[pid]     = dv.getUint8(recOff + F * 4);
+            classIds[pid]   = dv.getUint8(recOff + F * 4 + 1);
+            predIds[pid]    = dv.getUint8(recOff + F * 4 + 2);
+            // byte F*4+3 = padding
+            confidence[pid] = dv.getFloat32(recOff + F * 4 + 4, true);
+        }
+
+        this.featureBin = { N, F, names, vmin, vmax, data: featData };
+        this.pcbinAnnotations = { segIds, classIds, predIds, confidence };
+
+        console.log(".pcbin loaded: F=" + F + ", N=" + N);
         return names;
     }
 
@@ -2209,9 +2262,9 @@ export class Potree2Loader {
                     }
 
                     const segId = segmentIds[i] || 0;
-                    if (segmentNameMap[segId]) {
+                    if (segmentNameMap[segId] !== undefined) {
                         seenIds.add(pid);
-                        buffer[pid * 2] = segId;
+                        buffer[pid * 2] = segId + 1;      // +1 so 0 stays "unannotated"
                         buffer[pid * 2 + 1] = classIds[i] || 0;
                     }
                 }
@@ -2234,9 +2287,9 @@ export class Potree2Loader {
                         const seg = this._getPointSegment(p.pos);
                         const finalSegId = seg ? seg.segmentId : 0;
 
-                        if (segmentNameMap[finalSegId]) {
+                        if (segmentNameMap[finalSegId] !== undefined) {
                             seenIds.add(p.id);
-                            buffer[p.id * 2] = finalSegId;
+                            buffer[p.id * 2] = finalSegId + 1;  // +1 so 0 stays "unannotated"
 
                             const cls = this._getPointClassification(p.pos);
                             buffer[p.id * 2 + 1] = cls ? cls.classId : 0;
@@ -2251,12 +2304,28 @@ export class Potree2Loader {
             }
         };
 
+        // Diagnostic: check if POINT_ID attribute exists in the Potree octree
+        const hasPointIdAttr = this.attributes.some(a => {
+            const low = a.name.toLowerCase();
+            return low === "point_id" || low === "pointid";
+        });
+        console.log(`[Diag] POINT_ID attribute in Potree metadata: ${hasPointIdAttr}`);
+        console.log(`[Diag] Attributes: ${this.attributes.map(a => a.name).join(", ")}`);
+        console.log(`[Diag] totalPoints (metadata.points): ${totalPoints}`);
+
         console.log("🚀 Starting global octree traversal (2-Channel Binary Mode)...");
         await traverse(this.root);
         console.log(`✅ Global traversal finished.`);
         console.log(`   - Total points in octree nodes: ${totalProcessed.toLocaleString()}`);
         console.log(`   - Unique points assigned in buffer: ${seenIds.size.toLocaleString()}`);
         console.log(`   - Points skipped: ${skippedNoId.toLocaleString()} (no ID), ${duplicates.toLocaleString()} (duplicates)`);
+
+        // Diagnostic: sample first 20 assigned PIDs
+        const samplePids = [];
+        for (let k = 0; k < totalPoints && samplePids.length < 20; k++) {
+            if (buffer[k * 2] !== 0) samplePids.push({ pid: k, seg: buffer[k * 2] - 1, cls: buffer[k * 2 + 1] });
+        }
+        console.log(`[Diag] Sample annotated PIDs:`, samplePids);
 
         return {
             buffer: buffer,
@@ -2335,6 +2404,46 @@ export class Potree2Loader {
         });
 
         return result;
+    }
+
+    /**
+     * Export training data as binary annotations written into the .pcbin store.
+     * Collects the segment/class buffer and POSTs to /api/export-mapping/,
+     * which updates the server-side .pcbin file atomically.
+     * Returns the pcbin_path on success.
+     */
+    async exportAllTrainingDataAsMapping(segmentNameMap) {
+        // First collect the binary buffer (same as exportAllTrainingData)
+        const exportResult = await this.exportAllTrainingData(segmentNameMap);
+        if (!exportResult || !exportResult.buffer) {
+            throw new Error('Failed to export training data');
+        }
+
+        // POST to /api/export-mapping/ — now updates the .pcbin store
+        const formData = new FormData();
+        formData.append('buffer', new Blob([exportResult.buffer], { type: 'application/octet-stream' }));
+        formData.append('point_count', this.metadata.points.toString());
+        formData.append('pcbin_path', 'viewer/static/viewer/data/working/features.pcbin');
+
+        const response = await fetch('/api/export-mapping/', {
+            method: 'POST',
+            body: formData
+        });
+
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.error || 'Failed to export mapping');
+        }
+
+        const data = await response.json();
+        console.log('[Potree2Loader] .pcbin annotations updated:', data.pcbin_path, `(${data.point_count} points annotated)`);
+
+        return {
+            mapping_path: data.pcbin_path,   // kept as mapping_path for caller compatibility
+            pcbin_path: data.pcbin_path,
+            point_count: data.point_count,
+            segmentMap: exportResult.segmentMap
+        };
     }
 
     /**
