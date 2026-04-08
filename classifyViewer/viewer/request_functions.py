@@ -262,7 +262,7 @@ def save_file(request):
             return JsonResponse({'status': 'success', 'filepath': filepath})
             
         except Exception as e:
-            # 🔍 Stampa l'errore completo
+            # Print the full error for debugging.
             print("\n[REQUEST FUNCTION] Save file ERROR " + str(e))
             print(traceback.format_exc())
             return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
@@ -815,7 +815,15 @@ def export_mapping(request):
                 return JsonResponse({"error": "Invalid pcbin_path"}, status=400)
 
             if not os.path.isfile(abs_pcbin):
-                return JsonResponse({"error": f"pcbin file not found: {pcbin_path}"}, status=404)
+                # features.pcbin doesn't exist yet (e.g. cloud was loaded without running
+                # feature calculation or training). Generate it from features.las first.
+                las_relative = 'viewer/static/viewer/data/working/features.las'
+                abs_las = os.path.normpath(os.path.join(settings.BASE_DIR, las_relative))
+                if not os.path.isfile(abs_las):
+                    return JsonResponse({"error": "features.las not found — please load a point cloud first"}, status=404)
+                print(f"[REQUEST FUNCTION] features.pcbin not found — generating from {las_relative}")
+                las_to_feature_bin(las_relative, pcbin_path)
+                print("[REQUEST FUNCTION] features.pcbin generated")
 
             # Read existing pcbin into mutable bytearray
             with open(abs_pcbin, 'rb') as f:

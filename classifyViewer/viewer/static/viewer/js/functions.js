@@ -111,6 +111,15 @@ export const classRegistry = new Map();
 let _classIdCounter = 1;
 
 /**
+ * Reset the class registry and ID counter to initial state.
+ * Called during scene reset / load to avoid stale class data.
+ */
+export function resetClassRegistry() {
+    classRegistry.clear();
+    _classIdCounter = 1;
+}
+
+/**
  * Converts a hex color string (e.g. "#ef4444") to [r, g, b] floats in [0,1].
  */
 function hexToRgbFloat(hex) {
@@ -549,16 +558,22 @@ async function exportTXT(positions, colors, normals, filepath, binary) {
 let isSaving = false;
 const saveQueue = [];
 
+/**
+ * Queue a file save request so writes are serialized and never overlap.
+ */
 async function saveFile(filepath, blob) {
-    // Aggiungi alla coda
+    // Add the request to the queue.
     return new Promise((resolve, reject) => {
         saveQueue.push({ filepath, blob, resolve, reject });
         processSaveQueue();
     });
 }
 
+/**
+ * Process the next pending save request, if any.
+ */
 async function processSaveQueue() {
-    // Se già sta salvando o coda vuota, esci
+    // If a save is already running or the queue is empty, exit.
     if (isSaving || saveQueue.length === 0) return;
 
     isSaving = true;
@@ -570,7 +585,7 @@ async function processSaveQueue() {
         const arrayBuffer = await blob.arrayBuffer();
         const buffer = new Uint8Array(arrayBuffer);
 
-        // Converti in base64
+        // Convert to base64.
         let binary = '';
         for (let i = 0; i < buffer.length; i++) {
             binary += String.fromCharCode(buffer[i]);
@@ -1367,6 +1382,11 @@ export function showResetSceneModal() {
                             sceneObjects.currentPointCloud = null;
                         }
                     }
+                    // Clear class registry and project references
+                    resetClassRegistry();
+                    window.__currentProjectLAS = null;
+                    window.__currentProjectBIN = null;
+                    window.__selectedModelPath = null;
                     window.dispatchEvent(new CustomEvent('scene-reset'));
                     completeStep(1);
 
@@ -1574,18 +1594,18 @@ export function showDownloadModal() {
                 downloadBtn.textContent = 'Preparing Package...';
 
                 try {
-                    // Se ci sono segmenti da scaricare, dobbiamo prima generare
-                    // il buffer [segId, classId] tramite exportAllTrainingData,
-                    // esattamente come fa il training. Il features.bin è il bin
-                    // delle feature della colormap, NON dei segmenti — usarlo
-                    // per extract_segment_las produrrebbe punti casuali/errati.
+                    // If there are segments to download, we must first generate
+                    // the [segId, classId] buffer via exportAllTrainingData,
+                    // exactly like the training flow does. The features.bin file
+                    // contains colormap features, not segment annotations, so using
+                    // it for extract_segment_las would produce random/incorrect points.
                     let segmentBinPath = null;
                     if (segments.length > 0 && segments.some(s => s.id !== 0)) {
                         const loader = window.__babylonScene?.potree2Loader;
                         if (!loader) throw new Error('Point cloud loader not available.');
 
-                        // Costruisce segmentMap con tutti i segmenti presenti nell'Outline
-                        // (serve passarli tutti perché il buffer copre l'intera nuvola)
+                        // Build segmentMap with all segments present in the Outline.
+                        // They all must be passed because the buffer covers the full cloud.
                         const segmentMap = {};
                         document.querySelectorAll('.outline-item[data-segment-id]').forEach(item => {
                             const segId = parseInt(item.dataset.segmentId, 10);
@@ -2004,12 +2024,27 @@ export function showLoadModal() {
                     console.log("🏗️ Step 5: Loading Potree data from /data/clusters/...");
                     const scene = window.__babylonScene;
                     const sceneObjects = window.__sceneObjects;
+                    // Dispose previous Potree2 loader and all its meshes
+                    if (scene) {
+                        const prevLoader = scene.potree2Loader;
+                        if (prevLoader && typeof prevLoader.dispose === 'function') {
+                            prevLoader.dispose();
+                        }
+                        scene.potree2Loader = null;
+                    }
                     if (sceneObjects && sceneObjects.currentPointCloud) {
                         if (typeof sceneObjects.currentPointCloud.dispose === 'function') {
                             sceneObjects.currentPointCloud.dispose();
                         }
                         sceneObjects.currentPointCloud = null;
                     }
+                    // Clear class/segment state before loading new data
+                    resetClassRegistry();
+                    window.__currentProjectLAS = null;
+                    window.__currentProjectBIN = null;
+                    window.__selectedModelPath = null;
+                    window.dispatchEvent(new CustomEvent('scene-reset'));
+
                     const pcPath = "/static/viewer/data/working/clusters";
                     const pc = await loadPointCloud(pcPath, scene);
                     if (pc) {
@@ -4552,6 +4587,27 @@ export async function showClassifyModal(scene) {
                             throw new Error('No points found for the selected segment.');
 
                         const mappingPath = exportResult.mapping_path;
+
+                        // Ensure features.pcbin exists — it is required by extract-segment-las.
+                        // If the user loaded a cloud without running feature calculation or
+                        // training, the file won't be present yet: generate it on-the-fly.
+                        const pcbinCheckRes = await fetch('/static/viewer/data/working/features.pcbin', { method: 'HEAD' });
+                        if (!pcbinCheckRes.ok) {
+                            console.log('⚙️ features.pcbin not found — generating from features.las…');
+                            const binGenRes = await fetch('/las_to_feature_bin/', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
+                                body: JSON.stringify({
+                                    las_path: 'viewer/static/viewer/data/working/features.las',
+                                    pcbin_path: 'viewer/static/viewer/data/working/features.pcbin'
+                                })
+                            });
+                            if (!binGenRes.ok) {
+                                const e = await binGenRes.json().catch(() => ({}));
+                                throw new Error(e.message || e.error || 'Failed to generate features.pcbin');
+                            }
+                            console.log('✅ features.pcbin generated');
+                        }
 
                         const segmentOutPath = `${classifyWorkingDir}segment_${splitValue}.las`;
                         await fetch('/api/extract-segment-las/', {

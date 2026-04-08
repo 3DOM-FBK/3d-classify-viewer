@@ -386,10 +386,10 @@ document.addEventListener('click', closeAllDropdowns);
 function switchColorMode(mode) {
     currentColorMode = mode;
 
-    // Logica condivisa per ogni mesh:
-    // - "color":          originalColors per tutti i punti
-    // - "classification": originalColors per i punti non classificati,
-    //                     colore classe per i punti classificati
+    // Shared logic for each mesh:
+    // - "color":          originalColors for all points
+    // - "classification": originalColors for unclassified points,
+    //                      class color for classified points
     function applyModeToMesh(mesh) {
         const colors = mesh.getVerticesData(BABYLON.VertexBuffer.ColorKind);
         if (!colors) return;
@@ -403,14 +403,14 @@ function switchColorMode(mode) {
             const hasClass = classIds && classIds[i] > 0 && classColors;
 
             if (mode === "classification" && hasClass) {
-                // Punto classificato → colore della classe
+                // Classified point -> class color.
                 colors[i * 4] = classColors[i * 4];
                 colors[i * 4 + 1] = classColors[i * 4 + 1];
                 colors[i * 4 + 2] = classColors[i * 4 + 2];
                 colors[i * 4 + 3] = 1.0;
             } else {
-                // Color View (qualsiasi punto) oppure Classification View + punto non classificato
-                // → sempre il colore originale della nuvola
+                // Color view (any point) or classification view + unclassified point
+                // -> always keep the original cloud color.
                 if (originalColors) {
                     colors[i * 4] = originalColors[i * 4];
                     colors[i * 4 + 1] = originalColors[i * 4 + 1];
@@ -422,14 +422,14 @@ function switchColorMode(mode) {
         mesh.setVerticesData(BABYLON.VertexBuffer.ColorKind, colors);
     }
 
-    // Potree2: il loader gestisce internamente l'aggiornamento dei vertex colors
-    // per tutti i nodi (visibili e futuri) tramite _applyColorModeToMesh
+    // Potree2: the loader handles vertex-color updates internally
+    // for all nodes (visible and future) through _applyColorModeToMesh.
     const p2loader = scene.potree2Loader;
     if (p2loader) {
         if (mode.startsWith('feature:')) {
             featureRangeControl.style.display = 'flex';
             featureNameDisplay.textContent = mode.slice(8);
-            // Reset to default on switch
+            // Reset to default on switch.
             rangeMin.value = 0;
             rangeMax.value = 100;
             p2loader.resetFeatureRange();
@@ -2143,7 +2143,11 @@ window.addEventListener('scene-reset', () => {
     outlineItem = null;
     cutSegmentCounter = 1;
 
-    // 2. Color menu: remove features section, restore default label
+    // 2. Classes: remove all class items from the sidebar and reset counter
+    classesContent.innerHTML = '';
+    classCounter = 1;
+
+    // 3. Color menu: remove features section, restore default label
     if (_colorMenuDropdown) {
         const featSection = _colorMenuDropdown.querySelector('.dropdown-feature-section');
         if (featSection) featSection.remove();
@@ -2153,17 +2157,17 @@ window.addEventListener('scene-reset', () => {
         _colorMenuBtn.textContent = 'Classification View';
     }
 
-    // 3. Color mode: back to default
+    // 4. Color mode: back to default
     currentColorMode = 'classification';
 
-    // 4. Feature range slider: hide and reset
+    // 5. Feature range slider: hide and reset
     if (featureRangeControl) {
         featureRangeControl.style.display = 'none';
         if (rangeMin) rangeMin.value = 0;
         if (rangeMax) rangeMax.value = 100;
     }
 
-    // 5. Snap layout back to Training mode if in Classify
+    // 6. Snap layout back to Training mode if in Classify
     const trainingBtn = document.querySelector('.nav-mode-btn[data-mode="training"], #nav-mode-training');
     if (trainingBtn && !trainingBtn.classList.contains('active')) {
         trainingBtn.click();

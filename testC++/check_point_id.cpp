@@ -57,7 +57,7 @@ void write_extra_bytes_record_uint32(std::ofstream& f, const char* name, const c
 }
 
 // ============================================================
-// Struttura LAS con flag di presenza campi extra
+// LAS structure with flags indicating which extra fields are present.
 // ============================================================
 struct LasData {
     std::vector<Eigen::Vector3d> points;
@@ -66,7 +66,7 @@ struct LasData {
     bool has_colors   = false;
     bool has_normals  = false;
     bool has_point_id = false;
-    // Header info salvata per il write
+    // Header information preserved for writing back the file.
     double scale_x = 0.0001, scale_y = 0.0001, scale_z = 0.0001;
     double off_x = 0.0, off_y = 0.0, off_z = 0.0;
     uint8_t  point_format = 3;
@@ -74,7 +74,7 @@ struct LasData {
 };
 
 // ============================================================
-// Parsing VLR per scoprire quali extra bytes ci sono
+// Parse the VLR to discover which extra bytes are present.
 // ============================================================
 struct ExtraByteInfo {
     bool has_normal_x  = false;
@@ -87,6 +87,7 @@ struct ExtraByteInfo {
     int  point_id_off  = -1;
 };
 
+// Read the Extra Bytes VLR and locate the offsets for normals and POINT_ID.
 ExtraByteInfo parse_extra_bytes_vlr(std::ifstream& f,
                                     uint32_t offset_to_data,
                                     uint16_t header_size,
@@ -248,7 +249,7 @@ LasData read_las(const std::string& path) {
                 memcpy(&nz, extra.data() + eb.normal_z_off, 4);
                 data.normals[i] = { (double)nx, (double)ny, (double)nz };
             }
-            // POINT_ID ignorato in lettura (viene ricalcolato in scrittura)
+            // POINT_ID is ignored on read and recomputed on write.
         }
     }
 
@@ -257,8 +258,8 @@ LasData read_las(const std::string& path) {
 }
 
 // ============================================================
-// write_las — scrive sempre normali + POINT_ID
-//             i colori vengono sempre salvati a 16 bit (0-65535)
+// Write a LAS file, always including normals and POINT_ID when available.
+// Colors are always saved as 16-bit values in the 0-65535 range.
 // ============================================================
 void write_las(const std::string& out_file,
                const LasData& data)
@@ -282,7 +283,7 @@ void write_las(const std::string& out_file,
 
     double scale_xyz = (data.scale_x != 0.0) ? data.scale_x : 0.0001;
 
-    // extra bytes VLR: normali (se presenti) + POINT_ID
+    // Extra Bytes VLR: normals (if present) + POINT_ID.
     uint32_t extra_bytes_payload = 0;
     if (has_normals) extra_bytes_payload += 3 * 192; // NormalX/Y/Z
     extra_bytes_payload += 192;                       // POINT_ID
@@ -347,12 +348,12 @@ void write_las(const std::string& out_file,
         write_val<uint8_t>(f, 0);  // User Data (1 byte)
         write_val<uint16_t>(f, 0); // Point Source ID (2 byte)
 
-        // 3. GPS TIME (8 byte totali) - OBBLIGATORIO nel formato 3
-        // Se salti questo, il Rosso e il Verde leggeranno questi 8 byte!
+        // 3. GPS TIME (8 bytes total) - required in format 3.
+        // Skipping this would shift the RGB fields by 8 bytes.
         write_val<double>(f, 0.0); 
 
-        // 4. COLORI RGB (6 byte totali)
-        // Devono essere uint16 (0-65535)
+        // 4. RGB COLORS (6 bytes total).
+        // They must be stored as uint16 values in the 0-65535 range.
         uint16_t r = (uint16_t)(std::clamp(colors[i][0], 0.0, 1.0) * 65535);
         uint16_t g = (uint16_t)(std::clamp(colors[i][1], 0.0, 1.0) * 65535);
         uint16_t b = (uint16_t)(std::clamp(colors[i][2], 0.0, 1.0) * 65535);
@@ -360,9 +361,9 @@ void write_las(const std::string& out_file,
         write_val<uint16_t>(f, g);
         write_val<uint16_t>(f, b);
 
-        // --- Totale fin qui: 34 byte (Record Format 3 Standard) ---
+        // Total so far: 34 bytes (standard Record Format 3).
 
-        // 5. EXTRA BYTES (Normali + ID)
+        // 5. EXTRA BYTES (normals + ID).
         if (has_normals) {
             write_val<float>(f, (float)normals[i][0]); // 4 byte
             write_val<float>(f, (float)normals[i][1]); // 4 byte
@@ -374,9 +375,9 @@ void write_las(const std::string& out_file,
 }
 
 // ============================================================
-// check_and_fix: restituisce il path del file valido
-//   - se tutto c'è già → restituisce input_path (no I/O)
-//   - altrimenti → scrive output_path e restituisce output_path
+// check_and_fix: return a valid LAS path.
+//   - if everything is already present, return input_path (no I/O)
+//   - otherwise write output_path and return output_path
 // ============================================================
 std::string check_and_fix(const std::string& input_path,
                            const std::string& output_path)
@@ -392,7 +393,7 @@ std::string check_and_fix(const std::string& input_path,
         return input_path;
     }
 
-    // --- Aggiungi normali se mancanti ---
+    // Add normals if they are missing.
     if (needs_normals) {
         std::cout << "Computing Normals..." << std::endl;
         auto pcd = std::make_shared<open3d::geometry::PointCloud>();

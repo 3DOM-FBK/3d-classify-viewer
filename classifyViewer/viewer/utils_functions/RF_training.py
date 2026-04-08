@@ -300,7 +300,7 @@ def write_classification_las(X, Y, filename, header, source_las_path=None):
         elif clean_lower == 'intensity':
             las.intensity = X[:, i].astype(np.uint16)
         elif clean_lower == 'classification':
-            pass  # scritto separatamente da Y
+                pass  # written separately from Y
         elif clean_lower in LAS_BUILTIN:
             try:
                 setattr(las, clean_lower, X[:, i])
@@ -325,15 +325,16 @@ def save_model(model, filename):
         pickle.dump(model, out, pickle.HIGHEST_PROTOCOL)
 
 def get_voxel_size_from_las(filepath, sample_size=10000):
+    """Estimate a voxel size from the median nearest-neighbor distance."""
     with laspy.open(filepath) as fh:
         las = fh.read()
         coords = np.vstack((las.x - las.header.offsets[0], 
                             las.y - las.header.offsets[1], 
                             las.z - las.header.offsets[2])).T
 
-    # Calcoliamo su TUTTI i punti
+    # Compute it on all points.
     tree = KDTree(coords)
-    # Attenzione: su dataset molto grandi (10M+ punti) questo potrebbe saturare la RAM
+    # Warning: for very large datasets (10M+ points), this may exhaust RAM.
     distanze, _ = tree.query(coords, k=2)
     
     return np.median(distanze[:, 1])

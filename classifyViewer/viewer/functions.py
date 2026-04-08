@@ -74,7 +74,7 @@ class JobManager:
         process = subprocess.Popen(command, **popen_kwargs)
 
         with self._lock:
-            self._process = process  # ← salva riferimento per stop()
+            self._process = process  # Keep a reference so stop() can terminate it.
 
         try:
             for line in process.stdout:
@@ -116,7 +116,7 @@ class JobManager:
     #  STOP 
     # ─────────────────────────────────────────
     def stop(self):
-        """Ferma qualsiasi job in esecuzione."""
+        """Stop any currently running job."""
         with self._lock:
             if self._process is not None:
                 try:

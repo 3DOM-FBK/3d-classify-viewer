@@ -225,8 +225,70 @@ static void convert(const fs::path& las_path, const fs::path& out_path)
 
     if (pid_offset < 0)
         throw std::runtime_error("POINT_ID not found in VLR.");
-    if (features.empty())
-        throw std::runtime_error("No feature dims found in VLR.");
+
+    if (features.empty()) {
+        // ── Skeleton path: no feature dims → write annotation-only pcbin (F=0) ──
+        std::cout << "  No feature dims — writing annotation-only skeleton (F=0)\n\n";
+
+        const uint64_t N_pts   = info.point_count;
+        const int      rec_len = info.point_record_len;
+        const int      base    = info.base_size;
+
+        std::vector<uint8_t> raw(static_cast<size_t>(N_pts) * rec_len);
+        std::ifstream fs(las_path, std::ios::binary);
+        if (!fs) throw std::runtime_error("Cannot reopen: " + las_path.string());
+        fs.seekg(info.offset_to_data);
+        fs.read(reinterpret_cast<char*>(raw.data()), static_cast<std::streamsize>(raw.size()));
+        if (!fs) throw std::runtime_error("Failed to read point data.");
+        fs.close();
+
+        uint32_t maxPid = 0;
+        for (uint64_t i = 0; i < N_pts; ++i) {
+            uint32_t pid = readUint32(raw.data() + i * rec_len + base + pid_offset);
+            if (pid > maxPid) maxPid = pid;
+        }
+        const uint32_t kMaxSane = static_cast<uint32_t>(N_pts) * 10u;
+        if (maxPid > kMaxSane)
+            throw std::runtime_error(
+                "max POINT_ID=" + std::to_string(maxPid) + " looks wrong (>" +
+                std::to_string(kMaxSane) + "). Check VLR layout.");
+
+        const uint32_t N  = maxPid + 1;
+        const uint32_t F0 = 0;
+        std::cout << "  max POINT_ID : " << maxPid << "  →  N=" << N << "\n";
+
+        std::cout << "\nWriting skeleton (F=0): " << out_path << "\n";
+        std::ofstream out(out_path, std::ios::binary);
+        if (!out) throw std::runtime_error("Cannot write: " + out_path.string());
+
+        const char magic[4] = {'P', 'C', 'B', 'N'};
+        uint8_t version = 1, reserved[3] = {0, 0, 0};
+        out.write(magic, 4);
+        out.write(reinterpret_cast<const char*>(&version),  1);
+        out.write(reinterpret_cast<const char*>(reserved),  3);
+        out.write(reinterpret_cast<const char*>(&N),        4);
+        out.write(reinterpret_cast<const char*>(&F0),       4);
+        // F=0 → no feature_names, no vmin, no vmax blocks
+
+        const float   kConfNaN    = std::numeric_limits<float>::quiet_NaN();
+        const uint8_t kUnassigned = 0xFF, kPadding = 0x00;
+        for (uint32_t pid = 0; pid < N; ++pid) {
+            out.write(reinterpret_cast<const char*>(&kUnassigned), 1);  // segment_id
+            out.write(reinterpret_cast<const char*>(&kUnassigned), 1);  // manual_class_id
+            out.write(reinterpret_cast<const char*>(&kUnassigned), 1);  // predicted_class_id
+            out.write(reinterpret_cast<const char*>(&kPadding),    1);  // padding
+            out.write(reinterpret_cast<const char*>(&kConfNaN),    4);  // confidence
+        }
+        out.close();
+
+        const size_t total_bytes = 16 + static_cast<size_t>(N) * 8;
+        std::cout << "  skeleton .pcbin written successfully\n";
+        std::cout << "  Point slots : " << N << ", Features: 0\n";
+        std::cout << "  Record size : 8 bytes  (F=0, annotation only)\n";
+        std::cout << "  Total size  : " << (total_bytes / 1024) << " KB\n\n";
+        std::cout << "\n" << out_path.string() << "\n";
+        return;
+    }
 
     const uint32_t F = static_cast<uint32_t>(features.size());
     std::cout << "  POINT_ID at extra offset +" << pid_offset << "\n";
