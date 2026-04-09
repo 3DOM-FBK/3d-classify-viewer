@@ -362,6 +362,81 @@ textarea,
     gap: 8px;
 }
 
+.prediction-legend {
+    position: absolute;
+    top: calc(100% + 8px);
+    left: 0;
+    width: 300px;
+    max-width: min(360px, calc(100vw - 56px));
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 12px;
+    background: rgba(30, 30, 32, 0.50);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    padding: 8px 10px;
+    display: none;
+    z-index: 1100;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+}
+
+.prediction-legend-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+
+.prediction-legend-title {
+    font-size: 0.73rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    letter-spacing: 0.2px;
+}
+
+.prediction-legend-model {
+    font-size: 0.66rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.prediction-legend-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 116px;
+    overflow-y: auto;
+    padding-right: 2px;
+}
+
+.prediction-legend-row {
+    display: grid;
+    grid-template-columns: 26px 1fr;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.7rem;
+}
+
+.prediction-legend-value {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 18px;
+    border-radius: 5px;
+    border: 1px solid rgba(59, 130, 246, 0.45);
+    background: rgba(59, 130, 246, 0.14);
+    color: #cfe2ff;
+    font-weight: 600;
+}
+
+.prediction-legend-text {
+    color: var(--text-primary);
+    line-height: 1.25;
+    word-break: break-word;
+}
+
 .camera-btn-group {
     display: flex;
     gap: 4px;
@@ -432,6 +507,7 @@ textarea,
     flex-direction: column;
     padding: 6px;
     gap: 4px;
+    z-index: 1300;
 }
 
 .dropdown-content.show {
@@ -2315,6 +2391,10 @@ input[type="number"].property-input::-webkit-outer-spin-button:active {
     -webkit-appearance: none;
     appearance: none;
     margin: 0;
+}
+
+.feature-range-container.prediction-slider-mode .max-handle {
+    display: none;
 }
 
 /* Chrome/Edge/Safari */

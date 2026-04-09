@@ -4460,6 +4460,20 @@ export async function showClassifyModal(scene) {
                             opt.textContent = `${m.name}  (${m.created}, ${m.size_mb} MB)`;
                             modelSelect.appendChild(opt);
                         });
+
+                        if (window.__selectedModelPath) {
+                            const selectedOpt = [...modelSelect.options].find(opt => opt.value === window.__selectedModelPath);
+                            if (selectedOpt) {
+                                modelSelect.value = selectedOpt.value;
+                            }
+                        }
+
+                        if (modelSelect.value) {
+                            window.__selectedModelPath = modelSelect.value;
+                            window.dispatchEvent(new CustomEvent('selected-model-changed', {
+                                detail: { modelPath: modelSelect.value }
+                            }));
+                        }
                     }
                 })
                 .catch(() => {
@@ -4470,6 +4484,14 @@ export async function showClassifyModal(scene) {
                     errOpt.disabled = true;
                     modelSelect.appendChild(errOpt);
                 });
+
+            modelSelect.addEventListener('change', () => {
+                const modelPath = modelSelect.value || null;
+                window.__selectedModelPath = modelPath;
+                window.dispatchEvent(new CustomEvent('selected-model-changed', {
+                    detail: { modelPath }
+                }));
+            });
 
             // ── SECTION 3: OPTIONS ────────────────────────────────────────────
             const optTitle = document.createElement('div');
@@ -4546,6 +4568,11 @@ export async function showClassifyModal(scene) {
                 };
 
                 if (!modelPath) { showError('Please select a trained model.'); return; }
+
+                window.__selectedModelPath = modelPath;
+                window.dispatchEvent(new CustomEvent('selected-model-changed', {
+                    detail: { modelPath }
+                }));
 
                 const modelDir = modelPath.replace(/\/model\.pkl$/, '');
                 const modelName = modelDir.split('/').pop();

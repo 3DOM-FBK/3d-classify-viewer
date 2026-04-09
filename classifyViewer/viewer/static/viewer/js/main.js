@@ -49,6 +49,180 @@ const rangeResetBtn = document.getElementById('feature-range-reset');
 const colormapPickerBtn = document.getElementById('colormap-picker-btn');
 const colormapDropdown = document.getElementById('colormap-dropdown');
 
+const predictionSliderState = {
+    enabled: false,
+    values: [],
+    allIndex: 0,
+};
+
+const _predictionLegendMetaCache = new Map();
+let _predictionLegendUpdateToken = 0;
+let _predictionLegendContainer = null;
+let _predictionLegendModelLabel = null;
+let _predictionLegendList = null;
+let _predictionLegendHasEntries = false;
+
+function _isPredictionColorModeActive() {
+    return typeof currentColorMode === 'string' && currentColorMode.toLowerCase() === 'feature:prediction';
+}
+
+function _updatePredictionLegendVisibility() {
+    if (!_predictionLegendContainer) return;
+    const shouldShow = _predictionLegendHasEntries && _isPredictionColorModeActive();
+    _predictionLegendContainer.style.display = shouldShow ? 'block' : 'none';
+}
+
+function _toPosixPath(path = '') {
+    return String(path || '').replace(/\\/g, '/');
+}
+
+function _getModelDirFromPath(modelPath) {
+    const normalized = _toPosixPath(modelPath).trim();
+    if (!normalized) return null;
+    return normalized.replace(/\/model\.pkl$/i, '').replace(/\/+$/, '');
+}
+
+function _getModelNameFromPath(modelPath) {
+    const modelDir = _getModelDirFromPath(modelPath);
+    if (!modelDir) return null;
+    const chunks = modelDir.split('/').filter(Boolean);
+    return chunks.length ? chunks[chunks.length - 1] : null;
+}
+
+async function _readPredictionLegendEntries(modelPath) {
+    const modelDir = _getModelDirFromPath(modelPath);
+    if (!modelDir) return [];
+
+    if (_predictionLegendMetaCache.has(modelDir)) {
+        return _predictionLegendMetaCache.get(modelDir);
+    }
+
+    const metadataPath = `${modelDir}/metadata.json`;
+    const res = await fetch(`/api/read-file/?path=${encodeURIComponent(metadataPath)}`);
+    if (!res.ok) throw new Error('Could not read model metadata');
+
+    const payload = await res.json();
+    const meta = JSON.parse(payload.content || '{}');
+    const classes = (meta && typeof meta === 'object' && meta.classes && typeof meta.classes === 'object')
+        ? meta.classes
+        : {};
+
+    const entries = Object.entries(classes)
+        .map(([value, label]) => ({
+            value: String(value),
+            label: String(label ?? '').trim() || `Class ${value}`,
+            numericValue: Number(value)
+        }))
+        .sort((a, b) => {
+            const aIsNum = Number.isFinite(a.numericValue);
+            const bIsNum = Number.isFinite(b.numericValue);
+            if (aIsNum && bIsNum) return a.numericValue - b.numericValue;
+            if (aIsNum) return -1;
+            if (bIsNum) return 1;
+            return a.value.localeCompare(b.value);
+        })
+        .map(({ value, label }) => ({ value, label }));
+
+    _predictionLegendMetaCache.set(modelDir, entries);
+    return entries;
+}
+
+function _renderPredictionLegend(entries, modelName) {
+    if (!_predictionLegendContainer || !_predictionLegendModelLabel || !_predictionLegendList) return;
+
+    if (!entries || entries.length === 0) {
+        _predictionLegendHasEntries = false;
+        _predictionLegendModelLabel.textContent = '';
+        _predictionLegendList.innerHTML = '';
+        _updatePredictionLegendVisibility();
+        return;
+    }
+
+    _predictionLegendHasEntries = true;
+    _predictionLegendModelLabel.textContent = modelName ? `Model: ${modelName}` : '';
+    _predictionLegendList.innerHTML = '';
+
+    entries.forEach(({ value, label }) => {
+        const row = document.createElement('div');
+        row.classList.add('prediction-legend-row');
+
+        const valueEl = document.createElement('span');
+        valueEl.classList.add('prediction-legend-value');
+        valueEl.textContent = value;
+
+        const labelEl = document.createElement('span');
+        labelEl.classList.add('prediction-legend-text');
+        labelEl.textContent = label;
+
+        row.appendChild(valueEl);
+        row.appendChild(labelEl);
+        _predictionLegendList.appendChild(row);
+    });
+
+    _updatePredictionLegendVisibility();
+}
+
+async function updatePredictionLegendFromModel(modelPathOverride = undefined) {
+    const modelPath = modelPathOverride === undefined ? window.__selectedModelPath : modelPathOverride;
+    const token = ++_predictionLegendUpdateToken;
+
+    if (!modelPath) {
+        _renderPredictionLegend([], null);
+        return;
+    }
+
+    try {
+        const entries = await _readPredictionLegendEntries(modelPath);
+        if (token !== _predictionLegendUpdateToken) return;
+        _renderPredictionLegend(entries, _getModelNameFromPath(modelPath));
+    } catch (err) {
+        if (token !== _predictionLegendUpdateToken) return;
+        console.warn('Could not update prediction legend:', err);
+        _renderPredictionLegend([], null);
+    }
+}
+
+function _disablePredictionSliderMode(loader = null) {
+    predictionSliderState.enabled = false;
+    predictionSliderState.values = [];
+    predictionSliderState.allIndex = 0;
+    if (featureRangeControl) featureRangeControl.classList.remove('prediction-slider-mode');
+    rangeMin.min = '0';
+    rangeMin.max = '100';
+    rangeMin.step = '0.1';
+    if (loader && typeof loader.setFeatureDiscreteSelection === 'function') {
+        loader.setFeatureDiscreteSelection('prediction', null);
+    }
+}
+
+function _enablePredictionSliderMode(loader, featIdx) {
+    if (!loader?.featureBin) return;
+
+    const absMin = loader.featureBin.vmin[featIdx];
+    const absMax = loader.featureBin.vmax[featIdx];
+    const minInt = Math.floor(absMin);
+    const maxInt = Math.ceil(absMax);
+
+    const values = [];
+    for (let v = minInt; v <= maxInt; v++) values.push(v);
+    if (values.length === 0) values.push(0);
+
+    predictionSliderState.enabled = true;
+    predictionSliderState.values = values;
+    predictionSliderState.allIndex = values.length;
+
+    featureRangeControl.classList.add('prediction-slider-mode');
+    rangeMin.min = '0';
+    rangeMin.max = String(predictionSliderState.allIndex);
+    rangeMin.step = '1';
+    rangeMin.value = String(predictionSliderState.allIndex);
+    rangeMax.value = '100';
+
+    if (typeof loader.setFeatureDiscreteSelection === 'function') {
+        loader.setFeatureDiscreteSelection('prediction', null);
+    }
+}
+
 // --- Tool Selection State ---
 let activeTool = "tool-1"; // Default mode
 
@@ -141,6 +315,35 @@ function initViewMenu() {
 
     viewMenu.appendChild(projectionGroup);
     viewMenu.appendChild(directionGroup);
+
+    const predictionLegend = document.createElement('div');
+    predictionLegend.classList.add('prediction-legend');
+
+    const predictionLegendHeader = document.createElement('div');
+    predictionLegendHeader.classList.add('prediction-legend-header');
+
+    const predictionLegendTitle = document.createElement('span');
+    predictionLegendTitle.classList.add('prediction-legend-title');
+    predictionLegendTitle.textContent = 'Prediction legend';
+
+    const predictionLegendModel = document.createElement('span');
+    predictionLegendModel.classList.add('prediction-legend-model');
+
+    predictionLegendHeader.appendChild(predictionLegendTitle);
+    predictionLegendHeader.appendChild(predictionLegendModel);
+
+    const predictionLegendList = document.createElement('div');
+    predictionLegendList.classList.add('prediction-legend-list');
+
+    predictionLegend.appendChild(predictionLegendHeader);
+    predictionLegend.appendChild(predictionLegendList);
+    viewMenu.appendChild(predictionLegend);
+
+    _predictionLegendContainer = predictionLegend;
+    _predictionLegendModelLabel = predictionLegendModel;
+    _predictionLegendList = predictionLegendList;
+
+    updatePredictionLegendFromModel();
 }
 
 // --- Color Menu Logic ---
@@ -204,6 +407,26 @@ function initFeatureRangeSlider() {
             const featName = currentColorMode.slice(8);
             const featIdx = loader.featureBin.names.indexOf(featName);
             if (featIdx >= 0) {
+                if (predictionSliderState.enabled && featName.toLowerCase() === 'prediction') {
+                    const idx = Math.max(0, Math.min(predictionSliderState.allIndex, Math.round(parseFloat(rangeMin.value))));
+                    rangeMin.value = String(idx);
+
+                    const pct = predictionSliderState.allIndex > 0
+                        ? (idx / predictionSliderState.allIndex) * 100
+                        : 100;
+                    rangeHighlight.style.left = '0%';
+                    rangeHighlight.style.width = pct + "%";
+
+                    const isAll = idx === predictionSliderState.allIndex;
+                    valMin.textContent = isAll ? 'All' : String(predictionSliderState.values[idx]);
+                    valMax.textContent = isAll ? 'All' : `= ${predictionSliderState.values[idx]}`;
+
+                    if (typeof loader.setFeatureDiscreteSelection === 'function') {
+                        loader.setFeatureDiscreteSelection('prediction', isAll ? null : predictionSliderState.values[idx]);
+                    }
+                    return;
+                }
+
                 const absMin = loader.featureBin.vmin[featIdx];
                 const absMax = loader.featureBin.vmax[featIdx];
 
@@ -219,6 +442,14 @@ function initFeatureRangeSlider() {
     }
 
     rangeMin.oninput = (e) => {
+        if (predictionSliderState.enabled) {
+            let v = Math.round(parseFloat(e.target.value));
+            v = Math.max(0, Math.min(predictionSliderState.allIndex, v));
+            rangeMin.value = v;
+            updateRangeUI();
+            return;
+        }
+
         let v = parseFloat(e.target.value);
         let maxV = parseFloat(rangeMax.value);
         if (v > maxV) {
@@ -229,6 +460,8 @@ function initFeatureRangeSlider() {
     };
 
     rangeMax.oninput = (e) => {
+        if (predictionSliderState.enabled) return;
+
         let v = parseFloat(e.target.value);
         let minV = parseFloat(rangeMin.value);
         if (v < minV) {
@@ -239,10 +472,19 @@ function initFeatureRangeSlider() {
     };
 
     rangeResetBtn.onclick = () => {
-        rangeMin.value = 0;
-        rangeMax.value = 100;
         const loader = scene.potree2Loader;
-        if (loader) loader.resetFeatureRange();
+
+        if (predictionSliderState.enabled) {
+            rangeMin.value = String(predictionSliderState.allIndex);
+            if (loader && typeof loader.setFeatureDiscreteSelection === 'function') {
+                loader.setFeatureDiscreteSelection('prediction', null);
+            }
+        } else {
+            rangeMin.value = 0;
+            rangeMax.value = 100;
+            if (loader) loader.resetFeatureRange();
+        }
+
         updateRangeUI();
     };
 
@@ -420,6 +662,7 @@ document.addEventListener('click', closeAllDropdowns);
 
 function switchColorMode(mode) {
     currentColorMode = mode;
+    _updatePredictionLegendVisibility();
 
     // Shared logic for each mesh:
     // - "color":          originalColors for all points
@@ -433,15 +676,22 @@ function switchColorMode(mode) {
         const classIds = mesh.metadata?.classIds;
         const classColors = mesh.metadata?.classColors;
         const numPoints = colors.length / 4;
+        const blendStrength = 0.75;
+
+        const blendChannel = (orig, cls) => orig * ((1.0 - blendStrength) + blendStrength * cls);
 
         for (let i = 0; i < numPoints; i++) {
             const hasClass = classIds && classIds[i] > 0 && classColors;
 
             if (mode === "classification" && hasClass) {
-                // Classified point -> class color.
-                colors[i * 4] = classColors[i * 4];
-                colors[i * 4 + 1] = classColors[i * 4 + 1];
-                colors[i * 4 + 2] = classColors[i * 4 + 2];
+                // Classified point -> original color tinted by class color.
+                const o = i * 4;
+                const baseR = originalColors ? originalColors[o] : 1.0;
+                const baseG = originalColors ? originalColors[o + 1] : 1.0;
+                const baseB = originalColors ? originalColors[o + 2] : 1.0;
+                colors[o] = blendChannel(baseR, classColors[o]);
+                colors[o + 1] = blendChannel(baseG, classColors[o + 1]);
+                colors[o + 2] = blendChannel(baseB, classColors[o + 2]);
                 colors[i * 4 + 3] = 1.0;
             } else {
                 // Color view (any point) or classification view + unclassified point
@@ -463,13 +713,23 @@ function switchColorMode(mode) {
     if (p2loader) {
         if (mode.startsWith('feature:')) {
             featureRangeControl.style.display = 'flex';
-            featureNameDisplay.textContent = mode.slice(8);
-            // Reset to default on switch.
-            rangeMin.value = 0;
-            rangeMax.value = 100;
-            p2loader.resetFeatureRange();
+            const featName = mode.slice(8);
+            featureNameDisplay.textContent = featName;
+
+            const featIdx = p2loader.featureBin ? p2loader.featureBin.names.indexOf(featName) : -1;
+            if (featName.toLowerCase() === 'prediction' && featIdx >= 0) {
+                p2loader.resetFeatureRange();
+                _enablePredictionSliderMode(p2loader, featIdx);
+            } else {
+                _disablePredictionSliderMode(p2loader);
+                rangeMin.value = 0;
+                rangeMax.value = 100;
+                p2loader.resetFeatureRange();
+            }
+
             if (featureRangeControl._updateUI) featureRangeControl._updateUI();
         } else {
+            _disablePredictionSliderMode(p2loader);
             featureRangeControl.style.display = 'none';
         }
 
@@ -841,6 +1101,9 @@ async function refreshModelsList() {
                 item.style.borderColor = 'rgba(59,130,246,0.35)';
                 selectedModelPath = model.path;
                 window.__selectedModelPath = selectedModelPath;
+                window.dispatchEvent(new CustomEvent('selected-model-changed', {
+                    detail: { modelPath: selectedModelPath }
+                }));
                 console.log('📦 Model selected:', model.name, '->', selectedModelPath);
             });
 
@@ -867,6 +1130,9 @@ async function refreshModelsList() {
                                     if (selectedModelPath === model.path) {
                                         selectedModelPath = null;
                                         window.__selectedModelPath = null;
+                                        window.dispatchEvent(new CustomEvent('selected-model-changed', {
+                                            detail: { modelPath: null }
+                                        }));
                                     }
                                     await refreshModelsList();
                                 } else {
@@ -2086,6 +2352,14 @@ window.addEventListener('keydown', handleSelectionKeydown, { capture: true });
 
 // --- Initialize UI Menus ---
 initViewMenu();
+window.addEventListener('selected-model-changed', (event) => {
+    const modelPath = event?.detail?.modelPath;
+    if (typeof modelPath !== 'undefined') {
+        selectedModelPath = modelPath;
+        window.__selectedModelPath = modelPath;
+    }
+    updatePredictionLegendFromModel(modelPath);
+});
 initColorMenu();
 initToolbar();
 

@@ -129,11 +129,13 @@ export class Potree2Loader {
         // _createMeshFromBuffer uses this value to decide which colors to write
         // into the vertex data of newly loaded LOD nodes.
         this.colorMode = "classification";
+        this.classColorBlendStrength = 0.75;
         this.featureBin = null;
         this._featureRangeMin = null;
         this._featureRangeMax = null;
         this._featureShaderMat = null;
         this._colormapId = 0; // 0=Blue>Green>Yellow>Red (default)
+        this._featureDiscreteFilter = null; // { featureName: string, value: number|null }
 
         // ---- CUT / SEGMENT HISTORY ----
         // segmentId 0 = main (uncut) cloud. Each cutSelection() adds an entry.
@@ -496,6 +498,7 @@ export class Potree2Loader {
         const wasFeature = this.colorMode.startsWith('feature:');
         const isFeature = mode.startsWith('feature:');
         this.colorMode = mode;
+        if (!isFeature) this._featureDiscreteFilter = null;
         if (isFeature) {
             this._applyFeatureShaderMode(true, mode.slice(8));
         } else {
@@ -590,6 +593,35 @@ export class Potree2Loader {
         return this.featureBin ? [...this.featureBin.names] : [];
     }
 
+    _blendClassChannel(original, classChannel) {
+        const s = this.classColorBlendStrength;
+        return original * ((1.0 - s) + s * classChannel);
+    }
+
+    _writeBlendedClassColor(colors, pointIndex, originalColors, classColors) {
+        const o = pointIndex * 4;
+        const baseR = originalColors ? originalColors[o] : 1.0;
+        const baseG = originalColors ? originalColors[o + 1] : 1.0;
+        const baseB = originalColors ? originalColors[o + 2] : 1.0;
+
+        colors[o] = this._blendClassChannel(baseR, classColors[o]);
+        colors[o + 1] = this._blendClassChannel(baseG, classColors[o + 1]);
+        colors[o + 2] = this._blendClassChannel(baseB, classColors[o + 2]);
+        colors[o + 3] = 1.0;
+    }
+
+    _writeBlendedClassColorFromRGB(colors, pointIndex, originalColors, r, g, b) {
+        const o = pointIndex * 4;
+        const baseR = originalColors ? originalColors[o] : 1.0;
+        const baseG = originalColors ? originalColors[o + 1] : 1.0;
+        const baseB = originalColors ? originalColors[o + 2] : 1.0;
+
+        colors[o] = this._blendClassChannel(baseR, r);
+        colors[o + 1] = this._blendClassChannel(baseG, g);
+        colors[o + 2] = this._blendClassChannel(baseB, b);
+        colors[o + 3] = 1.0;
+    }
+
     /**
      * Applies the current colorMode to the vertex colors of a single mesh.
      * Called by setColorMode() and by update() when a node becomes visible.
@@ -641,10 +673,7 @@ export class Potree2Loader {
             } else {
                 const hasClass = classIds && classIds[i] > 0 && classColors;
                 if (this.colorMode === "classification" && hasClass) {
-                    colors[i * 4] = classColors[i * 4];
-                    colors[i * 4 + 1] = classColors[i * 4 + 1];
-                    colors[i * 4 + 2] = classColors[i * 4 + 2];
-                    colors[i * 4 + 3] = 1.0;
+                    this._writeBlendedClassColor(colors, i, originalColors, classColors);
                 } else if (originalColors) {
                     colors[i * 4] = originalColors[i * 4];
                     colors[i * 4 + 1] = originalColors[i * 4 + 1];
@@ -910,6 +939,8 @@ export class Potree2Loader {
         uniform float fmin;
         uniform float fmax;
         uniform int   colormap;
+        uniform int   discreteFilterEnabled;
+        uniform float discreteFilterValue;
         varying float vFeature;
 
         // 0: Blue > Green > Yellow > Red (default, CloudCompare-style)
@@ -978,6 +1009,12 @@ export class Potree2Loader {
 
         void main() {
             if (vFeature < -1e37) { gl_FragColor = vec4(0.3, 0.3, 0.3, 1.0); return; }
+
+            if (discreteFilterEnabled == 1) {
+                float iv = floor(vFeature + 0.5);
+                if (abs(iv - discreteFilterValue) > 0.1) discard;
+            }
+
             float range = fmax - fmin;
             float t = (range > 0.0) ? (vFeature - fmin) / range : 0.5;
             vec3 col;
@@ -997,7 +1034,7 @@ export class Potree2Loader {
         BABYLON.Effect.ShadersStore['potreeFeatureFragmentShader'] = Potree2Loader._featureFragmentShader;
         const mat = new BABYLON.ShaderMaterial('potreeFeatureMat', this.scene, 'potreeFeature', {
             attributes: ['position', 'featureValue'],
-            uniforms: ['worldViewProjection', 'pointSize', 'fmin', 'fmax', 'colormap'],
+            uniforms: ['worldViewProjection', 'pointSize', 'fmin', 'fmax', 'colormap', 'discreteFilterEnabled', 'discreteFilterValue'],
         });
         mat.pointsCloud = true;
         mat.disableLighting = true;
@@ -1005,6 +1042,8 @@ export class Potree2Loader {
         mat.setFloat('fmin', 0.0);
         mat.setFloat('fmax', 1.0);
         mat.setInt('colormap', this._colormapId);
+        mat.setInt('discreteFilterEnabled', 0);
+        mat.setFloat('discreteFilterValue', 0.0);
         mat.transparencyMode = BABYLON.Material.MATERIAL_ALPHATEST;
         mat.alphaCutOff = 0.1;
         this._featureShaderMat = mat;
@@ -1040,6 +1079,15 @@ export class Potree2Loader {
                 shaderMat.setFloat('fmax', this._featureRangeMax !== null ? this._featureRangeMax : this.featureBin.vmax[featureIdx]);
             }
         }
+
+        const discreteForFeature = this._featureDiscreteFilter && this._featureDiscreteFilter.featureName === featureName;
+        if (discreteForFeature && this._featureDiscreteFilter.value !== null && this._featureDiscreteFilter.value !== undefined) {
+            shaderMat.setInt('discreteFilterEnabled', 1);
+            shaderMat.setFloat('discreteFilterValue', this._featureDiscreteFilter.value);
+        } else {
+            shaderMat.setInt('discreteFilterEnabled', 0);
+        }
+
         shaderMat.setInt('colormap', this._colormapId);
         shaderMat.setFloat('pointSize', this.pointSize);
         for (const mesh of this.loadedNodes.values()) {
@@ -1062,6 +1110,17 @@ export class Potree2Loader {
         if (this._featureShaderMat) {
             this._featureShaderMat.setFloat('fmin', min);
             this._featureShaderMat.setFloat('fmax', max);
+        }
+    }
+
+    setFeatureDiscreteSelection(featureName, valueOrNull) {
+        this._featureDiscreteFilter = {
+            featureName,
+            value: (valueOrNull === null || valueOrNull === undefined) ? null : Number(valueOrNull)
+        };
+
+        if (this.colorMode.startsWith('feature:')) {
+            this._applyFeatureShaderMode(true, this.colorMode.slice(8));
         }
     }
 
@@ -1216,10 +1275,7 @@ export class Potree2Loader {
                     // In "color" mode vertices keep their originalColors — no flash
                     // of class colors when a LOD node loads new detail.
                     if (this.colorMode === "classification") {
-                        colors[4 * j + 0] = cls.r;
-                        colors[4 * j + 1] = cls.g;
-                        colors[4 * j + 2] = cls.b;
-                        colors[4 * j + 3] = 1.0;
+                        this._writeBlendedClassColorFromRGB(colors, j, originalColors, cls.r, cls.g, cls.b);
                     }
                 }
             }
@@ -1555,10 +1611,7 @@ export class Potree2Loader {
                 if (cIds && cClrs) {
                     for (let i = 0; i < cIds.length; i++) {
                         if (cIds[i] > 0) {
-                            finalColors[i * 4] = cClrs[i * 4];
-                            finalColors[i * 4 + 1] = cClrs[i * 4 + 1];
-                            finalColors[i * 4 + 2] = cClrs[i * 4 + 2];
-                            finalColors[i * 4 + 3] = 1.0;
+                            this._writeBlendedClassColor(finalColors, i, mesh.metadata.originalColors, cClrs);
                         }
                     }
                 }
@@ -1675,6 +1728,7 @@ export class Potree2Loader {
         this.loadedNodes.forEach((mesh) => {
             const classIds = mesh.metadata?.classIds;
             const classColors = mesh.metadata?.classColors;
+            const originalColors = mesh.metadata?.originalColors;
             const colors = mesh.getVerticesData(BABYLON.VertexBuffer.ColorKind);
             if (!classIds || !classColors || !colors) return;
 
@@ -1687,9 +1741,7 @@ export class Potree2Loader {
 
                     // Apply to visible colors if in classification mode
                     if (this.colorMode === "classification") {
-                        colors[i * 4] = r;
-                        colors[i * 4 + 1] = g;
-                        colors[i * 4 + 2] = b;
+                        this._writeBlendedClassColorFromRGB(colors, i, originalColors, r, g, b);
                         modified = true;
                     }
                 }
@@ -1746,10 +1798,7 @@ export class Potree2Loader {
 
                 const hasClassNow = newClassIds[i] > 0;
                 if (this.colorMode === "classification" && hasClassNow) {
-                    colors[i * 4] = newClassColors[i * 4];
-                    colors[i * 4 + 1] = newClassColors[i * 4 + 1];
-                    colors[i * 4 + 2] = newClassColors[i * 4 + 2];
-                    colors[i * 4 + 3] = 1.0;
+                    this._writeBlendedClassColor(colors, i, originalColors, newClassColors);
                 } else {
                     colors[i * 4] = originalColors[i * 4];
                     colors[i * 4 + 1] = originalColors[i * 4 + 1];
@@ -1855,9 +1904,7 @@ export class Potree2Loader {
                     if (cIds && cClrs) {
                         for (let i = 0; i < cIds.length; i++) {
                             if (cIds[i] > 0) {
-                                finalColors[i * 4] = cClrs[i * 4];
-                                finalColors[i * 4 + 1] = cClrs[i * 4 + 1];
-                                finalColors[i * 4 + 2] = cClrs[i * 4 + 2];
+                                this._writeBlendedClassColor(finalColors, i, mesh.metadata.originalColors, cClrs);
                             }
                         }
                     }
@@ -2056,10 +2103,7 @@ export class Potree2Loader {
                 if (!isRed) continue;
 
                 if (classIds && classIds[i] > 0 && classColors) {
-                    colors[i * 4] = classColors[i * 4];
-                    colors[i * 4 + 1] = classColors[i * 4 + 1];
-                    colors[i * 4 + 2] = classColors[i * 4 + 2];
-                    colors[i * 4 + 3] = 1.0;
+                    this._writeBlendedClassColor(colors, i, originalColors, classColors);
                 } else {
                     colors[i * 4] = originalColors[i * 4];
                     colors[i * 4 + 1] = originalColors[i * 4 + 1];
@@ -2175,10 +2219,7 @@ export class Potree2Loader {
                     // Restore: class color if classified + classification mode, else original
                     const hasClass = classIds && classIds[i] > 0 && classColors;
                     if (hasClass && this.colorMode === "classification") {
-                        colors[i * 4] = classColors[i * 4];
-                        colors[i * 4 + 1] = classColors[i * 4 + 1];
-                        colors[i * 4 + 2] = classColors[i * 4 + 2];
-                        colors[i * 4 + 3] = 1.0;
+                        this._writeBlendedClassColor(colors, i, originalColors, classColors);
                     } else if (originalColors) {
                         colors[i * 4] = originalColors[i * 4];
                         colors[i * 4 + 1] = originalColors[i * 4 + 1];
@@ -2904,9 +2945,7 @@ export class Potree2Loader {
         for (let i = 0; i < colors.length / 4; i++) {
             if (colors[i * 4] > 0.9 && colors[i * 4 + 1] < 0.1 && colors[i * 4 + 2] < 0.1) {
                 if (this.colorMode === "classification" && clsIds && clsIds[i] > 0) {
-                    colors[i * 4] = clsClrs[i * 4];
-                    colors[i * 4 + 1] = clsClrs[i * 4 + 1];
-                    colors[i * 4 + 2] = clsClrs[i * 4 + 2];
+                    this._writeBlendedClassColor(colors, i, orgClrs, clsClrs);
                 } else if (orgClrs) {
                     colors[i * 4] = orgClrs[i * 4];
                     colors[i * 4 + 1] = orgClrs[i * 4 + 1];
