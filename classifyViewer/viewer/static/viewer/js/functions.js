@@ -2082,8 +2082,19 @@ export function showLoadModal() {
                         console.log(`✅ Mesh sampled to point cloud (${numPoints} points)`);
                     } else if (extension === 'las' || extension === 'laz') {
                         console.log("⏩ Step 3: Skipping conversion (already LAS/LAZ)");
-                        lasPath = inputPath;
+                        lasPath = `viewer/static/viewer/data/working/features.las`;
                     }
+
+                    console.log("💾 Step 3: Saving backup copy of features.las...");
+                    const backupResponse = await fetch('/api/backup-pointcloud/', {
+                        method: 'POST',
+                        headers: { 'X-CSRFToken': getCSRFToken() }
+                    });
+                    if (!backupResponse.ok) {
+                        const errData = await backupResponse.json().catch(() => ({}));
+                        throw new Error(errData.message || errData.error || 'Failed to create point cloud backup');
+                    }
+                    console.log("✅ Point cloud backup saved");
                     completeStep(2);
 
                     // STEP 4: PotreeConverter
@@ -2147,7 +2158,7 @@ export function showLoadModal() {
                     console.log("✅ Process complete. Potree cloud loaded.");
 
                     // Store for download logic
-                    window.__currentProjectLAS = lasPath;
+                    window.__currentProjectLAS = 'viewer/static/viewer/data/working/features.las';
                     window.__currentProjectBIN = 'viewer/static/viewer/data/working/features.pcbin';
 
                     // Load feature bin if available (populated by Calculate Features)

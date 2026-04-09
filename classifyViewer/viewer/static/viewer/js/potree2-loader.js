@@ -144,6 +144,50 @@ export class Potree2Loader {
         this.mainCloudVisible = true;
     }
 
+    _getLocalBoundingBoxCenter() {
+        if (!this.metadata?.boundingBox) return null;
+
+        const bbMin = this.metadata.boundingBox.min;
+        const bbMax = this.metadata.boundingBox.max;
+
+        return new BABYLON.Vector3(
+            (bbMax[0] - bbMin[0]) * 0.5,
+            (bbMax[1] - bbMin[1]) * 0.5,
+            (bbMax[2] - bbMin[2]) * 0.5
+        );
+    }
+
+    rotateAroundBoundingBoxCenter(axisName, stepDegrees = 90) {
+        const center = this._getLocalBoundingBoxCenter();
+        if (!center) return false;
+
+        const axisMap = {
+            x: BABYLON.Axis.X,
+            y: BABYLON.Axis.Y,
+            z: BABYLON.Axis.Z
+        };
+        const axis = axisMap[String(axisName || '').toLowerCase()];
+        if (!axis) return false;
+
+        this.rootTransform.setPivotPoint(center, BABYLON.Space.LOCAL);
+
+        if (!this.rootTransform.rotationQuaternion) {
+            this.rootTransform.rotationQuaternion = BABYLON.Quaternion.FromEulerAngles(
+                this.rootTransform.rotation.x,
+                this.rootTransform.rotation.y,
+                this.rootTransform.rotation.z
+            );
+            this.rootTransform.rotation.setAll(0);
+        }
+
+        const delta = BABYLON.Quaternion.RotationAxis(axis, BABYLON.Tools.ToRadians(stepDegrees));
+        this.rootTransform.rotationQuaternion = this.rootTransform.rotationQuaternion.multiply(delta);
+        this.rootTransform.rotationQuaternion.normalize();
+        this.rootTransform.computeWorldMatrix(true);
+
+        return true;
+    }
+
     // ========== PUBLIC API ==========
 
     async load() {

@@ -2,7 +2,7 @@ from django.urls import path
 from .views import main_viewer, documentation
 from .request_functions import save_file, launch_RF_training, launch_RF_classify, subsample_pc, stop_process, get_model_voxel_size, checking_point_id
 from .request_functions import mesh2pc, ply2las, feat_extraction, potree_converter, _split_las_by_binary, las_to_feature_bin_view, read_text_file, model_exists, models_list, delete_model, extract_segment_las_view
-from .request_functions import serve_range_file, clear_data, upload_data, start_training, export_mapping, package_download_view, upload_model
+from .request_functions import serve_range_file, clear_data, upload_data, start_training, export_mapping, package_download_view, upload_model, backup_pointcloud, restore_pointcloud_backup
 
 urlpatterns = [
     path('', main_viewer, name='main_viewer'),
@@ -15,6 +15,8 @@ urlpatterns = [
     path("launch_RF_classify/", launch_RF_classify),
     path("api/clear-data/", clear_data),
     path("api/upload-data/", upload_data),
+    path("api/backup-pointcloud/", backup_pointcloud),
+    path("api/restore-pointcloud-backup/", restore_pointcloud_backup),
     path("api/start-training/", start_training),
     path("api/export-mapping/", export_mapping),
     path("subsample_pc/", subsample_pc),

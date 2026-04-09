@@ -17,6 +17,17 @@ from django.conf import settings
 from io import BytesIO
 from .functions import extract_segment_las
 
+
+def _get_working_dir():
+    return os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        'static', 'viewer', 'data', 'working'
+    )
+
+
+def _get_working_file(*parts):
+    return os.path.join(_get_working_dir(), *parts)
+
 @csrf_exempt
 def launch_RF_training(request):
     if request.method == 'POST':
@@ -630,10 +641,7 @@ def clear_data(request):
     if request.method == 'POST':
         try:
             print("\n[REQUEST FUNCTION] CLEAR DATA") 
-            working_dir = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)),
-                'static', 'viewer', 'data', 'working'
-            )
+            working_dir = _get_working_dir()
             if os.path.exists(working_dir):
                 shutil.rmtree(working_dir)
             os.makedirs(working_dir, exist_ok=True)
@@ -659,10 +667,7 @@ def upload_data(request):
                 return JsonResponse({"error": "No file provided"}, status=400)
 
             # Define working data directory
-            data_dir = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)),
-                'static', 'viewer', 'data', 'working'
-            )
+            data_dir = _get_working_dir()
             os.makedirs(data_dir, exist_ok=True)
 
             file_path = os.path.join(data_dir, uploaded_file.name)
@@ -693,6 +698,11 @@ def upload_data(request):
                 except Exception as ex:
                     print(f"Validation error (ignored): {ex}")
 
+                features_las_path = os.path.join(data_dir, 'features.las')
+                if os.path.abspath(file_path) != os.path.abspath(features_las_path):
+                    shutil.copy2(file_path, features_las_path)
+                print(f"Canonical features.las prepared: {features_las_path}")
+
             return JsonResponse({
                 "message": "File uploaded successfully",
                 "filename": uploaded_file.name,
@@ -703,6 +713,70 @@ def upload_data(request):
             return JsonResponse({"error": str(e)}, status=500)
 
     return JsonResponse({"error": "Method not allowed. Use POST."}, status=405)
+
+
+@csrf_exempt
+def backup_pointcloud(request):
+    if request.method == 'POST':
+        try:
+            print("\n[REQUEST FUNCTION] BACKUP POINT CLOUD")
+            features_las = _get_working_file('features.las')
+            backup_las = _get_working_file('pointcloud_backup.las')
+
+            if not os.path.isfile(features_las):
+                return JsonResponse({"error": "features.las not found"}, status=404)
+
+            shutil.copy2(features_las, backup_las)
+            return JsonResponse({
+                "status": "success",
+                "message": "Point cloud backup created",
+                "backup_path": 'viewer/static/viewer/data/working/pointcloud_backup.las'
+            }, status=200)
+        except Exception as e:
+            print("\n[REQUEST FUNCTION] BACKUP POINT CLOUD ERROR " + str(e))
+            print(traceback.format_exc())
+            return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+
+    return JsonResponse({'status': 'error', 'message': 'Method not allowed'}, status=405)
+
+
+@csrf_exempt
+def restore_pointcloud_backup(request):
+    if request.method == 'POST':
+        try:
+            print("\n[REQUEST FUNCTION] RESTORE POINT CLOUD BACKUP")
+
+            working_dir = _get_working_dir()
+            features_las = _get_working_file('features.las')
+            backup_las = _get_working_file('pointcloud_backup.las')
+            features_pcbin = _get_working_file('features.pcbin')
+
+            if not os.path.isfile(backup_las):
+                return JsonResponse({"error": "point cloud backup not found"}, status=404)
+
+            os.makedirs(working_dir, exist_ok=True)
+            shutil.copy2(backup_las, features_las)
+
+            if os.path.isfile(features_pcbin):
+                os.remove(features_pcbin)
+
+            las_to_feature_bin(
+                'viewer/static/viewer/data/working/features.las',
+                'viewer/static/viewer/data/working/features.pcbin'
+            )
+
+            return JsonResponse({
+                "status": "success",
+                "message": "Point cloud restored from backup",
+                "las_path": 'viewer/static/viewer/data/working/features.las',
+                "pcbin_path": 'viewer/static/viewer/data/working/features.pcbin'
+            }, status=200)
+        except Exception as e:
+            print("\n[REQUEST FUNCTION] RESTORE POINT CLOUD BACKUP ERROR " + str(e))
+            print(traceback.format_exc())
+            return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+
+    return JsonResponse({'status': 'error', 'message': 'Method not allowed'}, status=405)
 
 @csrf_exempt
 def start_training(request):

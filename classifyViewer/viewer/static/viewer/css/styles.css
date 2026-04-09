@@ -356,7 +356,12 @@ textarea,
     border-color: var(--text-muted);
 }
 
-/* Camera buttons group */
+/* Camera buttons panel */
+.camera-btn-panel {
+    display: flex;
+    gap: 8px;
+}
+
 .camera-btn-group {
     display: flex;
     gap: 4px;
@@ -758,6 +763,46 @@ select.property-input {
 .property-input:focus {
     border-color: var(--accent-blue);
     background-color: rgba(0, 0, 0, 0.5);
+}
+
+.viewport-rotation-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-top: 4px;
+}
+
+.viewport-rotation-title {
+    font-size: 0.8rem;
+}
+
+.viewport-rotation-row {
+    display: grid;
+    grid-template-columns: 24px 1fr 1fr;
+    gap: 8px;
+    align-items: center;
+}
+
+.viewport-rotation-axis {
+    color: var(--text-primary);
+    font-weight: 600;
+    text-align: center;
+}
+
+.viewport-rotation-button {
+    border: 1px solid var(--border-color);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text-primary);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 0.78rem;
+    cursor: pointer;
+    transition: background-color 0.2s, border-color 0.2s;
+}
+
+.viewport-rotation-button:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: var(--accent-blue);
 }
 
 /* Remove autofill background color */

@@ -93,18 +93,29 @@ function initViewMenu() {
     if (!viewMenu) return;
 
     viewMenu.innerHTML = '';
-    viewMenu.classList.add('camera-btn-group');
+    viewMenu.classList.add('camera-btn-panel');
 
-    const views = [
+    const projectionModes = [
         { name: "Perspective", icon: "camera_prosp.png", action: () => setCameraMode(BABYLON.Camera.PERSPECTIVE_CAMERA) },
-        { name: "Orthographic", icon: "camera_ortho.png", action: () => setCameraMode(BABYLON.Camera.ORTHOGRAPHIC_CAMERA) },
+        { name: "Orthographic", icon: "camera_ortho.png", action: () => setCameraMode(BABYLON.Camera.ORTHOGRAPHIC_CAMERA) }
+    ];
+
+    const directionalViews = [
         { name: "Top View", icon: "camera_top.png", action: () => setCameraView(0, -Math.PI / 2) },
         { name: "Right View", icon: "camera_right.png", action: () => setCameraView(0, Math.PI / 2) },
         { name: "Front View", icon: "camera_front.png", action: () => setCameraView(Math.PI / 2, Math.PI / 2) },
         { name: "Left View", icon: "camera_left.png", action: () => setCameraView(Math.PI, Math.PI / 2) }
     ];
 
-    views.forEach(v => {
+    const projectionGroup = document.createElement('div');
+    projectionGroup.classList.add('camera-btn-group');
+
+    const directionGroup = document.createElement('div');
+    directionGroup.classList.add('camera-btn-group');
+
+    const allGroups = [projectionGroup, directionGroup];
+
+    const appendViewButton = (container, v, keepsActiveState = false) => {
         const btn = document.createElement('button');
         btn.classList.add('camera-btn');
         btn.innerHTML = `<img src="/static/viewer/icons/${v.icon}" alt="${v.name}">`;
@@ -112,16 +123,24 @@ function initViewMenu() {
 
         btn.onclick = () => {
             v.action();
-            // Highlight active button
-            viewMenu.querySelectorAll('.camera-btn').forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
+
+            if (keepsActiveState) {
+                projectionGroup.querySelectorAll('.camera-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+            }
         };
 
-        viewMenu.appendChild(btn);
+        container.appendChild(btn);
 
         // Default state: Perspective
-        if (v.name === "Perspective") btn.classList.add('active');
-    });
+        if (keepsActiveState && v.name === "Perspective") btn.classList.add('active');
+    };
+
+    projectionModes.forEach(v => appendViewButton(projectionGroup, v, true));
+    directionalViews.forEach(v => appendViewButton(directionGroup, v, false));
+
+    viewMenu.appendChild(projectionGroup);
+    viewMenu.appendChild(directionGroup);
 }
 
 // --- Color Menu Logic ---
@@ -288,6 +307,11 @@ initColormapPicker();
  * @param {string[]} featureNames
  */
 function addFeaturesToColorMenu(featureNames) {
+    // Remove previous feature section first so a reload with zero features
+    // actually clears stale entries from the menu.
+    const existing = _colorMenuDropdown?.querySelector('.dropdown-feature-section');
+    if (existing) existing.remove();
+
     // 1. Skip empty names AND hide normals (normal_x, normal_y, normal_z)
     featureNames = featureNames.filter(n => {
         if (!n || n.trim().length === 0) return false;
@@ -302,11 +326,22 @@ function addFeaturesToColorMenu(featureNames) {
         featureNames.unshift(pred);
     }
 
-    if (!_colorMenuDropdown || featureNames.length === 0) return;
+    if (!_colorMenuDropdown || featureNames.length === 0) {
+        if (currentColorMode.startsWith('feature:')) {
+            switchColorMode('classification');
+            if (_colorMenuBtn) {
+                _colorMenuBtn.textContent = 'Classification View';
+            }
+        }
 
-    // Remove previous feature section if present (supports refresh)
-    const existing = _colorMenuDropdown.querySelector('.dropdown-feature-section');
-    if (existing) existing.remove();
+        if (featureRangeControl) {
+            featureRangeControl.style.display = 'none';
+        }
+        if (_colorMenuDropdown) {
+            _colorMenuDropdown.style.minWidth = '';
+        }
+        return;
+    }
 
     const section = document.createElement('div');
     section.classList.add('dropdown-feature-section');
@@ -924,6 +959,48 @@ const maxPointsSlider = createSlider("Max Points (M)", 1, 20, 5, 1, viewportCont
 const maxErrorSlider = createSlider("Max Error (px)", 0.1, 10, 3.0, 0.1, viewportContent); // 0.1 a 10
 const nearClipSlider = createSlider("Near Clip", 0.01, 10, 0.1, 0.01, viewportContent);
 const farClipSlider = createSlider("Far Clip", 100, 50000, 10000, 100, viewportContent);
+
+const rotationControls = document.createElement('div');
+rotationControls.classList.add('viewport-rotation-controls');
+
+const rotationLabel = document.createElement('div');
+rotationLabel.classList.add('property-label', 'viewport-rotation-title');
+rotationLabel.textContent = 'Rotate Point Cloud';
+rotationControls.appendChild(rotationLabel);
+
+const createRotationRow = (axisName) => {
+    const row = document.createElement('div');
+    row.classList.add('viewport-rotation-row');
+
+    const label = document.createElement('span');
+    label.classList.add('property-label', 'viewport-rotation-axis');
+    label.textContent = axisName.toUpperCase();
+
+    const minusButton = document.createElement('button');
+    minusButton.type = 'button';
+    minusButton.classList.add('viewport-rotation-button');
+    minusButton.textContent = '-90°';
+
+    const plusButton = document.createElement('button');
+    plusButton.type = 'button';
+    plusButton.classList.add('viewport-rotation-button');
+    plusButton.textContent = '+90°';
+
+    row.appendChild(label);
+    row.appendChild(minusButton);
+    row.appendChild(plusButton);
+    rotationControls.appendChild(row);
+
+    return { minusButton, plusButton };
+};
+
+const rotationButtons = {
+    x: createRotationRow('x'),
+    y: createRotationRow('y'),
+    z: createRotationRow('z')
+};
+
+viewportContent.appendChild(rotationControls);
 
 // --- Resizing Logic ---
 let isResizing = false;
@@ -1825,6 +1902,22 @@ farClipSlider.addEventListener('input', (e) => {
     camera.maxZ = parseFloat(e.target.value);
 });
 
+const rotatePointCloud = (axisName, stepDegrees) => {
+    const loader = scene.potree2Loader;
+    if (loader && typeof loader.rotateAroundBoundingBoxCenter === 'function') {
+        const rotated = loader.rotateAroundBoundingBoxCenter(axisName, stepDegrees);
+        if (!rotated) console.warn('Point cloud rotation failed.');
+        return;
+    }
+
+    console.warn('Rotation is available only when a point cloud is loaded.');
+};
+
+Object.entries(rotationButtons).forEach(([axisName, buttons]) => {
+    buttons.minusButton.addEventListener('click', () => rotatePointCloud(axisName, -90));
+    buttons.plusButton.addEventListener('click', () => rotatePointCloud(axisName, 90));
+});
+
 // --- Scene Info Bar Logic ---
 // const mouseCoordsDisplay = document.getElementById('mouse-coords');
 const pointCountDisplay = document.getElementById('point-count');
@@ -1845,6 +1938,7 @@ const fpsCounterDisplay = document.getElementById('fps-counter');
 // --- File Menu Navbar Logic ---
 const navFileBtn = document.getElementById("nav-file-btn");
 const fileDropdown = document.getElementById("file-dropdown");
+
 if (navFileBtn && fileDropdown) {
     navFileBtn.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -1861,6 +1955,39 @@ if (navFileBtn && fileDropdown) {
         fileDropdown.classList.remove('show');
         showDownloadModal();
     });
+
+    const restorePointCloudBackupBtn = document.getElementById("menu-restore-pointcloud-backup");
+    if (restorePointCloudBackupBtn) {
+        restorePointCloudBackupBtn.addEventListener("click", async () => {
+            fileDropdown.classList.remove('show');
+
+            try {
+                const response = await fetch('/api/restore-pointcloud-backup/', {
+                    method: 'POST',
+                    headers: { 'X-CSRFToken': getCSRFToken() }
+                });
+
+                if (!response.ok) {
+                    const errData = await response.json().catch(() => ({}));
+                    throw new Error(errData.message || errData.error || 'Failed to restore point cloud backup');
+                }
+
+                try {
+                    const featureBinLoader = window.__babylonScene?.potree2Loader;
+                    if (featureBinLoader) {
+                        const featureNames = await featureBinLoader.loadPcBin('/static/viewer/data/working/features.pcbin');
+                        window.dispatchEvent(new CustomEvent('feature-bin-loaded', { detail: { names: featureNames } }));
+                    }
+                } catch (binErr) {
+                    console.warn('⚠️ .pcbin store not reloaded:', binErr.message);
+                }
+
+                console.log('♻️ Point cloud restored from backup.');
+            } catch (err) {
+                console.error('❌ Restore point cloud backup failed:', err);
+            }
+        });
+    }
 
     const restoreDeletedPointsBtn = document.getElementById("menu-restore-deleted-points");
     if (restoreDeletedPointsBtn) {
