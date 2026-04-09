@@ -1862,6 +1862,26 @@ if (navFileBtn && fileDropdown) {
         showDownloadModal();
     });
 
+    const restoreDeletedPointsBtn = document.getElementById("menu-restore-deleted-points");
+    if (restoreDeletedPointsBtn) {
+        restoreDeletedPointsBtn.addEventListener("click", () => {
+            fileDropdown.classList.remove('show');
+
+            const loader = scene?.potree2Loader;
+            if (!loader?.restoreDeletedPoints) {
+                console.warn("No point cloud loaded.");
+                return;
+            }
+
+            const restored = loader.restoreDeletedPoints();
+            if (restored > 0) {
+                console.log(`♻️ Restored ${restored.toLocaleString()} deleted points to the main point cloud.`);
+            } else {
+                console.log("No deleted points to restore.");
+            }
+        });
+    }
+
     const resetSceneBtn = document.getElementById("menu-reset-scene");
     if (resetSceneBtn) {
         resetSceneBtn.addEventListener("click", () => {
@@ -1902,6 +1922,7 @@ window.addEventListener('keydown', (e) => {
 
 // Active only when a selection tool (rect or lasso) is active:
 // I → Invert Selection
+// Delete → move selected points to internal hidden deleted segment
 // Escape → Deselect All
 //
 // capture: true ensures we intercept before BabylonJS can consume the event.
@@ -1916,6 +1937,16 @@ function handleSelectionKeydown(e) {
         e.preventDefault();
         e.stopPropagation();
         invertSelection(scene);
+    } else if (e.key === 'Delete') {
+        e.preventDefault();
+        e.stopPropagation();
+        const loader = scene?.potree2Loader;
+        if (!loader?.deleteSelectedPoints) return;
+
+        const count = loader.deleteSelectedPoints();
+        if (count > 0) {
+            console.log(`🗑️ Moved ${count.toLocaleString()} selected points to hidden deleted segment.`);
+        }
     } else if (e.key === 'Escape') {
         e.preventDefault();
         e.stopPropagation();

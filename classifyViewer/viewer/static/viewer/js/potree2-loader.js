@@ -140,6 +140,7 @@ export class Potree2Loader {
         // entry: { segmentId, visible, selections, deselections, minX..maxZ }
         this.cutHistory = [];
         this._segmentIdCounter = 1;
+        this._deletedSegmentId = -1;
         this.mainCloudVisible = true;
     }
 
@@ -1655,6 +1656,72 @@ export class Potree2Loader {
         // console.log(`🎨 Class ${classId} color updated to ${hexColor}`);
     }
 
+    /**
+     * Remove one class and recompute per-point classification/color for loaded nodes.
+     * Points previously assigned to the removed class become unclassified (classId = 0)
+     * unless covered by another remaining classification event.
+     * @param {number} classId - Class ID to remove.
+     * @returns {number} number of points affected in loaded meshes.
+     */
+    removeClass(classId) {
+        // Remove all events of this class from history (also affects future LOD nodes).
+        this.classificationHistory = this.classificationHistory.filter(entry => entry.classId !== classId);
+
+        let affected = 0;
+
+        // Rebuild classIds/classColors from the remaining history for each loaded mesh.
+        this.loadedNodes.forEach((mesh) => {
+            if (!mesh.metadata) return;
+
+            const positions = mesh.getVerticesData(BABYLON.VertexBuffer.PositionKind);
+            const colors = mesh.getVerticesData(BABYLON.VertexBuffer.ColorKind);
+            const originalColors = mesh.metadata.originalColors;
+            const originalPositions = mesh.metadata.originalPositions;
+            if (!positions || !colors || !originalColors) return;
+
+            const numPoints = positions.length / 3;
+            const newClassIds = new Int32Array(numPoints);
+            const newClassColors = new Float32Array(numPoints * 4);
+
+            for (let i = 0; i < numPoints; i++) {
+                const x = originalPositions ? originalPositions[i * 3] : positions[i * 3];
+                const y = originalPositions ? originalPositions[i * 3 + 1] : positions[i * 3 + 1];
+                const z = originalPositions ? originalPositions[i * 3 + 2] : positions[i * 3 + 2];
+
+                const cls = this._getPointClassification(new BABYLON.Vector3(x, y, z));
+                if (cls) {
+                    newClassIds[i] = cls.classId;
+                    newClassColors[i * 4] = cls.r;
+                    newClassColors[i * 4 + 1] = cls.g;
+                    newClassColors[i * 4 + 2] = cls.b;
+                    newClassColors[i * 4 + 3] = 1.0;
+                }
+
+                const hadRemovedClass = mesh.metadata.classIds && mesh.metadata.classIds[i] === classId;
+                if (hadRemovedClass) affected++;
+
+                const hasClassNow = newClassIds[i] > 0;
+                if (this.colorMode === "classification" && hasClassNow) {
+                    colors[i * 4] = newClassColors[i * 4];
+                    colors[i * 4 + 1] = newClassColors[i * 4 + 1];
+                    colors[i * 4 + 2] = newClassColors[i * 4 + 2];
+                    colors[i * 4 + 3] = 1.0;
+                } else {
+                    colors[i * 4] = originalColors[i * 4];
+                    colors[i * 4 + 1] = originalColors[i * 4 + 1];
+                    colors[i * 4 + 2] = originalColors[i * 4 + 2];
+                    colors[i * 4 + 3] = originalColors[i * 4 + 3];
+                }
+            }
+
+            mesh.metadata.classIds = newClassIds;
+            mesh.metadata.classColors = newClassColors;
+            mesh.setVerticesData(BABYLON.VertexBuffer.ColorKind, colors);
+        });
+
+        return affected;
+    }
+
     // ========== CUT / SEGMENTS ==========
 
     /**
@@ -2539,6 +2606,248 @@ export class Potree2Loader {
             }
             if (modified) mesh.setVerticesData(BABYLON.VertexBuffer.PositionKind, positions);
         });
+    }
+
+    /**
+     * Move the current selection into an internal hidden "deleted" segment.
+     * The segment is never exposed in the outline and remains always invisible.
+     * @returns {number} number of points moved
+     */
+    deleteSelectedPoints() {
+        if (this.selectionHistory.length === 0) return 0;
+
+        const deletedSegmentId = this._deletedSegmentId;
+        const worldMatrix = this.rootTransform.getWorldMatrix();
+        let total = 0;
+        let minX = Infinity, minY = Infinity, minZ = Infinity;
+        let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+        let anyAssigned = false;
+
+        this.loadedNodes.forEach((mesh) => {
+            const positions = mesh.getVerticesData(BABYLON.VertexBuffer.PositionKind);
+            if (!positions) return;
+
+            if (!mesh.metadata.segmentIds) {
+                mesh.metadata.segmentIds = new Int32Array(positions.length / 3);
+            }
+            const segmentIds = mesh.metadata.segmentIds;
+
+            for (let i = 0; i < positions.length / 3; i++) {
+                const vector = new BABYLON.Vector3(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
+                let isInside = false;
+
+                for (const sel of this.selectionHistory) {
+                    const p = BABYLON.Vector3.Project(vector, worldMatrix, sel.transformMatrix, sel.viewport);
+                    if (sel.type === "rect") {
+                        isInside = (p.x >= sel.area.x && p.x <= sel.area.x + sel.area.width &&
+                            p.y >= sel.area.y && p.y <= sel.area.y + sel.area.height);
+                    } else if (sel.type === "lasso") {
+                        isInside = this._isPointInPoly(sel.area, [p.x, p.y]);
+                    }
+                    if (isInside) break;
+                }
+
+                if (isInside && this.deselectionHistory.length > 0) {
+                    for (const dsel of this.deselectionHistory) {
+                        const dp = BABYLON.Vector3.Project(vector, worldMatrix, dsel.transformMatrix, dsel.viewport);
+                        let deselected = false;
+                        if (dsel.type === "rect") {
+                            deselected = (dp.x >= dsel.area.x && dp.x <= dsel.area.x + dsel.area.width &&
+                                dp.y >= dsel.area.y && dp.y <= dsel.area.y + dsel.area.height);
+                        } else if (dsel.type === "lasso") {
+                            deselected = this._isPointInPoly(dsel.area, [dp.x, dp.y]);
+                        }
+                        if (deselected) { isInside = false; break; }
+                    }
+                }
+
+                if (!isInside) continue;
+
+                segmentIds[i] = deletedSegmentId;
+                total++;
+
+                const px = positions[i * 3], py = positions[i * 3 + 1], pz = positions[i * 3 + 2];
+                if (px < minX) minX = px; if (px > maxX) maxX = px;
+                if (py < minY) minY = py; if (py > maxY) maxY = py;
+                if (pz < minZ) minZ = pz; if (pz > maxZ) maxZ = pz;
+
+                positions[i * 3] = NaN;
+                positions[i * 3 + 1] = NaN;
+                positions[i * 3 + 2] = NaN;
+                anyAssigned = true;
+            }
+
+            if (anyAssigned) {
+                mesh.setVerticesData(BABYLON.VertexBuffer.PositionKind, positions);
+            }
+
+            this._resetSelectionColors(mesh);
+        });
+
+        if (anyAssigned) {
+            const margin = 0.05;
+            let deletedEntry = this.cutHistory.find(entry => entry.segmentId === deletedSegmentId);
+            if (!deletedEntry) {
+                deletedEntry = {
+                    segmentId: deletedSegmentId,
+                    visible: false,
+                    minX: minX - margin, minY: minY - margin, minZ: minZ - margin,
+                    maxX: maxX + margin, maxY: maxY + margin, maxZ: maxZ + margin,
+                    selections: [],
+                    deselections: []
+                };
+                this.cutHistory.push(deletedEntry);
+            } else {
+                deletedEntry.minX = Math.min(deletedEntry.minX, minX - margin);
+                deletedEntry.minY = Math.min(deletedEntry.minY, minY - margin);
+                deletedEntry.minZ = Math.min(deletedEntry.minZ, minZ - margin);
+                deletedEntry.maxX = Math.max(deletedEntry.maxX, maxX + margin);
+                deletedEntry.maxY = Math.max(deletedEntry.maxY, maxY + margin);
+                deletedEntry.maxZ = Math.max(deletedEntry.maxZ, maxZ + margin);
+            }
+
+            deletedEntry.selections.push(
+                ...this.selectionHistory.map(s => ({ ...s, transformMatrix: s.transformMatrix.clone() }))
+            );
+            deletedEntry.deselections.push(
+                ...this.deselectionHistory.map(d => ({ ...d, transformMatrix: d.transformMatrix.clone() }))
+            );
+            deletedEntry.visible = false;
+        }
+
+        this.selectionHistory = [];
+        this.deselectionHistory = [];
+        return total;
+    }
+
+    /**
+     * Restore all points previously moved to the hidden deleted segment.
+     * Restored points return to the main cloud (segment 0) and the hidden
+     * deleted entry is removed from cutHistory so future LOD nodes stay visible.
+     * @returns {number} number of restored points in loaded nodes
+     */
+    restoreDeletedPoints() {
+        const deletedSegmentId = this._deletedSegmentId;
+        const deletedEntry = this.cutHistory.find(entry => entry.segmentId === deletedSegmentId);
+        if (!deletedEntry) return 0;
+
+        let restored = 0;
+
+        this.loadedNodes.forEach((mesh) => {
+            const segmentIds = mesh.metadata?.segmentIds;
+            const positions = mesh.getVerticesData(BABYLON.VertexBuffer.PositionKind);
+            const originalPositions = mesh.metadata?.originalPositions;
+            if (!segmentIds || !positions || !originalPositions) return;
+
+            let modified = false;
+            for (let i = 0; i < segmentIds.length; i++) {
+                if (segmentIds[i] !== deletedSegmentId) continue;
+
+                segmentIds[i] = 0;
+                restored++;
+                modified = true;
+
+                if (this.mainCloudVisible) {
+                    positions[i * 3] = originalPositions[i * 3];
+                    positions[i * 3 + 1] = originalPositions[i * 3 + 1];
+                    positions[i * 3 + 2] = originalPositions[i * 3 + 2];
+                } else {
+                    positions[i * 3] = NaN;
+                    positions[i * 3 + 1] = NaN;
+                    positions[i * 3 + 2] = NaN;
+                }
+            }
+
+            if (modified) {
+                mesh.setVerticesData(BABYLON.VertexBuffer.PositionKind, positions);
+                this._resetSelectionColors(mesh);
+            }
+        });
+
+        this.cutHistory = this.cutHistory.filter(entry => entry.segmentId !== deletedSegmentId);
+        return restored;
+    }
+
+    /**
+     * Merge source segments into a target segment.
+     * Updates loaded nodes and cut history so future LOD nodes follow the merged state.
+     * @param {number} targetSegmentId
+     * @param {number[]} sourceSegmentIds
+     * @returns {{ movedPoints: number, mergedSegments: number }}
+     */
+    mergeSegments(targetSegmentId, sourceSegmentIds) {
+        const sources = Array.from(new Set((sourceSegmentIds || [])
+            .map(id => parseInt(id, 10))
+            .filter(id => Number.isFinite(id) && id > 0 && id !== targetSegmentId)));
+
+        if (sources.length === 0) return { movedPoints: 0, mergedSegments: 0 };
+
+        const sourceSet = new Set(sources);
+        let movedPoints = 0;
+
+        // Reassign segment ids on already loaded points.
+        this.loadedNodes.forEach(mesh => {
+            const segmentIds = mesh.metadata?.segmentIds;
+            if (!segmentIds) return;
+
+            let modified = false;
+            for (let i = 0; i < segmentIds.length; i++) {
+                if (!sourceSet.has(segmentIds[i])) continue;
+                segmentIds[i] = targetSegmentId;
+                movedPoints++;
+                modified = true;
+            }
+
+            if (modified) {
+                // Ensure visibility masks (NaN hiding) reflect the new target segment.
+                this._applySegmentVisibilityToMesh(mesh);
+            }
+        });
+
+        // Merge history from source segments into target history.
+        const sourceEntries = this.cutHistory.filter(c => sourceSet.has(c.segmentId));
+        if (sourceEntries.length > 0) {
+            if (targetSegmentId > 0) {
+                let targetEntry = this.cutHistory.find(c => c.segmentId === targetSegmentId);
+                if (!targetEntry) {
+                    targetEntry = {
+                        segmentId: targetSegmentId,
+                        visible: true,
+                        selections: [],
+                        deselections: [],
+                        minX: Infinity,
+                        minY: Infinity,
+                        minZ: Infinity,
+                        maxX: -Infinity,
+                        maxY: -Infinity,
+                        maxZ: -Infinity
+                    };
+                    this.cutHistory.push(targetEntry);
+                }
+
+                sourceEntries.forEach(src => {
+                    targetEntry.visible = targetEntry.visible || !!src.visible;
+                    if (Array.isArray(src.selections)) targetEntry.selections.push(...src.selections);
+                    if (Array.isArray(src.deselections)) targetEntry.deselections.push(...src.deselections);
+                    targetEntry.minX = Math.min(targetEntry.minX, src.minX ?? Infinity);
+                    targetEntry.minY = Math.min(targetEntry.minY, src.minY ?? Infinity);
+                    targetEntry.minZ = Math.min(targetEntry.minZ, src.minZ ?? Infinity);
+                    targetEntry.maxX = Math.max(targetEntry.maxX, src.maxX ?? -Infinity);
+                    targetEntry.maxY = Math.max(targetEntry.maxY, src.maxY ?? -Infinity);
+                    targetEntry.maxZ = Math.max(targetEntry.maxZ, src.maxZ ?? -Infinity);
+                });
+            }
+
+            this.cutHistory = this.cutHistory.filter(c => !sourceSet.has(c.segmentId));
+        }
+
+        const anySegmentVisible = this.mainCloudVisible || this.cutHistory.some(e => e.visible);
+        this.rootTransform.setEnabled(anySegmentVisible);
+
+        return {
+            movedPoints,
+            mergedSegments: sources.length
+        };
     }
 
     _resetSelectionColors(mesh) {

@@ -110,6 +110,39 @@ export function setLODParameters(scene, params) {
 export const classRegistry = new Map();
 let _classIdCounter = 1;
 
+// Outline segment multi-selection state (UI only).
+const selectedSegmentIds = new Set();
+
+function _getSegmentRows(scope = document) {
+    return Array.from(scope.querySelectorAll('.outline-item[data-segment-id]:not(.class-item)'));
+}
+
+function _setSegmentRowSelected(row, selected) {
+    const segId = Number(row?.dataset?.segmentId);
+    if (!Number.isFinite(segId)) return;
+
+    row.classList.toggle('segment-selected', selected);
+    if (selected) selectedSegmentIds.add(segId);
+    else selectedSegmentIds.delete(segId);
+}
+
+function _clearSegmentSelection(scope = document) {
+    _getSegmentRows(scope).forEach(row => row.classList.remove('segment-selected'));
+    selectedSegmentIds.clear();
+}
+
+function _getSelectedSegmentIds(scope = document) {
+    const ids = _getSegmentRows(scope)
+        .filter(row => row.classList.contains('segment-selected'))
+        .map(row => Number(row.dataset.segmentId))
+        .filter(id => Number.isFinite(id));
+
+    // Keep Set in sync if rows were removed externally.
+    selectedSegmentIds.clear();
+    ids.forEach(id => selectedSegmentIds.add(id));
+    return ids;
+}
+
 /**
  * Reset the class registry and ID counter to initial state.
  * Called during scene reset / load to avoid stale class data.
@@ -881,6 +914,22 @@ export function createOutlineItem(name, iconSrc, parent, segmentId, onVisibility
     row.appendChild(visibilityBtn);
     parent.appendChild(row);
 
+    // Segment row multi-selection in the outline:
+    // - Click: select only this segment
+    // - SHIFT+Click: toggle this segment in current selection
+    row.addEventListener('click', (e) => {
+        // Ignore controls that should keep their own interaction behavior.
+        if (e.target.closest('.outline-name-input') || e.target.closest('.outline-visibility-btn')) return;
+
+        if (e.shiftKey) {
+            _setSegmentRowSelected(row, !row.classList.contains('segment-selected'));
+            return;
+        }
+
+        _clearSegmentSelection(parent);
+        _setSegmentRowSelected(row, true);
+    });
+
     // Right-click context menu (Only in Training Layout)
     row.addEventListener('contextmenu', (e) => {
         // Disable in Classify layout
@@ -888,6 +937,16 @@ export function createOutlineItem(name, iconSrc, parent, segmentId, onVisibility
 
         e.preventDefault();
         const iconBase = "static/viewer/icons/";
+
+        // If right-click is on a non-selected row, make it the only selected item.
+        if (!row.classList.contains('segment-selected')) {
+            _clearSegmentSelection(parent);
+            _setSegmentRowSelected(row, true);
+        }
+
+        const selectedIds = _getSelectedSegmentIds(parent);
+        const mergeCandidates = selectedIds.filter(id => id !== segmentId && id !== 0);
+
         const options = [
             {
                 label: `Assign selection to "${nameInput.value}"`,
@@ -913,6 +972,31 @@ export function createOutlineItem(name, iconSrc, parent, segmentId, onVisibility
             }
         ];
 
+        if (mergeCandidates.length > 0) {
+            const mergeCount = mergeCandidates.length + 1;
+            options.push({
+                label: `Merge ${mergeCount} selected segments into "${nameInput.value}"`,
+                icon: `${iconBase}cursor.png`,
+                action: () => {
+                    const scene = window.__babylonScene;
+                    if (!scene?.potree2Loader?.mergeSegments) return;
+
+                    const merged = scene.potree2Loader.mergeSegments(segmentId, mergeCandidates);
+                    if (!merged || merged.mergedSegments <= 0) return;
+
+                    // Remove merged source rows from outline, keep target row.
+                    mergeCandidates.forEach(srcId => {
+                        const srcRow = parent.querySelector(`.outline-item[data-segment-id="${srcId}"]`);
+                        if (srcRow && srcRow !== row) srcRow.remove();
+                    });
+
+                    _clearSegmentSelection(parent);
+                    _setSegmentRowSelected(row, true);
+                    console.log(`✅ Merged ${merged.mergedSegments} segments into ${nameInput.value} (${merged.movedPoints.toLocaleString()} points moved).`);
+                }
+            });
+        }
+
         if (segmentId !== 0) {
             options.push({
                 label: `Delete segment "${nameInput.value}"`,
@@ -923,6 +1007,7 @@ export function createOutlineItem(name, iconSrc, parent, segmentId, onVisibility
                         if (scene && scene.potree2Loader) {
                             scene.potree2Loader.deleteSegment(segmentId);
                             row.remove();
+                            selectedSegmentIds.delete(segmentId);
                         }
                     }
                 }
@@ -1037,6 +1122,10 @@ export function createClassItem(name, iconSrc, parent) {
                 icon: `${iconBase}trash.png`,
                 action: () => {
                     if (confirm(`Are you sure you want to delete the class "${nameInput.value}"?`)) {
+                        const sceneRef = window.__babylonScene;
+                        if (sceneRef?.potree2Loader?.removeClass) {
+                            sceneRef.potree2Loader.removeClass(classId);
+                        }
                         classRegistry.delete(classId);
                         row.remove();
                     }

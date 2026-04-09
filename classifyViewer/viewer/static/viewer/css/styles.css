@@ -883,6 +883,11 @@ select.property-input option {
     background-color: rgba(255, 255, 255, 0.03);
 }
 
+.outline-item.segment-selected {
+    background-color: rgba(59, 130, 246, 0.18);
+    outline: 1px solid rgba(59, 130, 246, 0.55);
+}
+
 .class-color-wrapper {
     position: relative;
     width: 18px;
