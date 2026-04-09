@@ -375,14 +375,15 @@ def export_point_cloud(filepath, points, header=None):
             f.write(line + '\n')
    
 
-def split_las_by_store(las_path: str, pcbin_path: str, output_dir: str = None):
+def split_las_by_store(las_path: str, pcbin_path: str, output_dir: str = None, exclude_unclassified: bool = False):
     """
     Splits a LAS file using .pcbin store annotations.
 
     Args:
-        las_path:    Path to the input .las file
-        pcbin_path:  Path to the .pcbin unified binary store
-        output_dir:  Output directory (default: same folder as las_path)
+        las_path:              Path to the input .las file
+        pcbin_path:            Path to the .pcbin unified binary store
+        output_dir:            Output directory (default: same folder as las_path)
+        exclude_unclassified:  If True, skip points with class_id == 0xFF
     """
     print("\n[FUNCTION] ---- SPLIT LAS BY PCBIN STORE (C++ PDAL) -----")
 
@@ -398,6 +399,9 @@ def split_las_by_store(las_path: str, pcbin_path: str, output_dir: str = None):
         abs_pcbin,
         abs_outdir,
     ]
+
+    if exclude_unclassified:
+        command.append("--exclude-unclassified")
 
     launch_subprocess(command)
 

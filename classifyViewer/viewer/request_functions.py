@@ -288,11 +288,12 @@ def _split_las_by_binary(request):
             las_path   = data['las_path']
             pcbin_path = data.get('pcbin_path') or data.get('mapping_path')  # backward compat
             output_dir = data['output_dir']
+            exclude_unclassified = bool(data.get('exclude_unclassified', False))
 
             if not pcbin_path:
                 raise ValueError("pcbin_path is required")
 
-            split_las_by_store(las_path, pcbin_path, output_dir)
+            split_las_by_store(las_path, pcbin_path, output_dir, exclude_unclassified=exclude_unclassified)
 
             # Rename segment files to training.las / validation.las if mapping provided
             segment_names = data.get('segment_names')  # e.g. {"1": "training", "2": "validation"}
@@ -846,8 +847,8 @@ def export_mapping(request):
                 class_id   = buffer_data[pid * 2 + 1]
                 if seg_id_buf != 0:
                     rec_off = header_size + pid * record_size
-                    data[rec_off + F * 4]     = seg_id_buf - 1  # restore 0-based segment_id
-                    data[rec_off + F * 4 + 1] = class_id        # manual_class_id
+                    data[rec_off + F * 4]     = seg_id_buf - 1         # restore 0-based segment_id
+                    data[rec_off + F * 4 + 1] = class_id if class_id != 0 else 0xFF  # 0 = JS "no class" → 0xFF sentinel
                     annotated += 1
 
             # Atomic write

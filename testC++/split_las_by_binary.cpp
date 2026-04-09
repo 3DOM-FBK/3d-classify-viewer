@@ -439,11 +439,13 @@ static void processPointsFromMapping(
         const pdal::PointViewPtr&                         srcView,
         const std::map<uint32_t, PointSegmentation>&      mapping,
         std::map<int, std::unique_ptr<SegmentOutput>>&    outputs,
-        bool                                              addLabels)
+        bool                                              addLabels,
+        bool                                              excludeUnclassified = false)
 {
     const size_t nPts = srcView->size();
     pdal::PointId skipped = 0;
     pdal::PointId unmapped = 0;
+    pdal::PointId unclassified_filtered = 0;
 
     // The .pcbin annotation map is keyed by POINT_ID value — not by PDAL
     // read-order index. We must read the POINT_ID attribute from each point.
@@ -484,6 +486,15 @@ static void processPointsFromMapping(
         }
 
         const PointSegmentation& ps = it->second;
+
+        // Skip points without manual class assignment (if requested)
+        // class_id == 0   → no class assigned (JS default, Int32Array initialised to 0)
+        // class_id == 0xFF → no class assigned (pcbin format sentinel)
+        if (excludeUnclassified && (ps.class_id == 0 || ps.class_id == 0xFF)) {
+            ++unclassified_filtered;
+            continue;
+        }
+
         int segId = static_cast<int>(ps.segment_id);
         uint8_t classId = ps.class_id;
 
@@ -514,6 +525,9 @@ static void processPointsFromMapping(
     if (unmapped > 0)
         std::cerr << "INFO: " << unmapped
                   << " points not found in mapping (unclassified/filtered).\n";
+    if (unclassified_filtered > 0)
+        std::cerr << "INFO: " << unclassified_filtered
+                  << " points with unclassified label excluded (--exclude-unclassified).\n";
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -523,7 +537,8 @@ static void processPointsFromMapping(
 static void run_split_from_pcbin(const fs::path&                las_path,
                                   const fs::path&                pcbin_path,
                                   const std::map<int, fs::path>& output_map,
-                                  bool                           addLabels)
+                                  bool                           addLabels,
+                                  bool                           excludeUnclassified = false)
 {
     // ── Read source LAS once ──────────────────────────────────────────────────
     std::cout << "Loading LAS: " << las_path << "\n";
@@ -574,7 +589,7 @@ static void run_split_from_pcbin(const fs::path&                las_path,
 
     // ── Single-pass point distribution ───────────────────────────────────────
     std::cout << "Distributing points from .pcbin annotations...\n";
-    processPointsFromMapping(srcView, mapping, outputs, addLabels);
+    processPointsFromMapping(srcView, mapping, outputs, addLabels, excludeUnclassified);
 
     // ── Write results ─────────────────────────────────────────────────────────
     std::cout << "Writing output files:\n";
@@ -609,7 +624,7 @@ int main(int argc, char* argv[])
             std::cout << "Extract-segment mode: .pcbin annotations (segment " << segId << ")\n";
 
             std::map<int, fs::path> m = {{segId, out}};
-            run_split_from_pcbin(las, pcbin, m, /*addLabels=*/false);
+            run_split_from_pcbin(las, pcbin, m, /*addLabels=*/false, /*excludeUnclassified=*/false);
             return 0;
         }
 
@@ -618,26 +633,29 @@ int main(int argc, char* argv[])
             fs::path las     = argv[1];
             fs::path pcbin   = argv[2];
             fs::path out_dir = argv[3];
+            bool excludeUnclassified = (argc > 4 && std::string(argv[4]) == "--exclude-unclassified");
 
             if (!fs::exists(pcbin))
                 throw std::runtime_error(".pcbin file not found: " + pcbin.string());
 
             fs::create_directories(out_dir);
-            std::cout << "Mode: Split all annotated segments\n";
+            std::cout << "Mode: Split all annotated segments";
+            if (excludeUnclassified) std::cout << " (excluding unclassified points)";
+            std::cout << "\n";
 
             // Build output map for all possible segment IDs (0–254; 255 = unassigned)
             std::map<int, fs::path> out_map;
             for (int sid = 0; sid < 255; ++sid)
                 out_map[sid] = out_dir / ("segment_" + std::to_string(sid) + ".las");
 
-            run_split_from_pcbin(las, pcbin, out_map, /*addLabels=*/true);
+            run_split_from_pcbin(las, pcbin, out_map, /*addLabels=*/true, excludeUnclassified);
             std::cout << "\nProcess completed!\n";
             return 0;
         }
 
         std::cerr << "ERROR: Invalid arguments.\n\n"
                   << "Usage (split all segments):\n"
-                  << "  " << argv[0] << " <las_path> <store.pcbin> <output_dir>\n\n"
+                  << "  " << argv[0] << " <las_path> <store.pcbin> <output_dir> [--exclude-unclassified]\n\n"
                   << "Usage (extract single segment):\n"
                   << "  " << argv[0] << " <las_path> <store.pcbin> --extract-segment <seg_id> <out_path>\n";
         return 1;

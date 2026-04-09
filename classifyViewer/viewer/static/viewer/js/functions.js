@@ -3115,7 +3115,8 @@ export function showTrainingModal(scene, onStart) {
                             las_path: lasSourcePath,
                             pcbin_path: 'viewer/static/viewer/data/working/features.pcbin',
                             output_dir: workingDir,
-                            segment_names: segmentNames
+                            segment_names: segmentNames,
+                            exclude_unclassified: true
                         })
                     });
                     if (!splitResponse.ok) {
