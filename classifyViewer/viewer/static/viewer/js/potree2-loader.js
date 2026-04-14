@@ -644,6 +644,7 @@ export class Potree2Loader {
         const featureName = isFeatureMode ? this.colorMode.slice(8) : null;
         const featureBin = isFeatureMode ? this.featureBin : null;
         const featureIdx = (featureBin && featureName !== null) ? featureBin.names.indexOf(featureName) : -1;
+        const isPredictionFeature = featureName !== null && featureName.toLowerCase() === 'prediction';
         const pointIds = mesh.metadata?.pointIds;
 
         // Cache LUT + range boundaries outside the loop
@@ -661,7 +662,14 @@ export class Potree2Loader {
                 if (pid >= 0 && pid < featureBin.N) {
                     const val = featureBin.data[pid * featureBin.F + featureIdx];
                     if (!isNaN(val)) {
-                        const t = (fmax > fmin) ? (val - fmin) / (fmax - fmin) : 0.5;
+                        let t;
+                        if (isPredictionFeature) {
+                            // Snap to integer class, normalize by fmax for palette consistency
+                            const iv = Math.round(val);
+                            t = fmax > 0 ? Math.max(0, Math.min(1, iv / fmax)) : 0.5;
+                        } else {
+                            t = (fmax > fmin) ? (val - fmin) / (fmax - fmin) : 0.5;
+                        }
                         const lutIdx = Math.round(Math.max(0, Math.min(1, t)) * 255) * 3;
                         r = lut[lutIdx]; g = lut[lutIdx + 1]; b = lut[lutIdx + 2];
                     }
@@ -939,6 +947,7 @@ export class Potree2Loader {
         uniform float fmin;
         uniform float fmax;
         uniform int   colormap;
+        uniform int   predictionDiscrete;
         uniform int   discreteFilterEnabled;
         uniform float discreteFilterValue;
         varying float vFeature;
@@ -1015,8 +1024,17 @@ export class Potree2Loader {
                 if (abs(iv - discreteFilterValue) > 0.1) discard;
             }
 
-            float range = fmax - fmin;
-            float t = (range > 0.0) ? (vFeature - fmin) / range : 0.5;
+            // For prediction (integer class IDs), snap to nearest integer then normalize
+            // by fmax so each class maps to a fixed position in the selected colormap.
+            float t;
+            if (predictionDiscrete == 1) {
+                float iv = floor(vFeature + 0.5);
+                t = (fmax > 0.0) ? clamp(iv / fmax, 0.0, 1.0) : 0.5;
+            } else {
+                float range = fmax - fmin;
+                t = (range > 0.0) ? (vFeature - fmin) / range : 0.5;
+            }
+
             vec3 col;
             if      (colormap == 1) col = cm_viridis(t);
             else if (colormap == 2) col = cm_jet(t);
@@ -1034,7 +1052,7 @@ export class Potree2Loader {
         BABYLON.Effect.ShadersStore['potreeFeatureFragmentShader'] = Potree2Loader._featureFragmentShader;
         const mat = new BABYLON.ShaderMaterial('potreeFeatureMat', this.scene, 'potreeFeature', {
             attributes: ['position', 'featureValue'],
-            uniforms: ['worldViewProjection', 'pointSize', 'fmin', 'fmax', 'colormap', 'discreteFilterEnabled', 'discreteFilterValue'],
+            uniforms: ['worldViewProjection', 'pointSize', 'fmin', 'fmax', 'colormap', 'predictionDiscrete', 'discreteFilterEnabled', 'discreteFilterValue'],
         });
         mat.pointsCloud = true;
         mat.disableLighting = true;
@@ -1042,6 +1060,7 @@ export class Potree2Loader {
         mat.setFloat('fmin', 0.0);
         mat.setFloat('fmax', 1.0);
         mat.setInt('colormap', this._colormapId);
+        mat.setInt('predictionDiscrete', 0);
         mat.setInt('discreteFilterEnabled', 0);
         mat.setFloat('discreteFilterValue', 0.0);
         mat.transparencyMode = BABYLON.Material.MATERIAL_ALPHATEST;
@@ -1072,6 +1091,7 @@ export class Potree2Loader {
 
     _applyFeatureShaderMode(enable, featureName) {
         const shaderMat = this._getOrCreateFeatureShaderMaterial();
+        const isPredictionFeature = typeof featureName === 'string' && featureName.toLowerCase() === 'prediction';
         if (this.featureBin && featureName) {
             const featureIdx = this.featureBin.names.indexOf(featureName);
             if (featureIdx >= 0) {
@@ -1089,6 +1109,7 @@ export class Potree2Loader {
         }
 
         shaderMat.setInt('colormap', this._colormapId);
+    shaderMat.setInt('predictionDiscrete', isPredictionFeature ? 1 : 0);
         shaderMat.setFloat('pointSize', this.pointSize);
         for (const mesh of this.loadedNodes.values()) {
             if (enable) {
