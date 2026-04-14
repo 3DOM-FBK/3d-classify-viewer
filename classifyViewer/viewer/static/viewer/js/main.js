@@ -766,21 +766,12 @@ function switchColorMode(mode) {
 function setCameraMode(mode) {
     camera.mode = mode;
     if (mode === BABYLON.Camera.ORTHOGRAPHIC_CAMERA) {
-        updateOrthoCamera();
+        syncOrthoCamera(true);
     }
 }
 
 function updateOrthoCamera() {
-    if (camera.mode !== BABYLON.Camera.ORTHOGRAPHIC_CAMERA) return;
-
-    // Simple ortho calculation based on distance/radius
-    const aspect = engine.getAspectRatio(camera);
-    const orthoSize = camera.radius || 10;
-
-    camera.orthoTop = orthoSize;
-    camera.orthoBottom = -orthoSize;
-    camera.orthoLeft = -orthoSize * aspect;
-    camera.orthoRight = orthoSize * aspect;
+    syncOrthoCamera(true);
 }
 
 function setCameraView(alpha, beta) {
@@ -1221,10 +1212,6 @@ const viewportContent = viewportSection.content;
 const gridToggle = createCheckbox("Show Grid", true, viewportContent);
 const lightModeToggle = createCheckbox("Light Background", false, viewportContent);
 const pointSizeSlider = createSlider("Point Size", 0.1, 3.0, 1.0, 0.05, viewportContent);
-const maxPointsSlider = createSlider("Max Points (M)", 1, 20, 5, 1, viewportContent); // 1M a 20M
-const maxErrorSlider = createSlider("Max Error (px)", 0.1, 10, 3.0, 0.1, viewportContent); // 0.1 a 10
-const nearClipSlider = createSlider("Near Clip", 0.01, 10, 0.1, 0.01, viewportContent);
-const farClipSlider = createSlider("Far Clip", 100, 50000, 10000, 100, viewportContent);
 
 const rotationControls = document.createElement('div');
 rotationControls.classList.add('viewport-rotation-controls');
@@ -1333,13 +1320,175 @@ camera.wheelDeltaPercentage = 0.05;
 camera.inertia = 0.8;
 camera.panningSensibility = 250;
 
+const ORTHO_NEAR_MIN = 0.0001;
+const ORTHO_FAR_MIN = 100;
+const ORTHO_FAR_MAX = 50000;
+const ORTHO_EPS = 1e-4;
+const ORTHO_DISTANCE_MARGIN = 1.25;
+const ORTHO_MIN_DISTANCE = 1.0;
+const ORTHO_ZOOM_WHEEL_SENSITIVITY = 0.0015;
+const ORTHO_ZOOM_MIN = 0.01;
+const ORTHO_ZOOM_MAX = 100000;
+const orthoCameraState = {
+    lastOrthoSize: null,
+    lastAspect: null,
+    lastNear: null,
+    lastFar: null,
+    zoomSize: null,
+    safeDistance: null,
+};
+
+function _computePointCloudBounds() {
+    const root = sceneObjects.currentPointCloud;
+    if (!root) return null;
+
+    const meshes = root instanceof BABYLON.AbstractMesh
+        ? [root]
+        : (typeof root.getChildMeshes === 'function' ? root.getChildMeshes() : []);
+
+    if (!meshes || meshes.length === 0) return null;
+
+    let minX = Infinity, minY = Infinity, minZ = Infinity;
+    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+    let found = false;
+
+    meshes.forEach((mesh) => {
+        const bb = mesh?.getBoundingInfo?.()?.boundingBox;
+        if (!bb) return;
+
+        const mn = bb.minimumWorld;
+        const mx = bb.maximumWorld;
+        if (!mn || !mx) return;
+
+        if (mn.x < minX) minX = mn.x;
+        if (mn.y < minY) minY = mn.y;
+        if (mn.z < minZ) minZ = mn.z;
+        if (mx.x > maxX) maxX = mx.x;
+        if (mx.y > maxY) maxY = mx.y;
+        if (mx.z > maxZ) maxZ = mx.z;
+        found = true;
+    });
+
+    if (!found) return null;
+
+    const center = new BABYLON.Vector3(
+        (minX + maxX) * 0.5,
+        (minY + maxY) * 0.5,
+        (minZ + maxZ) * 0.5
+    );
+    const radius = new BABYLON.Vector3(maxX - minX, maxY - minY, maxZ - minZ).length() * 0.5;
+
+    return { center, radius };
+}
+
+function _computeOrthoSafeDistance() {
+    const bounds = _computePointCloudBounds();
+    if (!bounds) return Math.max(ORTHO_MIN_DISTANCE, camera.radius || 10);
+
+    const target = camera.getTarget();
+    const targetToCenter = BABYLON.Vector3.Distance(target, bounds.center);
+    const dist = targetToCenter + bounds.radius * ORTHO_DISTANCE_MARGIN;
+    return Math.max(ORTHO_MIN_DISTANCE, dist);
+}
+
+function _computeCameraClipRange(radius, isOrtho) {
+    const safeRadius = Math.max(radius || 10, ORTHO_NEAR_MIN);
+    const near = isOrtho
+        ? ORTHO_NEAR_MIN
+        : Math.max(ORTHO_NEAR_MIN, Math.min(10, safeRadius * 0.001));
+    const farFromRadius = safeRadius * 1200;
+    const far = Math.max(near + 1, Math.min(ORTHO_FAR_MAX, Math.max(ORTHO_FAR_MIN, farFromRadius)));
+    return { near, far };
+}
+
+function syncOrthoCamera(force = false) {
+    let clipRadius = Math.max(camera.radius || 10, ORTHO_NEAR_MIN);
+
+    if (camera.mode === BABYLON.Camera.ORTHOGRAPHIC_CAMERA) {
+        const inputRadius = Math.max(camera.radius || 10, ORTHO_NEAR_MIN);
+
+        if (force || orthoCameraState.safeDistance === null) {
+            orthoCameraState.safeDistance = _computeOrthoSafeDistance();
+        }
+
+        if (force || orthoCameraState.zoomSize === null) {
+            orthoCameraState.zoomSize = inputRadius;
+        }
+
+        // Keep camera physically outside the cloud while zoom acts on ortho extents only.
+        camera.radius = orthoCameraState.safeDistance;
+
+        const aspect = engine.getAspectRatio(camera);
+        const zoomSize = Math.max(orthoCameraState.zoomSize || inputRadius, ORTHO_ZOOM_MIN);
+        const orthoChanged =
+            force ||
+            orthoCameraState.lastAspect === null ||
+            Math.abs((orthoCameraState.lastAspect ?? aspect) - aspect) > ORTHO_EPS ||
+            orthoCameraState.lastOrthoSize === null ||
+            Math.abs((orthoCameraState.lastOrthoSize ?? zoomSize) - zoomSize) > ORTHO_EPS;
+
+        if (orthoChanged) {
+            camera.orthoTop = zoomSize;
+            camera.orthoBottom = -zoomSize;
+            camera.orthoLeft = -zoomSize * aspect;
+            camera.orthoRight = zoomSize * aspect;
+            orthoCameraState.lastAspect = aspect;
+            orthoCameraState.lastOrthoSize = zoomSize;
+        }
+
+        clipRadius = Math.max(camera.radius || 10, ORTHO_NEAR_MIN);
+    } else if (force) {
+        orthoCameraState.safeDistance = null;
+    }
+
+    const isOrtho = camera.mode === BABYLON.Camera.ORTHOGRAPHIC_CAMERA;
+    const { near, far } = _computeCameraClipRange(clipRadius, isOrtho);
+    const clipChanged =
+        force ||
+        orthoCameraState.lastNear === null ||
+        orthoCameraState.lastFar === null ||
+        Math.abs((orthoCameraState.lastNear ?? near) - near) > ORTHO_EPS ||
+        Math.abs((orthoCameraState.lastFar ?? far) - far) > 0.5;
+
+    if (clipChanged) {
+        camera.minZ = near;
+        camera.maxZ = far;
+        orthoCameraState.lastNear = near;
+        orthoCameraState.lastFar = far;
+    }
+}
+
 const light = new BABYLON.HemisphericLight("light", new BABYLON.Vector3(0, 1, 0), scene);
 light.intensity = 0.7;
 
 // Update ortho camera on zoom and adaptive panning
 scene.onPointerObservable.add((pointerInfo) => {
     if (pointerInfo.type === BABYLON.PointerEventTypes.POINTERWHEEL) {
-        updateOrthoCamera();
+        if (camera.mode === BABYLON.Camera.ORTHOGRAPHIC_CAMERA) {
+            const wheelEvt = pointerInfo.event;
+            const rawDelta = wheelEvt.deltaY ?? wheelEvt.wheelDelta ?? 0;
+            const zoomFactor = Math.exp(rawDelta * ORTHO_ZOOM_WHEEL_SENSITIVITY);
+
+            if (!orthoCameraState.zoomSize || !Number.isFinite(orthoCameraState.zoomSize)) {
+                orthoCameraState.zoomSize = Math.max(camera.radius || 10, ORTHO_ZOOM_MIN);
+            }
+
+            const nextZoom = Math.max(
+                ORTHO_ZOOM_MIN,
+                Math.min(ORTHO_ZOOM_MAX, orthoCameraState.zoomSize * zoomFactor)
+            );
+
+            if (Number.isFinite(nextZoom)) {
+                orthoCameraState.zoomSize = nextZoom;
+            }
+
+            // In ortho we zoom by changing view scale, not by moving the camera.
+            wheelEvt.preventDefault();
+            syncOrthoCamera(false);
+            return;
+        }
+
+        syncOrthoCamera(true);
     }
 });
 
@@ -1354,6 +1503,9 @@ scene.onBeforeRenderObservable.add(() => {
     // Safety limits to prevent extreme values
     if (camera.panningSensibility < 50) camera.panningSensibility = 50;
     if (camera.panningSensibility > 10000) camera.panningSensibility = 10000;
+
+    // Keep orthographic extents and clip planes aligned with inertia-based zoom.
+    syncOrthoCamera(false);
 });
 
 // --- Tools Logic (Lasso & Rect) using Babylon Observation ---
@@ -2146,28 +2298,6 @@ pointSizeSlider.addEventListener('input', (e) => {
     }
 });
 
-// Slider Max Points
-maxPointsSlider.addEventListener('input', (e) => {
-    const val = parseFloat(e.target.value);
-    setLODParameters(scene, { maxVisiblePoints: val * 1000000 });
-});
-
-// Slider Max Error
-maxErrorSlider.addEventListener('input', (e) => {
-    const val = parseFloat(e.target.value);
-    setLODParameters(scene, { maxScreenSpaceError: val });
-});
-
-// Slider Near Clip
-nearClipSlider.addEventListener('input', (e) => {
-    camera.minZ = parseFloat(e.target.value);
-});
-
-// Slider Far Clip
-farClipSlider.addEventListener('input', (e) => {
-    camera.maxZ = parseFloat(e.target.value);
-});
-
 const rotatePointCloud = (axisName, stepDegrees) => {
     const loader = scene.potree2Loader;
     if (loader && typeof loader.rotateAroundBoundingBoxCenter === 'function') {
@@ -2293,7 +2423,7 @@ engine.runRenderLoop(() => {
 
 window.addEventListener("resize", () => {
     engine.resize();
-    updateOrthoCamera();
+    syncOrthoCamera(true);
 });
 
 // --- Global Context Menu Prevention ---
@@ -2423,6 +2553,7 @@ if (frameToPCDButton) {
             // Visual feedback: brief flash or highlight is handled by CSS if needed, 
             // but we don't set it as "activeTool".
             frameCameraOnMesh(camera, sceneObjects.currentPointCloud);
+            syncOrthoCamera(true);
 
             // Ensure we don't stay "stuck" on this button visually
             frameToPCDButton.classList.remove('active');
