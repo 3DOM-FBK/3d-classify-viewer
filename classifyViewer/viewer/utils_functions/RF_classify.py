@@ -14,29 +14,21 @@ except Exception:
 from sklearn.ensemble import RandomForestClassifier
 import laspy
 import re
-
+import os
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Raw VLR reader — reads Extra Bytes dim names directly from binary,
-#  bypassing laspy's broken UTF-8 parsing of non-ASCII VLR names.
+#  Raw VLR reader — reads Extra Bytes dim names directly from binary
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _read_vlr_extra_names(filepath):
-    """
-    Returns an ordered list of (name, data_type) for every Extra Bytes VLR entry.
-    Names are read as raw bytes and decoded as latin-1 (never fails).
-    Returns [] if no Extra Bytes VLR is found.
-    """
     result = []
     with open(filepath, 'rb') as f:
         f.seek(94);  hdr_size, = struct.unpack('<H', f.read(2))
         f.seek(100); num_vlrs, = struct.unpack('<I', f.read(4))
-
         f.seek(hdr_size)
         for _ in range(num_vlrs):
             hdr = f.read(54)
-            if len(hdr) < 54:
-                break
+            if len(hdr) < 54: break
             user_id   = hdr[2:18].rstrip(b'\x00').decode('latin-1')
             record_id = struct.unpack_from('<H', hdr, 18)[0]
             rec_len   = struct.unpack_from('<H', hdr, 20)[0]
@@ -45,16 +37,13 @@ def _read_vlr_extra_names(filepath):
                 for i in range(rec_len // 192):
                     rec      = data[i*192:(i+1)*192]
                     dtype    = rec[2]
-                    # name field: bytes 4-35, null-padded
                     raw_name = rec[4:36].rstrip(b'\x00')
                     name     = raw_name.decode('latin-1').strip()
-                    if name:
-                        result.append((name, dtype))
+                    if name: result.append((name, dtype))
                 return result
             else:
                 f.seek(rec_len, 1)
     return result
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Data I/O
@@ -74,167 +63,116 @@ def read_model(filepath):
         return pickle.load(open(filepath, 'rb'))
     except Exception as e:
         if 'cuml' in str(e) or 'cuml' in getattr(e, 'name', ''):
-            raise RuntimeError(
-                'Failed to unpickle model — cuML objects require RAPIDS/cuML to be installed.'
-            ) from e
+            raise RuntimeError('Failed to unpickle model — cuML objects require RAPIDS/cuML.') from e
         raise
 
 def read_las_data(filepath):
-    """
-    Read LAS file and return feature matrix + header.
-
-    Strategy:
-      1. Read raw VLR names (always correct, even with non-UTF8 encoding).
-      2. Read point data via laspy (correct values regardless of name issues).
-      3. Map laspy's unnamed/misnamed dims to the correct VLR names positionally.
-      4. POINT_ID is included in the header so it is preserved in the output.
-    """
-    # Step 1 — get authoritative names from raw VLR
-    vlr_names = _read_vlr_extra_names(filepath)   # [(name, dtype), ...]
-    vlr_name_list = [n for n, _ in vlr_names]
-    print(f"  VLR extra dims ({len(vlr_name_list)}): {vlr_name_list}")
-
-    # Step 2 — read via laspy
     las = laspy.read(filepath)
-
-    # Standard dims always present
-    STANDARD = {
-        'X', 'Y', 'Z', 'x', 'y', 'z',
-        'intensity', 'return_number', 'number_of_returns',
-        'scan_direction_flag', 'edge_of_flight_line',
-        'classification', 'scan_angle_rank', 'scan_angle',
-        'user_data', 'point_source_id', 'gps_time',
-        'red', 'green', 'blue',
-        'scanner_channel', 'scan_channel', 'classification_flags',
-        'synthetic', 'key_point', 'withheld', 'overlap',
-        'normal_x', 'normal_y', 'normal_z',
+    # SALVATAGGIO OFFSET E SCALE ORIGINALI
+    original_metadata = {
+        'offsets': np.array(las.header.offsets), 
+        'scales': np.array(las.header.scales)
     }
-
-    # Step 3 — collect extra dims from laspy in their natural order
-    laspy_extra = [
-        d for d in las.point_format.dimension_names
-        if d.lower() not in {s.lower() for s in STANDARD}
-    ]
-    print(f"  laspy extra dims ({len(laspy_extra)}): {laspy_extra}")
-
-    # Build final column list using VLR names where possible (positional match)
+    
     columns = []
-    header  = []
+    header = []
+    all_dims = las.point_format.dimension_names
+    
+    technical_metadata = {
+        'return_number', 'number_of_returns', 'scan_direction_flag',
+        'edge_of_flight_line', 'classification', 'synthetic', 
+        'key_point', 'withheld', 'scan_angle_rank', 'scan_angle', 
+        'user_data', 'point_source_id', 'gps_time', 'scanner_channel', 'overlap'
+    }
+    
+    # ESTRAZIONE COORDINATE SCALATE E SOTTRAZIONE OFFSET
+    raw_x = np.array(las.x, dtype=np.float64)
+    raw_y = np.array(las.y, dtype=np.float64)
+    raw_z = np.array(las.z, dtype=np.float64)
 
-    # Standard coordinate dims first
-    for dim, col in [('x', las.x), ('y', las.y), ('z', las.z)]:
-        columns.append(np.array(col, dtype=np.float64))
-        header.append(dim)
+    for dim in all_dims:
+        dim_low = dim.lower()
+        if dim == 'X':
+            columns.append(raw_x - original_metadata['offsets'][0])
+            header.append(dim)
+        elif dim == 'Y':
+            columns.append(raw_y - original_metadata['offsets'][1])
+            header.append(dim)
+        elif dim == 'Z':
+            columns.append(raw_z - original_metadata['offsets'][2])
+            header.append(dim)
+        elif dim_low not in technical_metadata:
+            try:
+                col_data = np.array(getattr(las, dim), dtype=np.float64)
+                columns.append(col_data)
+                header.append(dim)
+            except AttributeError:
+                continue
 
-    # Extra dims: align laspy order with VLR name list positionally
-    n_match = min(len(laspy_extra), len(vlr_name_list))
-    for i, laspy_dim in enumerate(laspy_extra):
-        # Use VLR name if available, else fall back to laspy's name
-        col_name = vlr_name_list[i] if i < len(vlr_name_list) else laspy_dim
-        try:
-            col = np.array(getattr(las, laspy_dim), dtype=np.float64)
-            columns.append(col)
-            header.append(col_name)
-        except Exception as e:
-            print(f"  Skipping dim '{laspy_dim}' -> '{col_name}': {e}")
-
-    # Append 'prediction' placeholder slot
-    header.append('prediction')
+    if 'prediction' not in header:
+        header.append('prediction')
 
     X = np.column_stack(columns)
-    print(f"  Final header ({len(header)}): {header}")
-    return np.asarray(X, dtype=np.float32), header
+    print(f"Header: {header}")
+    return np.asarray(X, dtype=np.float32), header, original_metadata
 
-
-def write_classification_las(X, Y, filename, header):
-    """
-    Write the classified point cloud as a LAS file.
-    All input dims are preserved; 'prediction' is added as uint8 extra dim.
-    POINT_ID is always written as uint32 — read from input data if present,
-    otherwise generated as sequential indices.
-    """
-    X   = np.array(X)
-    Y   = np.array(Y).flatten()
-
-    if isinstance(header, str):
-        header = header.strip().lstrip('/').strip().split()
-
-    # LAS built-in dims — handled natively, not as extra bytes
-    LAS_BUILTIN = {
-        'x', 'y', 'z', 'red', 'r', 'green', 'g', 'blue', 'b',
-        'intensity', 'classification',
-        'return_number', 'number_of_returns',
-        'scan_direction_flag', 'edge_of_flight_line',
-        'synthetic', 'key_point', 'withheld', 'overlap',
-        'scan_angle_rank', 'scan_angle', 'user_data', 'point_source_id',
-        'gps_time', 'scanner_channel', 'scan_channel', 'classification_flags',
-        'normal_x', 'normal_y', 'normal_z',
-    }
-
+def write_classification_las(X, Y, filename, header, original_metadata=None):
+    X = np.array(X)
+    Y = np.array(Y).flatten()
     n_points = len(X)
 
-    # Build LAS header
-    las_header = laspy.LasHeader(point_format=7, version="1.4")
-    # Find X/Y/Z columns for offset
-    xi = next((i for i, h in enumerate(header) if h.lower() == 'x'), None)
-    yi = next((i for i, h in enumerate(header) if h.lower() == 'y'), None)
-    zi = next((i for i, h in enumerate(header) if h.lower() == 'z'), None)
-    if xi is not None and yi is not None and zi is not None:
-        las_header.offsets = np.array([X[:, xi].min(), X[:, yi].min(), X[:, zi].min()])
-    else:
-        las_header.offsets = np.zeros(3)
-    las_header.scales = np.array([0.0001, 0.0001, 0.0001])
+    LAS_NATIVE = {
+        'x', 'y', 'z', 'red', 'green', 'blue', 'intensity', 
+        'normal_x', 'normal_y', 'normal_z', 'gps_time', 
+        'classification', 'user_data', 'point_source_id', 'scan_angle'
+    }
 
-    # Register extra dims (everything that is not a LAS builtin)
+    las_header = laspy.LasHeader(point_format=7, version="1.4")
+
+    # APPLICAZIONE OFFSET E SCALE ORIGINALI NELL'HEADER
+    if original_metadata is not None:
+        las_header.offsets = original_metadata['offsets']
+        las_header.scales = original_metadata['scales']
+    
     extra_dim_defs = []
     for col_name in header:
         cl = col_name.lower()
-        if cl in LAS_BUILTIN or cl == 'prediction':
+        if cl in LAS_NATIVE or cl == 'prediction':
             continue
-        if cl == 'point_id' or cl == 'pointid':
-            # Always uint32
-            extra_dim_defs.append(laspy.ExtraBytesParams(name=col_name, type=np.uint32))
-        else:
-            extra_dim_defs.append(laspy.ExtraBytesParams(name=col_name, type=np.float32))
+        dtype = np.uint32 if 'point_id' in cl or 'pointid' in cl else np.float32
+        extra_dim_defs.append(laspy.ExtraBytesParams(name=col_name, type=dtype))
 
-    # Add prediction as uint8
     extra_dim_defs.append(laspy.ExtraBytesParams(name='prediction', type=np.uint8))
-
     las_header.add_extra_dims(extra_dim_defs)
     las = laspy.LasData(header=las_header)
 
-    # Write standard dims
-    if xi is not None: las.x = X[:, xi].astype(np.float64)
-    if yi is not None: las.y = X[:, yi].astype(np.float64)
-    if zi is not None: las.z = X[:, zi].astype(np.float64)
+    # INDICI PER X, Y, Z
+    xi, yi, zi = header.index('X'), header.index('Y'), header.index('Z')
 
-    # Find POINT_ID column; if missing, use sequential indices
-    pid_col = next(
-        (i for i, h in enumerate(header) if h.lower() in ('point_id', 'pointid')),
-        None
-    )
-    if pid_col is not None:
-        point_ids = X[:, pid_col].astype(np.uint32)
-    else:
-        print("  POINT_ID not found in data — using sequential indices.")
-        point_ids = np.arange(n_points, dtype=np.uint32)
+    # RIPRISTINO COORDINATE GLOBALI (X + Offset) PRIMA DEL SALVATAGGIO
+    las.x = X[:, xi] + original_metadata['offsets'][0]
+    las.y = X[:, yi] + original_metadata['offsets'][1]
+    las.z = X[:, zi] + original_metadata['offsets'][2]
 
-    # Write extra dims
-    for col_name in header:
+    for i, col_name in enumerate(header):
         cl = col_name.lower()
-        if cl in LAS_BUILTIN:
-            continue
-        col_idx = header.index(col_name)
-        if cl in ('point_id', 'pointid'):
-            las[col_name] = point_ids
-        elif cl == 'prediction':
-            las['prediction'] = Y.astype(np.uint8)
+        if cl in ['x', 'y', 'z', 'prediction']: continue
+        
+        data = X[:, i]
+        if cl == 'red': las.red = data.astype(np.uint16)
+        elif cl == 'green': las.green = data.astype(np.uint16)
+        elif cl == 'blue': las.blue = data.astype(np.uint16)
+        elif cl == 'intensity': las.intensity = data.astype(np.uint16)
+        elif cl == 'scan_angle': las.scan_angle = data.astype(np.float32)
+        elif cl == 'normal_x': las.normal_x = data.astype(np.float32)
+        elif cl == 'normal_y': las.normal_y = data.astype(np.float32)
+        elif cl == 'normal_z': las.normal_z = data.astype(np.float32)
         else:
-            las[col_name] = X[:, col_idx].astype(np.float32)
+            las[col_name] = data.astype(np.float32 if 'point_id' not in cl else np.uint32)
 
+    las['prediction'] = Y.astype(np.uint8)    
     las.write(filename)
     print(f"  Written {n_points} points → {filename}")
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Main
@@ -254,7 +192,7 @@ def main():
     model = read_model(args.model)
 
     print('Loading testing data ...')
-    X, header = read_las_data(args.test_filepath)
+    X, header, original_metadata = read_las_data(args.test_filepath)
 
     feat_to_use = get_feature_indices(header, args.selected_features)
 
@@ -275,7 +213,13 @@ def main():
     print(f'---> Classification time {int((t2-t1)//60)} min {int((t2-t1)%60)} sec')
 
     print('\nSaving ...')
-    write_classification_las(X, Y_pred, args.output_classify_name, header)
+    # --- CONTROLLO CARTELLA ---
+    output_dir = os.path.dirname(args.output_classify_name)
+    if output_dir and not os.path.exists(output_dir):
+        print(f"Creating output directory: {output_dir}")
+        os.makedirs(output_dir, exist_ok=True)
+
+    write_classification_las(X, Y_pred, args.output_classify_name, header, original_metadata)
 
     t3 = time.time()
     print(f'---> Saving time {int((t3-t2)//60)} min {int((t3-t2)%60)} sec')

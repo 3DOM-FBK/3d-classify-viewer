@@ -21,6 +21,31 @@ import re
 import copy
 from scipy.spatial import KDTree
 
+import struct # <--- Aggiungi
+
+def _read_vlr_extra_names(filepath):
+    """ Legge i nomi reali delle Extra Bytes dal binario LAS """
+    result = []
+    with open(filepath, 'rb') as f:
+        f.seek(94);  hdr_size, = struct.unpack('<H', f.read(2))
+        f.seek(100); num_vlrs, = struct.unpack('<I', f.read(4))
+        f.seek(hdr_size)
+        for _ in range(num_vlrs):
+            hdr = f.read(54)
+            if len(hdr) < 54: break
+            user_id   = hdr[2:18].rstrip(b'\x00').decode('latin-1')
+            record_id = struct.unpack_from('<H', hdr, 18)[0]
+            rec_len   = struct.unpack_from('<H', hdr, 20)[0]
+            if user_id == 'LASF_Spec' and record_id == 4:
+                data = f.read(rec_len)
+                for i in range(rec_len // 192):
+                    rec = data[i*192:(i+1)*192]
+                    name = rec[4:36].rstrip(b'\x00').decode('latin-1').strip()
+                    if name: result.append(name)
+                return result
+            else:
+                f.seek(rec_len, 1)
+    return result
 
 def load_features_and_class(filepath):
     ''' Load the features to use from a txt file. Format: 
@@ -90,98 +115,15 @@ def read_txt_data(filepath, class_index):
                 Y.append(int(float(tokens[class_index])))
     return np.asarray(X, dtype=np.float64), np.asarray(Y, dtype=np.float64), header
 
-def read_las_data(filepath, class_las_index):
-    ''' Read a labelled point cloud from a .las file.
-
-        Attributes:
-            filepath    :   path to the .las file containing the point cloud
-            class_las_index :   index of the class label in the .las file
-
-        Return:
-            X   :   numpy array with features
-            Y   :   numpy array with classes
-            header :   list of feature names (from the las file)
-    '''
-
-    def sanitize_name(name):
-        clean = re.sub(r'[^a-zA-Z0-9_]', '_', name)
-        clean = re.sub(r'_+', '_', clean)
-        return clean.strip('_')
-
-    las = laspy.read(filepath)
-
-    all_dims = list(las.point_format.dimension_names)
-
-    # Exclude the class dimension and 'classification' from features
-    BUILTIN_SKIP = {class_las_index, 'classification'}
-    raw_feature_dims = [d for d in all_dims if d not in BUILTIN_SKIP]
-
-    # Build a map: original_name -> sanitized_name (with uniqueness check)
-    name_map = {}
-    seen = set()
-    for col_name in raw_feature_dims:
-        clean = sanitize_name(col_name)
-        original_clean = clean
-        counter = 1
-        while clean.lower() in seen:
-            clean = f"{original_clean}_{counter}"
-            counter += 1
-        seen.add(clean.lower())
-        name_map[col_name] = clean
-
-    # Build X using original names to access data, sanitized names as header
-    columns = []
-    valid_header = []
-    for original, clean in name_map.items():
-        try:
-            col = np.array(getattr(las, original), dtype=np.float64)
-            columns.append(col)
-            valid_header.append(clean)
-        except Exception as e:
-            print(f"Skipping dimension '{original}' -> '{clean}': {e}")
-
-    X = np.column_stack(columns)
-    header = valid_header
-
-    # Build Y from the class dimension
-    Y = np.array(getattr(las, class_las_index), dtype=np.float64)
-
-    # Filter out rows with NaN values
-    valid_mask = ~np.isnan(X).any(axis=1) & ~np.isnan(Y)
-    X = X[valid_mask]
-    Y = Y[valid_mask]
-
-    return X, Y, header
-
 def train_model(X_train, Y_train, n_jobs, use_gpu=False,
                 n_estimators=200, max_depth=15, min_samples_split=20, max_features='sqrt'):
-    ''' Train the Random Forest model with the specified parameters and return it.
-
-        Default parameters follow the RF200 configuration:
-            - 200 trees (n_estimators)
-            - maximum tree depth of d_max = 15
-            - minimum samples to split a node of n_min = 20
-            - number of features per split = sqrt(n_features)
-
-        Attributes:
-            X_train             :   numpy array with training features
-            Y_train             :   numpy array with training classes
-            n_jobs              :   number of threads used to train the model (CPU only)
-            use_gpu             :   whether to use GPU-accelerated training via cuML
-            n_estimators        :   number of trees in the forest (default: 200)
-            max_depth           :   maximum depth of each tree (default: 15)
-            min_samples_split   :   minimum samples required to split a node (default: 20)
-            max_features        :   number of features per split (default: 'sqrt')
-        
-        Return:
-            model           :   trained model
-    '''
-    # If GPU requested and cuML is available, use cuML's RandomForest (requires RAPIDS stack)
+    
     if use_gpu and GPU_AVAILABLE:
         print(f"GPU is AVAILABLE, so use cuml for training.")
-        Xg = cp.asarray(X_train)
-        yg = cp.asarray(Y_train)
-        # cuML requires an explicit integer for max_depth — None is not supported
+        Xg = cp.asarray(X_train, dtype=cp.float32)
+        yg = cp.asarray(Y_train, dtype=cp.int32)
+        
+        # cuML a volte richiede esplicitamente la precisione delle statistiche
         model = cuRF(
             n_estimators=n_estimators,
             max_depth=max_depth,
@@ -190,21 +132,28 @@ def train_model(X_train, Y_train, n_jobs, use_gpu=False,
             random_state=0
         )
         model.fit(Xg, yg)
-        return model
-    else :
-        print(f"GPU is not AVAILABLE, so use scikit-learn for training.")
-        # Fallback to scikit-learn on CPU
+        
+        # Se .feature_importances_ fallisce, lo calcoliamo via sklearn su un piccolo subset
+        try:
+            fi = model.feature_importances_.get()
+        except:
+            print("[INFO] cuML non espone importanze. Calcolo stima su subset CPU...")
+            subset_idx = np.random.choice(len(X_train), min(100000, len(X_train)), replace=False)
+            rf_cpu = RandomForestClassifier(n_estimators=50, max_depth=10, n_jobs=n_jobs)
+            rf_cpu.fit(X_train[subset_idx], Y_train[subset_idx])
+            fi = rf_cpu.feature_importances_
+        
+        return model, fi
+   
+    else:
+        # Fallback CPU (scikit-learn)
         model = RandomForestClassifier(
-            n_estimators=n_estimators,
-            max_depth=max_depth,
-            min_samples_split=min_samples_split,
-            max_features=max_features,
-            random_state=0,
-            oob_score=True,
-            n_jobs=n_jobs
+            n_estimators=n_estimators, max_depth=max_depth,
+            min_samples_split=min_samples_split, max_features=max_features,
+            n_jobs=n_jobs, random_state=0
         )
         model.fit(X_train, Y_train)
-        return model
+        return model, model.feature_importances_
 
 
 def write_classification_txt(X_test, Y_test_pred, filename, header):
@@ -219,100 +168,119 @@ def write_classification_txt(X_test, Y_test_pred, filename, header):
             out.write('{} {}\n'.format(x_t_as_str, str(Y_test_pred[index])))
 
 
-def write_classification_las(X, Y, filename, header, source_las_path=None):
-    ''' Write the test set with the predicted labels as .las file '''
+def read_las_data(filepath, class_las_index):
+    las = laspy.read(filepath)
+    original_metadata = {
+        'offsets': np.array(las.header.offsets),
+        'scales':  np.array(las.header.scales)
+    }
 
-    X = np.array(X)
-    Y = np.array(Y)
+    all_dims = las.point_format.dimension_names
+    columns = []
+    header = []
 
-    if isinstance(header, str):
-        header = header.strip().lstrip('/').strip().split()
+    raw_x = np.array(las.x, dtype=np.float64)
+    raw_y = np.array(las.y, dtype=np.float64)
+    raw_z = np.array(las.z, dtype=np.float64)
+    
+    # Definiamo cosa ESCLUDERE dalle feature X (perché sono target o metadati irrilevanti)
+    target_names = {class_las_index, 'classification', 'labels', 'gps_time'}
 
-    def sanitize_name(name):
-        clean = re.sub(r'[^a-zA-Z0-9_]', '_', name)
-        clean = re.sub(r'_+', '_', clean)
-        return clean.strip('_')
-
-    # Campi built-in LAS: non vanno aggiunti come extra dims
-    # LAS_BUILTIN = {'x', 'y', 'z', 'r', 'red', 'g', 'green', 'b', 'blue',
-    #                'intensity', 'classification', 'return_number', 'number_of_returns',
-    #                'scan_direction_flag', 'edge_of_flight_line', 'synthetic',
-    #                'key_point', 'withheld', 'scan_angle_rank', 'scan_angle', 'user_data', 'point_source_id'}
-    LAS_BUILTIN = {'x', 'y', 'z', 'r', 'red', 'g', 'green', 'b', 'blue',
-               'intensity', 'classification', 'return_number', 'number_of_returns',
-               'scan_direction_flag', 'edge_of_flight_line', 'synthetic',
-               'key_point', 'withheld', 'scan_angle_rank', 'scan_angle', 'user_data', 'point_source_id',
-               'gps_time', 'scanner_channel', 'scan_channel', 'overlap',
-               'classification_flags', 'normal_x', 'normal_y', 'normal_z'}
-
-    name_map = {}
-    seen = set()
-    for col_name in header:
-        clean = sanitize_name(col_name)
-        original_clean = clean
-        counter = 1
-        while clean.lower() in seen:
-            clean = f"{original_clean}_{counter}"
-            counter += 1
-        seen.add(clean.lower())
-        name_map[col_name] = clean
-
-    if source_las_path:
-        source_las = laspy.read(source_las_path)
-        las_header = laspy.LasHeader(point_format=source_las.point_format.id,
-                                     version=source_las.header.version)
-        las_header.offsets = source_las.header.offsets
-        las_header.scales  = source_las.header.scales
-    else:
-        las_header = laspy.LasHeader(point_format=7, version="1.4")
-        if any(h.lower() == 'x' for h in header):
-            las_header.offsets = np.min(X[:, :3], axis=0)
-        las_header.scales = np.array([0.001, 0.001, 0.001])
-
-    # Add only non-builtin dims as extra
-    extra_dims = []
-    for col_name in header:
-        clean = name_map[col_name]
-        if clean.lower() not in LAS_BUILTIN:
-            extra_dims.append(
-                laspy.ExtraBytesParams(name=clean, type=np.float64)
-            )
-    if extra_dims:
-        las_header.add_extra_dims(extra_dims)
-
-    las = laspy.LasData(header=las_header)
-
-    for i, col_name in enumerate(header):
-        clean = name_map[col_name]
-        clean_lower = clean.lower()
-        if clean_lower == 'x':
-            las.x = X[:, i]
-        elif clean_lower == 'y':
-            las.y = X[:, i]
-        elif clean_lower == 'z':
-            las.z = X[:, i]
-        elif clean_lower in ('r', 'red'):
-            las.red = (X[:, i] * 257).astype(np.uint16)
-        elif clean_lower in ('g', 'green'):
-            las.green = (X[:, i] * 257).astype(np.uint16)
-        elif clean_lower in ('b', 'blue'):
-            las.blue = (X[:, i] * 257).astype(np.uint16)
-        elif clean_lower == 'intensity':
-            las.intensity = X[:, i].astype(np.uint16)
-        elif clean_lower == 'classification':
-                pass  # written separately from Y
-        elif clean_lower in LAS_BUILTIN:
+    for dim in all_dims:
+        if dim == 'X':
+            columns.append(raw_x - original_metadata['offsets'][0])
+            header.append(dim)
+        elif dim == 'Y':
+            columns.append(raw_y - original_metadata['offsets'][1])
+            header.append(dim)
+        elif dim == 'Z':
+            columns.append(raw_z - original_metadata['offsets'][2])
+            header.append(dim)
+        # Includiamo intensity e feature extra, ESCLUDENDO il target
+        elif dim not in target_names and not dim.startswith('return_'):
             try:
-                setattr(las, clean_lower, X[:, i])
-            except Exception as e:{
-                # print(f"Skipping built-in '{clean_lower}': {e}")
-            }
-        else:
-            las[clean] = X[:, i]
+                columns.append(np.array(getattr(las, dim), dtype=np.float32))
+                header.append(dim)
+            except Exception: continue
 
-    las.classification = np.array(Y, dtype=np.uint8).flatten()
+    X = np.column_stack(columns)
+    
+    # --- Gestione Dinamica Target Y ---
+    if hasattr(las, class_las_index):
+        Y = np.array(getattr(las, class_las_index), dtype=np.int32)
+    else:
+        Y = np.array(las.classification, dtype=np.int32)
+    
+    return X, Y, header, original_metadata
 
-    las.write('{}'.format(filename))
+def write_classification_las(X, Y, filename, header, original_metadata):
+    xi, yi, zi = header.index('X'), header.index('Y'), header.index('Z')
+    
+    # Prepariamo l'header
+    las_header = laspy.LasHeader(point_format=3, version="1.2")
+    las_header.offsets = original_metadata['offsets']
+    las_header.scales = original_metadata['scales']
+
+    # Dimensioni standard LAS (non aggiungerle come Extra Bytes)
+    LAS_NATIVE = {
+        'X', 'Y', 'Z', 'intensity', 'return_number', 'number_of_returns',
+        'scan_direction_flag', 'edge_of_flight_line', 'classification',
+        'synthetic_flag', 'keypoint_flag', 'withheld_flag', 'scan_angle_rank',
+        'user_data', 'point_source_id', 'gps_time', 'red', 'green', 'blue'
+    }
+    
+    # Aggiungiamo Extra Bytes (solo se non sono già nativi)
+    for col_name in header:
+        if col_name not in LAS_NATIVE:
+            try:
+                las_header.add_extra_dim(laspy.ExtraBytesParams(name=col_name, type=np.float32))
+            except Exception: pass
+
+    las = laspy.LasData(las_header)
+    
+    # 1. Coordinate (Fondamentali)
+    las.x = X[:, xi] + original_metadata['offsets'][0]
+    las.y = X[:, yi] + original_metadata['offsets'][1]
+    las.z = X[:, zi] + original_metadata['offsets'][2]
+    
+    # 2. Colori
+    for color in ['red', 'green', 'blue']:
+        if color in header:
+            ci = header.index(color)
+            c_data = X[:, ci]
+            # Scala a 16-bit se necessario
+            val = (c_data * 257) if c_data.max() <= 255 else c_data
+            setattr(las, color, val.astype(np.uint16))
+
+    # 3. Altri campi (Iterazione sicura)
+    for i, col_name in enumerate(header):
+        # Saltiamo quelli già gestiti o problematici
+        if col_name in ['X', 'Y', 'Z', 'red', 'green', 'blue', 'classification']:
+            continue
+            
+        try:
+            if col_name == 'intensity':
+                las.intensity = X[:, i].astype(np.uint16)
+            elif col_name == 'gps_time':
+                las.gps_time = X[:, i]
+            elif col_name == 'scan_angle_rank':
+                # Lo convertiamo in intero prima di passarlo per evitare il 'left_shift' error
+                las.scan_angle_rank = X[:, i].astype(np.int8)
+            elif col_name not in LAS_NATIVE:
+                # Questo scrive gli Extra Bytes (Verticality, Sphericity, ecc.)
+                las[col_name] = X[:, i].astype(np.float32)
+            else:
+                # Altri campi nativi (es. user_data)
+                setattr(las, col_name, X[:, i].astype(np.int64 if col_name.endswith('time') else np.int32))
+        except Exception as e:
+            # Se un campo dà errore (come le flag bit-to-bit), lo saltiamo per non bloccare il salvataggio
+            print(f"[WARNING] Impossibile scrivere la feature {col_name}: {e}")
+
+    # 4. Classificazione Predetta
+    las.classification = Y.astype(np.uint8)
+    
+    las.write(filename)
+    print(f"---> Salvataggio completato: {filename}")
 
 def save_model(model, filename):
     ''' Save the trained machine learning model
@@ -325,16 +293,15 @@ def save_model(model, filename):
         pickle.dump(model, out, pickle.HIGHEST_PROTOCOL)
 
 def get_voxel_size_from_las(filepath, sample_size=10000):
-    """Estimate a voxel size from the median nearest-neighbor distance."""
     with laspy.open(filepath) as fh:
         las = fh.read()
         coords = np.vstack((las.x - las.header.offsets[0], 
                             las.y - las.header.offsets[1], 
                             las.z - las.header.offsets[2])).T
 
-    # Compute it on all points.
+    # Calcoliamo su TUTTI i punti
     tree = KDTree(coords)
-    # Warning: for very large datasets (10M+ points), this may exhaust RAM.
+    # Attenzione: su dataset molto grandi (10M+ punti) questo potrebbe saturare la RAM
     distanze, _ = tree.query(coords, k=2)
     
     return np.median(distanze[:, 1])
@@ -355,6 +322,14 @@ def main():
     parser.add_argument('--model_savepath', help='Path to save the model')
     parser.add_argument('--report_savepath', help='Path to save the training report')
     args= parser.parse_args()
+
+    # Crea cartelle per output, modello e report
+    for path in [args.output_training_name, args.model_savepath, args.report_savepath]:
+        if path:
+            output_dir = os.path.dirname(path)
+            if output_dir and not os.path.exists(output_dir):
+                print(f"Create output folder: {output_dir}")
+                os.makedirs(output_dir, exist_ok=True)
 
     # PARAMETERS 
     selected_features = args.selected_features
@@ -377,13 +352,13 @@ def main():
     t0 = time.time()
 
     print("\nLoading training data...")
-    X_train, Y_train, header = read_las_data(training_filepath, class_las_index)
+    X_train, Y_train, header, _ = read_las_data(training_filepath, class_las_index)
 
     # Calculate voxel distance
     suggested_voxel = get_voxel_size_from_las(training_filepath)
         
     print("\nLoading validation data...")
-    X_test, Y_test, _ = read_las_data(val_filepath, class_las_index)
+    X_test, Y_test, header, meta = read_las_data(val_filepath, class_las_index)
     
     # print("\nLoading features data...")
     feat_to_use = get_feature_indices(header, selected_features)
@@ -411,8 +386,9 @@ def main():
     tot_metrics_sec = 0
     
     t2 = time.time()
+    
     # X_train[:, feat_to_use] specify only feature needed
-    model = train_model(X_train[:, feat_to_use], Y_train, n_jobs=n_jobs, use_gpu=use_gpu,
+    model, feats_raw = train_model(X_train[:, feat_to_use], Y_train, n_jobs=n_jobs, use_gpu=use_gpu,
                         n_estimators=n_estimators,
                         max_depth=max_depths,
                         min_samples_split=min_samples_split,
@@ -428,14 +404,14 @@ def main():
     else:
         print(f'---> Training time {train_sec} sec')
     
-    # print('\nEvaluating on validation set...')
+    print('\nEvaluating on validation set...')
     # Predict depending on whether we used cuML (GPU) or scikit-learn (CPU)
     if use_gpu and GPU_AVAILABLE and cuRF is not None:
         Y_test_pred = cp.asnumpy(model.predict(cp.asarray(X_test[:, feat_to_use])))
     else:
         Y_test_pred = model.predict(X_test[:, feat_to_use])             # Test the model, using only the specified features
     # print(f'\nSaving {output_training_name}')
-    # write_classification_las(X_test, Y_test_pred, output_training_name, header)
+    # write_classification_las(X_test, Y_test_pred, output_training_name, header, meta)
 
     # Compute metrics
     print('\nComputing metrics...')
@@ -461,12 +437,10 @@ def main():
     
     # Sort features by importance in descending order
     # Try to get feature importances; cuML may expose a similar attribute
-    try:
-        feats = model.feature_importances_
-        # In case cuML returns cupy array
-        if GPU_AVAILABLE and cp is not None and isinstance(feats, cp.ndarray):
-            feats = cp.asnumpy(feats)
-    except Exception:
+    if feats_raw is not None and len(feats_raw) == len(headers):
+        feats = feats_raw
+    else:
+        print(f"[WARNING] feats shape={None if feats_raw is None else len(feats_raw)}, headers={len(headers)}")
         feats = np.zeros(len(headers))
     sorted_features = sorted(zip(headers, feats), key=lambda x: x[1], reverse=True)
     
