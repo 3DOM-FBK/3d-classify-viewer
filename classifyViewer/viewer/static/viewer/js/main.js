@@ -2721,6 +2721,18 @@ document.querySelectorAll('.nav-mode-btn').forEach(btn => {
 // SCENE RESET — front-end cleanup triggered by showResetSceneModal()
 // ---------------------------------------------------------------------------
 window.addEventListener('scene-reset', () => {
+    // 0. Tool/UI transient state: ensure neutral navigation mode
+    document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
+    const defaultBtn = document.getElementById('tool-1');
+    if (defaultBtn) defaultBtn.classList.add('active');
+    activeTool = 'tool-1';
+    if (camera && canvas) camera.attachControl(canvas, true);
+
+    const guide = document.getElementById('command-guide');
+    if (guide) guide.classList.remove('visible');
+    if (typeof clearMeasure === 'function') clearMeasure();
+    if (typeof clearArea === 'function') clearArea();
+
     // 1. Outline: remove all items and reset state
     outlineContent.innerHTML = '';
     outlineItem = null;
@@ -2746,6 +2758,7 @@ window.addEventListener('scene-reset', () => {
     // 5. Feature range slider: hide and reset
     if (featureRangeControl) {
         featureRangeControl.style.display = 'none';
+        featureRangeControl.classList.remove('prediction-slider-mode');
         if (rangeMin) rangeMin.value = 0;
         if (rangeMax) rangeMax.value = 100;
     }

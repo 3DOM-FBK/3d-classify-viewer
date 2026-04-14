@@ -144,6 +144,12 @@ export class Potree2Loader {
         this._segmentIdCounter = 1;
         this._deletedSegmentId = -1;
         this.mainCloudVisible = true;
+
+        // Runtime handles that must be cleaned on dispose() to avoid stale callbacks
+        // after Reset Scene / re-import.
+        this._cameraForObserver = null;
+        this._cameraViewObserver = null;
+        this._cleanupIntervalId = null;
     }
 
     _getLocalBoundingBoxCenter() {
@@ -717,6 +723,17 @@ export class Potree2Loader {
     }
 
     dispose() {
+        if (this._cameraForObserver && this._cameraViewObserver) {
+            this._cameraForObserver.onViewMatrixChangedObservable.remove(this._cameraViewObserver);
+        }
+        this._cameraForObserver = null;
+        this._cameraViewObserver = null;
+
+        if (this._cleanupIntervalId !== null) {
+            clearInterval(this._cleanupIntervalId);
+            this._cleanupIntervalId = null;
+        }
+
         for (const mesh of this.loadedNodes.values()) {
             if (mesh.material) mesh.material.dispose();
             mesh.dispose();
@@ -2895,7 +2912,8 @@ export async function loadPotree2PointCloud(basePath, scene, options = {}) {
         let lastUpdate = 0;
         const updateThrottle = 200;
 
-        camera.onViewMatrixChangedObservable.add(() => {
+        loader._cameraForObserver = camera;
+        loader._cameraViewObserver = camera.onViewMatrixChangedObservable.add(() => {
             const now = Date.now();
             if (now - lastUpdate > updateThrottle) {
                 loader.update(camera);
@@ -2903,7 +2921,7 @@ export async function loadPotree2PointCloud(basePath, scene, options = {}) {
             }
         });
 
-        setInterval(() => loader.cleanup(200), 30000);
+        loader._cleanupIntervalId = window.setInterval(() => loader.cleanup(200), 30000);
     }
 
     scene.potree2Loader = loader;

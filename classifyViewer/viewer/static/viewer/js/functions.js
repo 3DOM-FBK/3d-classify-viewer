@@ -1400,7 +1400,7 @@ export function showResetSceneModal() {
                 const stepList = document.createElement('div');
                 stepList.classList.add('pipeline-step-list');
 
-                const STEPS = ["Clearing Working Directory", "Resetting Viewer"];
+                const STEPS = ["Resetting Viewer", "Clearing Working Directory"];
                 const stepEls = STEPS.map((label) => {
                     const item = document.createElement('div');
                     item.classList.add('pipeline-step-item', 'step-idle');
@@ -1441,21 +1441,13 @@ export function showResetSceneModal() {
                     stepEls[i].classList.add('step-error');
                 };
 
-                try {
-                    // STEP 1: Clear working directory
-                    activateStep(0);
-                    const clearRes = await fetch('/api/clear-data/', {
-                        method: 'POST',
-                        headers: { 'X-CSRFToken': getCSRFToken() }
-                    });
-                    if (!clearRes.ok) {
-                        const errData = await clearRes.json().catch(() => ({}));
-                        throw new Error(errData.error || "Failed to clear working directory");
-                    }
-                    completeStep(0);
+                let currentStep = 0;
 
-                    // STEP 2: Reset viewer state
-                    activateStep(1);
+                try {
+                    // STEP 1: Reset viewer state first, so no stale loader callbacks
+                    // keep running while backend files are being deleted.
+                    currentStep = 0;
+                    activateStep(currentStep);
                     const scene = window.__babylonScene;
                     if (scene) {
                         const loader = scene.potree2Loader;
@@ -1477,7 +1469,20 @@ export function showResetSceneModal() {
                     window.__currentProjectBIN = null;
                     window.__selectedModelPath = null;
                     window.dispatchEvent(new CustomEvent('scene-reset'));
-                    completeStep(1);
+                    completeStep(currentStep);
+
+                    // STEP 2: Clear working directory
+                    currentStep = 1;
+                    activateStep(currentStep);
+                    const clearRes = await fetch('/api/clear-data/', {
+                        method: 'POST',
+                        headers: { 'X-CSRFToken': getCSRFToken() }
+                    });
+                    if (!clearRes.ok) {
+                        const errData = await clearRes.json().catch(() => ({}));
+                        throw new Error(errData.error || "Failed to clear working directory");
+                    }
+                    completeStep(currentStep);
 
                     await new Promise(r => setTimeout(r, 700));
                     overlay.classList.remove('active');
@@ -1485,7 +1490,7 @@ export function showResetSceneModal() {
 
                 } catch (err) {
                     console.error("❌ Reset Scene Error:", err);
-                    failStep(0);
+                    failStep(currentStep);
 
                     const errorDiv = document.createElement('div');
                     errorDiv.classList.add('pipeline-error-msg');
