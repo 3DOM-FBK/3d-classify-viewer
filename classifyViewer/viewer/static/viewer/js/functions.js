@@ -1519,7 +1519,7 @@ export function showDownloadModal() {
         "Download Data",
         (body) => {
             // Tracks checkboxes
-            const segmentCheckboxes = [];  // { id, checkbox }
+            const pointCloudFileCheckboxes = [];  // { path, label, checkbox }
             const modelCheckboxes = [];    // { name, checkbox }
 
             // ── Helper: section separator ──────────────────────────────────
@@ -1543,45 +1543,76 @@ export function showDownloadModal() {
             segScroll.classList.add('dl-list-scroll');
             segSection.appendChild(segScroll);
 
-            // Populate segments from the actual UI Outline items (allows picking up renames)
-            const outlineItems = document.querySelectorAll('.outline-item:not(.class-item)');
-            let availableSegments = [];
+            // Show only the final pipeline output (predicted.las), if present.
+            // Prefer the currently selected model path, then fall back to all known models.
+            (async () => {
+                const loading = document.createElement('div');
+                loading.style.cssText = 'font-size:0.78rem; color:var(--text-muted); padding:8px 4px;';
+                loading.textContent = 'Checking predicted output…';
+                segScroll.appendChild(loading);
 
-            outlineItems.forEach(item => {
-                const segId = item.dataset.segmentId;
-                const nameInput = item.querySelector('.outline-name-input');
-                if (segId !== undefined && nameInput) {
-                    availableSegments.push({
-                        id: parseInt(segId, 10),
-                        label: nameInput.value
+                const candidates = [];
+                const seen = new Set();
+                const addCandidate = (modelName) => {
+                    if (!modelName) return;
+                    const relPath = `viewer/static/viewer/data/working/${modelName}/predicted.las`;
+                    if (seen.has(relPath)) return;
+                    seen.add(relPath);
+                    candidates.push({
+                        path: relPath,
+                        label: 'predicted.las',
+                        modelName,
                     });
-                }
-            });
+                };
 
-            // If no items in outline, check if main cloud exists but isn't in outline (fallback)
-            if (availableSegments.length === 0) {
-                const loader = window.__babylonScene?.potree2Loader;
-                if (loader) {
-                    availableSegments.push({ id: 0, label: 'Main Point Cloud' });
+                const selectedModelPath = window.__selectedModelPath;
+                if (typeof selectedModelPath === 'string' && selectedModelPath.length > 0) {
+                    const modelName = selectedModelPath
+                        .replace(/\\/g, '/')
+                        .replace(/\/model\.pkl$/, '')
+                        .split('/')
+                        .pop();
+                    addCandidate(modelName);
                 }
-            }
 
-            if (availableSegments.length === 0) {
-                const empty = document.createElement('div');
-                empty.style.cssText = 'font-size:0.78rem; color:var(--text-muted); padding:8px 4px;';
-                empty.textContent = 'No point cloud loaded.';
-                segScroll.appendChild(empty);
-            }
-
-            availableSegments.forEach(seg => {
-                const cb = createSimpleCheckbox(seg.label, true, segScroll);
-                // Add icon next to label
-                const labelSpan = cb.parentElement.querySelector('span:last-child');
-                if (labelSpan) {
-                    labelSpan.innerHTML = `<span style="opacity:0.7; margin-right:6px;">🗃️</span>${seg.label}`;
+                try {
+                    const res = await fetch('/api/models-list/');
+                    const data = await res.json();
+                    const models = data.models || [];
+                    models.forEach(m => addCandidate(m.name));
+                } catch (_) {
+                    // Ignore model list failures here: we still try selected model candidate.
                 }
-                segmentCheckboxes.push({ id: seg.id, label: seg.label, checkbox: cb });
-            });
+
+                const availableFiles = [];
+                for (const candidate of candidates) {
+                    try {
+                        const headRes = await fetch(`/${candidate.path}`, { method: 'HEAD' });
+                        if (headRes.ok) availableFiles.push(candidate);
+                    } catch (_) {
+                        // Ignore missing/unreachable candidate files.
+                    }
+                }
+
+                segScroll.innerHTML = '';
+
+                if (availableFiles.length === 0) {
+                    const empty = document.createElement('div');
+                    empty.style.cssText = 'font-size:0.78rem; color:var(--text-muted); padding:8px 4px;';
+                    empty.textContent = 'No predicted.las found.';
+                    segScroll.appendChild(empty);
+                    return;
+                }
+
+                availableFiles.forEach(file => {
+                    const cb = createSimpleCheckbox(file.label, true, segScroll);
+                    const labelSpan = cb.parentElement.querySelector('span:last-child');
+                    if (labelSpan) {
+                        labelSpan.innerHTML = `<span style="opacity:0.7; margin-right:6px;">🗃️</span>${file.label} <span style="opacity:0.7;">(${file.modelName})</span>`;
+                    }
+                    pointCloudFileCheckboxes.push({ path: file.path, label: file.label, checkbox: cb });
+                });
+            })();
 
             body.appendChild(segSection);
             body.appendChild(makeSeparator());
@@ -1649,9 +1680,9 @@ export function showDownloadModal() {
             body.appendChild(modelSection);
 
             // Expose selection getters for the footer
-            body._getSelectedSegments = () => segmentCheckboxes
-                .filter(s => s.checkbox.checked)
-                .map(s => ({ id: s.id, label: s.label }));
+            body._getSelectedPointCloudFiles = () => pointCloudFileCheckboxes
+                .filter(f => f.checkbox.checked)
+                .map(f => ({ path: f.path, label: f.label }));
             body._getSelectedModels = () => modelCheckboxes
                 .filter(m => m.checkbox.checked)
                 .map(m => m.name);
@@ -1671,10 +1702,10 @@ export function showDownloadModal() {
             downloadBtn.textContent = "Download";
             downloadBtn.onclick = async () => {
                 const body = overlay.querySelector('.modal-body');
-                const segments = body?._getSelectedSegments?.() ?? [];
+                const pointCloudFiles = body?._getSelectedPointCloudFiles?.() ?? [];
                 const models = body?._getSelectedModels?.() ?? [];
 
-                if (segments.length === 0 && models.length === 0) {
+                if (pointCloudFiles.length === 0 && models.length === 0) {
                     alert('Please select at least one item to download.');
                     return;
                 }
@@ -1683,33 +1714,6 @@ export function showDownloadModal() {
                 downloadBtn.textContent = 'Preparing Package...';
 
                 try {
-                    // If there are segments to download, we must first generate
-                    // the [segId, classId] buffer via exportAllTrainingData,
-                    // exactly like the training flow does. The features.bin file
-                    // contains colormap features, not segment annotations, so using
-                    // it for extract_segment_las would produce random/incorrect points.
-                    let segmentBinPath = null;
-                    if (segments.length > 0 && segments.some(s => s.id !== 0)) {
-                        const loader = window.__babylonScene?.potree2Loader;
-                        if (!loader) throw new Error('Point cloud loader not available.');
-
-                        // Build segmentMap with all segments present in the Outline.
-                        // They all must be passed because the buffer covers the full cloud.
-                        const segmentMap = {};
-                        document.querySelectorAll('.outline-item[data-segment-id]').forEach(item => {
-                            const segId = parseInt(item.dataset.segmentId, 10);
-                            const nameInput = item.querySelector('.outline-name-input');
-                            if (!isNaN(segId) && nameInput) segmentMap[segId] = nameInput.value;
-                        });
-
-                        downloadBtn.textContent = 'Exporting Segments...';
-                        const exportResult = await loader.exportAllTrainingDataAsMapping(segmentMap);
-                        if (!exportResult || !exportResult.mapping_path)
-                            throw new Error('No segment data found. Make sure segments have been created.');
-
-                        let segmentMappingPath = exportResult.mapping_path;
-                    }
-
                     downloadBtn.textContent = 'Preparing Package...';
                     const response = await fetch('/api/download-package/', {
                         method: 'POST',
@@ -1718,10 +1722,10 @@ export function showDownloadModal() {
                             'X-CSRFToken': getCSRFToken()
                         },
                         body: JSON.stringify({
-                            segments,
+                            segments: [],
+                            point_cloud_files: pointCloudFiles,
                             models,
-                            las_path: window.__currentProjectLAS,
-                            mapping_path: segmentMappingPath
+                            las_path: window.__currentProjectLAS
                         })
                     });
 

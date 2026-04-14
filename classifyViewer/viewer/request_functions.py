@@ -962,6 +962,7 @@ def package_download_view(request):
             print("\n[REQUEST FUNCTION] DOWNLOAD PACKAGE")
             data = json.loads(request.body)
             selected_segments = data.get('segments', [])  # list of {id, label}
+            selected_point_cloud_files = data.get('point_cloud_files', [])  # list of {path, label}
             selected_models   = data.get('models', [])    # list of model names
             project_las       = data.get('las_path')      # e.g. viewer/static/.../features.las
             project_bin       = data.get('bin_path')      # labels_TIMESTAMP.bin from /api/start-training/
@@ -994,7 +995,30 @@ def package_download_view(request):
 
             items_to_zip = []  # list of (archive_path, file_content_or_path, is_content)
 
-            # ── 1. Segments ───────────────────────────────────────────────────
+            # ── 1. Direct point-cloud files (final pipeline outputs) ────────
+            # Example: viewer/static/viewer/data/working/<model>/predicted.las
+            for file_entry in selected_point_cloud_files:
+                raw_path = file_entry.get('path')
+                if not raw_path:
+                    continue
+
+                abs_path = raw_path
+                if not os.path.isabs(abs_path):
+                    abs_path = os.path.join(settings.BASE_DIR, abs_path)
+
+                if not os.path.isfile(abs_path):
+                    continue
+
+                raw_label = file_entry.get('label') or os.path.basename(abs_path)
+                safe_label = raw_label.replace(' ', '_').replace('.', '_')
+                if not safe_label.lower().endswith('_las'):
+                    safe_label = f"{safe_label}_las"
+                safe_label = safe_label.replace('__', '_')
+                out_name = safe_label[:-4] + '.las'
+
+                items_to_zip.append((f"segments/{out_name}", abs_path, False))
+
+            # ── 2. Segments (legacy path) ────────────────────────────────────
             # All segments (including 0) go through extract_segment_las.
             # Segment 0 CANNOT be served as the entire features.las:
             # it also contains the points cut into segments 1, 2, ...
@@ -1022,7 +1046,7 @@ def package_download_view(request):
                     temp_files_to_delete.append(seg_las_path)
                     items_to_zip.append((f"segments/{label}.las", seg_las_path, False))
 
-            # ── 2. Models ─────────────────────────────────────────────────────
+            # ── 3. Models ─────────────────────────────────────────────────────
             # Model zip files are built in memory (BytesIO) — no files on disk.
             for model_name in selected_models:
                 model_dir = os.path.join(models_root, model_name)
@@ -1037,7 +1061,7 @@ def package_download_view(request):
                     model_zip_buf.seek(0)
                     items_to_zip.append((f"models/{model_name}.zip", model_zip_buf.read(), True))
 
-            # ── 3. Build response ─────────────────────────────────────────────
+            # ── 4. Build response ─────────────────────────────────────────────
             if len(items_to_zip) == 1 and items_to_zip[0][0].startswith("models/") and items_to_zip[0][2]:
                 # Single model: return its zip directly
                 content = items_to_zip[0][1]
