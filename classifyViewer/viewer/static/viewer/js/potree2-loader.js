@@ -1383,39 +1383,53 @@ export class Potree2Loader {
      * AND is not excluded by deselectionHistory.
      */
     _isPointInSelectionHistory(localVector) {
+        return this._matchesSelectionEntry(
+            localVector,
+            this.selectionHistory,
+            this.deselectionHistory,
+            this.selectionInverted
+        );
+    }
+
+    _matchesSelectionEntry(localVector, selections, deselections = [], inverted = false) {
         const worldMatrix = this.rootTransform.getWorldMatrix();
 
         let selected = false;
-        for (const sel of this.selectionHistory) {
+        for (const sel of selections) {
             const projection = BABYLON.Vector3.Project(localVector, worldMatrix, sel.transformMatrix, sel.viewport);
             if (sel.type === "rect") {
                 if (projection.x >= sel.area.x && projection.x <= sel.area.x + sel.area.width &&
                     projection.y >= sel.area.y && projection.y <= sel.area.y + sel.area.height) {
-                    selected = true; break;
+                    selected = true;
+                    break;
                 }
             } else if (sel.type === "lasso") {
                 if (this._isPointInPoly(sel.area, [projection.x, projection.y])) {
-                    selected = true; break;
+                    selected = true;
+                    break;
                 }
             }
         }
-        if (!selected) return false;
 
-        // Exclude if the point falls in a deselection region
-        for (const dsel of this.deselectionHistory) {
-            const projection = BABYLON.Vector3.Project(localVector, worldMatrix, dsel.transformMatrix, dsel.viewport);
-            if (dsel.type === "rect") {
-                if (projection.x >= dsel.area.x && projection.x <= dsel.area.x + dsel.area.width &&
-                    projection.y >= dsel.area.y && projection.y <= dsel.area.y + dsel.area.height) {
-                    return false;
-                }
-            } else if (dsel.type === "lasso") {
-                if (this._isPointInPoly(dsel.area, [projection.x, projection.y])) {
-                    return false;
+        if (selected) {
+            for (const dsel of deselections) {
+                const projection = BABYLON.Vector3.Project(localVector, worldMatrix, dsel.transformMatrix, dsel.viewport);
+                if (dsel.type === "rect") {
+                    if (projection.x >= dsel.area.x && projection.x <= dsel.area.x + dsel.area.width &&
+                        projection.y >= dsel.area.y && projection.y <= dsel.area.y + dsel.area.height) {
+                        selected = false;
+                        break;
+                    }
+                } else if (dsel.type === "lasso") {
+                    if (this._isPointInPoly(dsel.area, [projection.x, projection.y])) {
+                        selected = false;
+                        break;
+                    }
                 }
             }
         }
-        return true;
+
+        return inverted ? !selected : selected;
     }
 
     /**
@@ -1441,41 +1455,8 @@ export class Potree2Loader {
                 y < entry.minY || y > entry.maxY ||
                 z < entry.minZ || z > entry.maxZ) continue;
 
-            // 2. Accurate region check
-            let isInside = false;
-            for (const sel of entry.selections) {
-                const projection = BABYLON.Vector3.Project(localVector, worldMatrix, sel.transformMatrix, sel.viewport);
-                if (sel.type === "rect") {
-                    if (projection.x >= sel.area.x && projection.x <= sel.area.x + sel.area.width &&
-                        projection.y >= sel.area.y && projection.y <= sel.area.y + sel.area.height) {
-                        isInside = true; break;
-                    }
-                } else if (sel.type === "lasso") {
-                    if (this._isPointInPoly(sel.area, [projection.x, projection.y])) {
-                        isInside = true; break;
-                    }
-                }
-            }
-
-            if (!isInside) continue;
-
-            // 3. Exclude deselected regions for this classification event
-            let isDeselected = false;
-            for (const dsel of entry.deselections) {
-                const projection = BABYLON.Vector3.Project(localVector, worldMatrix, dsel.transformMatrix, dsel.viewport);
-                if (dsel.type === "rect") {
-                    if (projection.x >= dsel.area.x && projection.x <= dsel.area.x + dsel.area.width &&
-                        projection.y >= dsel.area.y && projection.y <= dsel.area.y + dsel.area.height) {
-                        isDeselected = true; break;
-                    }
-                } else if (dsel.type === "lasso") {
-                    if (this._isPointInPoly(dsel.area, [projection.x, projection.y])) {
-                        isDeselected = true; break;
-                    }
-                }
-            }
-
-            if (!isDeselected) {
+            // 2. Accurate region check, including deselections and inverted selection state.
+            if (this._matchesSelectionEntry(localVector, entry.selections, entry.deselections, entry.inverted)) {
                 finalCls = { classId: entry.classId, r: entry.r, g: entry.g, b: entry.b };
             }
         }
@@ -1552,33 +1533,12 @@ export class Potree2Loader {
 
                 const vector = new BABYLON.Vector3(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
 
-                // 2D projection with frozen camera state for each selection region
-                let isInside = false;
-                for (const sel of this.selectionHistory) {
-                    const projection = BABYLON.Vector3.Project(vector, worldMatrix, sel.transformMatrix, sel.viewport);
-                    if (sel.type === "rect") {
-                        isInside = (projection.x >= sel.area.x && projection.x <= sel.area.x + sel.area.width &&
-                            projection.y >= sel.area.y && projection.y <= sel.area.y + sel.area.height);
-                    } else if (sel.type === "lasso") {
-                        isInside = this._isPointInPoly(sel.area, [projection.x, projection.y]);
-                    }
-                    if (isInside) break;
-                }
-
-                // Exclude deselected points (CTRL+select)
-                if (isInside && this.deselectionHistory.length > 0) {
-                    for (const dsel of this.deselectionHistory) {
-                        const dp = BABYLON.Vector3.Project(vector, worldMatrix, dsel.transformMatrix, dsel.viewport);
-                        let deselected = false;
-                        if (dsel.type === "rect") {
-                            deselected = (dp.x >= dsel.area.x && dp.x <= dsel.area.x + dsel.area.width &&
-                                dp.y >= dsel.area.y && dp.y <= dsel.area.y + dsel.area.height);
-                        } else if (dsel.type === "lasso") {
-                            deselected = this._isPointInPoly(dsel.area, [dp.x, dp.y]);
-                        }
-                        if (deselected) { isInside = false; break; }
-                    }
-                }
+                const isInside = this._matchesSelectionEntry(
+                    vector,
+                    this.selectionHistory,
+                    this.deselectionHistory,
+                    this.selectionInverted
+                );
 
                 if (isInside) {
                     mesh.metadata.classIds[i] = classId;
@@ -1634,6 +1594,7 @@ export class Potree2Loader {
             const margin = 0.05;
             this.classificationHistory.push({
                 classId, r, g, b,
+                inverted: this.selectionInverted,
                 visibleSegmentIds,
                 minX: minX - margin, minY: minY - margin, minZ: minZ - margin,
                 maxX: maxX + margin, maxY: maxY + margin, maxZ: maxZ + margin,
@@ -1830,7 +1791,6 @@ export class Potree2Loader {
         }
 
         const segmentId = this._segmentIdCounter++;
-        const worldMatrix = this.rootTransform.getWorldMatrix();
         let total = 0;
         let minX = Infinity, minY = Infinity, minZ = Infinity;
         let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
@@ -1848,32 +1808,12 @@ export class Potree2Loader {
 
             for (let i = 0; i < positions.length / 3; i++) {
                 const vector = new BABYLON.Vector3(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
-                let isInside = false;
-
-                for (const sel of this.selectionHistory) {
-                    const p = BABYLON.Vector3.Project(vector, worldMatrix, sel.transformMatrix, sel.viewport);
-                    if (sel.type === "rect") {
-                        isInside = (p.x >= sel.area.x && p.x <= sel.area.x + sel.area.width &&
-                            p.y >= sel.area.y && p.y <= sel.area.y + sel.area.height);
-                    } else if (sel.type === "lasso") {
-                        isInside = this._isPointInPoly(sel.area, [p.x, p.y]);
-                    }
-                    if (isInside) break;
-                }
-
-                if (isInside && this.deselectionHistory.length > 0) {
-                    for (const dsel of this.deselectionHistory) {
-                        const dp = BABYLON.Vector3.Project(vector, worldMatrix, dsel.transformMatrix, dsel.viewport);
-                        let deselected = false;
-                        if (dsel.type === "rect") {
-                            deselected = (dp.x >= dsel.area.x && dp.x <= dsel.area.x + dsel.area.width &&
-                                dp.y >= dsel.area.y && dp.y <= dsel.area.y + dsel.area.height);
-                        } else if (dsel.type === "lasso") {
-                            deselected = this._isPointInPoly(dsel.area, [dp.x, dp.y]);
-                        }
-                        if (deselected) { isInside = false; break; }
-                    }
-                }
+                const isInside = this._matchesSelectionEntry(
+                    vector,
+                    this.selectionHistory,
+                    this.deselectionHistory,
+                    this.selectionInverted
+                );
 
                 if (isInside) {
                     segmentIds[i] = segmentId;
@@ -1918,6 +1858,7 @@ export class Potree2Loader {
             this.cutHistory.push({
                 segmentId,
                 visible: false, // Hidden by default upon cut
+                inverted: this.selectionInverted,
                 minX: minX - margin, minY: minY - margin, minZ: minZ - margin,
                 maxX: maxX + margin, maxY: maxY + margin, maxZ: maxZ + margin,
                 selections: this.selectionHistory.map(s => ({ ...s, transformMatrix: s.transformMatrix.clone() })),
@@ -2038,7 +1979,6 @@ export class Potree2Loader {
      */
     _getPointSegment(localVector) {
         if (this.cutHistory.length === 0) return null;
-        const worldMatrix = this.rootTransform.getWorldMatrix();
         const x = localVector.x, y = localVector.y, z = localVector.z;
 
         for (let c = this.cutHistory.length - 1; c >= 0; c--) {
@@ -2047,33 +1987,9 @@ export class Potree2Loader {
                 y < entry.minY || y > entry.maxY ||
                 z < entry.minZ || z > entry.maxZ) continue;
 
-            let isInside = false;
-            for (const sel of entry.selections) {
-                const p = BABYLON.Vector3.Project(localVector, worldMatrix, sel.transformMatrix, sel.viewport);
-                if (sel.type === "rect") {
-                    if (p.x >= sel.area.x && p.x <= sel.area.x + sel.area.width &&
-                        p.y >= sel.area.y && p.y <= sel.area.y + sel.area.height) {
-                        isInside = true; break;
-                    }
-                } else if (sel.type === "lasso") {
-                    if (this._isPointInPoly(sel.area, [p.x, p.y])) { isInside = true; break; }
-                }
+            if (this._matchesSelectionEntry(localVector, entry.selections, entry.deselections, entry.inverted)) {
+                return { segmentId: entry.segmentId, visible: entry.visible };
             }
-            if (!isInside) continue;
-
-            for (const dsel of entry.deselections) {
-                const dp = BABYLON.Vector3.Project(localVector, worldMatrix, dsel.transformMatrix, dsel.viewport);
-                if (dsel.type === "rect") {
-                    if (dp.x >= dsel.area.x && dp.x <= dsel.area.x + dsel.area.width &&
-                        dp.y >= dsel.area.y && dp.y <= dsel.area.y + dsel.area.height) {
-                        isInside = false; break;
-                    }
-                } else if (dsel.type === "lasso") {
-                    if (this._isPointInPoly(dsel.area, [dp.x, dp.y])) { isInside = false; break; }
-                }
-            }
-
-            if (isInside) return { segmentId: entry.segmentId, visible: entry.visible };
         }
         return null;
     }
@@ -2702,7 +2618,6 @@ export class Potree2Loader {
         if (this.selectionHistory.length === 0) return 0;
 
         const deletedSegmentId = this._deletedSegmentId;
-        const worldMatrix = this.rootTransform.getWorldMatrix();
         let total = 0;
         let minX = Infinity, minY = Infinity, minZ = Infinity;
         let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
@@ -2719,32 +2634,12 @@ export class Potree2Loader {
 
             for (let i = 0; i < positions.length / 3; i++) {
                 const vector = new BABYLON.Vector3(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
-                let isInside = false;
-
-                for (const sel of this.selectionHistory) {
-                    const p = BABYLON.Vector3.Project(vector, worldMatrix, sel.transformMatrix, sel.viewport);
-                    if (sel.type === "rect") {
-                        isInside = (p.x >= sel.area.x && p.x <= sel.area.x + sel.area.width &&
-                            p.y >= sel.area.y && p.y <= sel.area.y + sel.area.height);
-                    } else if (sel.type === "lasso") {
-                        isInside = this._isPointInPoly(sel.area, [p.x, p.y]);
-                    }
-                    if (isInside) break;
-                }
-
-                if (isInside && this.deselectionHistory.length > 0) {
-                    for (const dsel of this.deselectionHistory) {
-                        const dp = BABYLON.Vector3.Project(vector, worldMatrix, dsel.transformMatrix, dsel.viewport);
-                        let deselected = false;
-                        if (dsel.type === "rect") {
-                            deselected = (dp.x >= dsel.area.x && dp.x <= dsel.area.x + dsel.area.width &&
-                                dp.y >= dsel.area.y && dp.y <= dsel.area.y + dsel.area.height);
-                        } else if (dsel.type === "lasso") {
-                            deselected = this._isPointInPoly(dsel.area, [dp.x, dp.y]);
-                        }
-                        if (deselected) { isInside = false; break; }
-                    }
-                }
+                const isInside = this._matchesSelectionEntry(
+                    vector,
+                    this.selectionHistory,
+                    this.deselectionHistory,
+                    this.selectionInverted
+                );
 
                 if (!isInside) continue;
 
@@ -2771,33 +2666,15 @@ export class Potree2Loader {
 
         if (anyAssigned) {
             const margin = 0.05;
-            let deletedEntry = this.cutHistory.find(entry => entry.segmentId === deletedSegmentId);
-            if (!deletedEntry) {
-                deletedEntry = {
-                    segmentId: deletedSegmentId,
-                    visible: false,
-                    minX: minX - margin, minY: minY - margin, minZ: minZ - margin,
-                    maxX: maxX + margin, maxY: maxY + margin, maxZ: maxZ + margin,
-                    selections: [],
-                    deselections: []
-                };
-                this.cutHistory.push(deletedEntry);
-            } else {
-                deletedEntry.minX = Math.min(deletedEntry.minX, minX - margin);
-                deletedEntry.minY = Math.min(deletedEntry.minY, minY - margin);
-                deletedEntry.minZ = Math.min(deletedEntry.minZ, minZ - margin);
-                deletedEntry.maxX = Math.max(deletedEntry.maxX, maxX + margin);
-                deletedEntry.maxY = Math.max(deletedEntry.maxY, maxY + margin);
-                deletedEntry.maxZ = Math.max(deletedEntry.maxZ, maxZ + margin);
-            }
-
-            deletedEntry.selections.push(
-                ...this.selectionHistory.map(s => ({ ...s, transformMatrix: s.transformMatrix.clone() }))
-            );
-            deletedEntry.deselections.push(
-                ...this.deselectionHistory.map(d => ({ ...d, transformMatrix: d.transformMatrix.clone() }))
-            );
-            deletedEntry.visible = false;
+            this.cutHistory.push({
+                segmentId: deletedSegmentId,
+                visible: false,
+                inverted: this.selectionInverted,
+                minX: minX - margin, minY: minY - margin, minZ: minZ - margin,
+                maxX: maxX + margin, maxY: maxY + margin, maxZ: maxZ + margin,
+                selections: this.selectionHistory.map(s => ({ ...s, transformMatrix: s.transformMatrix.clone() })),
+                deselections: this.deselectionHistory.map(d => ({ ...d, transformMatrix: d.transformMatrix.clone() }))
+            });
         }
 
         this.selectionHistory = [];
