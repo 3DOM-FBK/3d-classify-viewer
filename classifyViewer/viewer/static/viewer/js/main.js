@@ -561,7 +561,8 @@ function addFeaturesToColorMenu(featureNames) {
         return low !== 'normal_x' && low !== 'normal_y' && low !== 'normal_z';
     });
 
-    // 2. Move 'prediction' to the top if it exists
+    // 2. Sort A–Z, then pin 'prediction' to the top
+    featureNames.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
     const predIdx = featureNames.findIndex(n => n.toLowerCase() === 'prediction');
     if (predIdx !== -1) {
         const pred = featureNames.splice(predIdx, 1)[0];
@@ -1171,6 +1172,7 @@ featuresContent.appendChild(featuresInfo);
 const calculateButton = createButton("Calculate Features", "calculateFeatures", featuresContent);
 calculateButton.onclick = () => {
     const scene = window.__babylonScene;
+    showAllSegmentsExceptDeleted();
     showCalculateFeaturesModal(scene, ({ features, radii }) => {
         // Pipeline is handled entirely inside the modal (functions.js)
         console.log('✅ Feature calculation pipeline completed:', features, radii);
@@ -2614,6 +2616,22 @@ if (cutModeButton) {
     });
 }
 
+// ---------------------------------------------------------------------------
+// Helper: make every outline segment visible except the hidden deleted segment.
+// Called before Calculate Features / Training / Classify so the backend has
+// access to all points.
+// ---------------------------------------------------------------------------
+function showAllSegmentsExceptDeleted() {
+    const ldr = scene.potree2Loader;
+    const deletedSegId = ldr ? ldr._deletedSegmentId : null;
+    outlineContent.querySelectorAll('.outline-item[data-segment-id]').forEach(row => {
+        const segId = parseInt(row.dataset.segmentId, 10);
+        if (deletedSegId !== null && segId === deletedSegId) return;
+        const btn = row.querySelector('.outline-visibility-btn');
+        if (btn && btn.classList.contains('off')) btn.click();
+    });
+}
+
 // --- Training Logic ---
 if (startTrainingButton) {
     startTrainingButton.addEventListener("click", () => {
@@ -2623,6 +2641,7 @@ if (startTrainingButton) {
             return;
         }
 
+        showAllSegmentsExceptDeleted();
         // Open the modal and pass the execution callback
         showTrainingModal(scene, (params) => {
             // Pipeline is handled entirely inside the modal (functions.js)
@@ -2634,6 +2653,7 @@ if (startTrainingButton) {
 // --- Classify Logic ---
 if (startClassifyButton) {
     startClassifyButton.addEventListener("click", () => {
+        showAllSegmentsExceptDeleted();
         showClassifyModal(scene);
     });
 }
