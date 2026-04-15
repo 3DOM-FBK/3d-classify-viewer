@@ -591,7 +591,9 @@ export class Potree2Loader {
         }
 
         // Keep raw DataView for on-demand feature lookup (no N*F pre-allocation).
-        this.featureBin = { N, F, names, vmin, vmax, bpf, dv, offset, recSize };
+        const dvFloat = new Float32Array(buffer, 0);
+        const dvUint8 = new Uint8Array(buffer, 0);
+        this.featureBin = { N, F, names, vmin, vmax, bpf, dv, dvFloat, dvUint8, offset, recSize };
         this.pcbinAnnotations = { segIds, classIds, predIds, confidence };
 
         console.log(".pcbin loaded: F=" + F + ", N=" + N);
@@ -663,21 +665,23 @@ export class Potree2Loader {
         const fmax = (featureBin && featureIdx >= 0)
             ? (this._featureRangeMax !== null ? this._featureRangeMax : featureBin.vmax[featureIdx]) : 1;
 
+        const tmpVecColorMode = new BABYLON.Vector3();
+
         for (let i = 0; i < numPoints; i++) {
             // 1. Apply base color
             if (isFeatureMode && featureBin && featureIdx >= 0 && pointIds) {
                 const pid = pointIds[i];
                 let r = 0.3, g = 0.3, b = 0.3;
                 if (pid >= 0 && pid < featureBin.N) {
-                    // On-demand feature lookup from raw DataView.
+                    // On-demand feature lookup from raw Uint8Array / Float32Array.
                     const recOff = featureBin.offset + pid * featureBin.recSize;
                     let val;
                     if (featureBin.bpf === 1) {
-                        const q = featureBin.dv.getUint8(recOff + featureIdx);
+                        const q = featureBin.dvUint8[recOff + featureIdx];
                         val = (q === 255) ? NaN
                             : featureBin.vmin[featureIdx] + (q / 254) * (featureBin.vmax[featureIdx] - featureBin.vmin[featureIdx]);
                     } else {
-                        val = featureBin.dv.getFloat32(recOff + featureIdx * 4, true);
+                        val = featureBin.dvFloat[(recOff + featureIdx * 4) / 4];
                     }
                     if (!isNaN(val)) {
                         let t;
@@ -710,8 +714,8 @@ export class Potree2Loader {
 
             // 2. Re-apply selection highlight on top (always overrides)
             if (positions && this.selectionHistory.length > 0 && !isNaN(positions[i * 3])) {
-                const vector = new BABYLON.Vector3(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
-                const inHistory = this._isPointInSelectionHistory(vector);
+                tmpVecColorMode.set(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
+                const inHistory = this._isPointInSelectionHistory(tmpVecColorMode);
                 const shouldHighlight = this.selectionInverted ? !inHistory : inHistory;
                 if (shouldHighlight) {
                     colors[i * 4] = 1.0;
@@ -1107,17 +1111,17 @@ export class Potree2Loader {
         if (!pointIds) return;
         const numPoints = pointIds.length;
         const featureValues = new Float32Array(numPoints);
-        const { bpf, dv, offset, recSize, F, N, vmin, vmax } = this.featureBin;
+        const { bpf, dvFloat, dvUint8, offset, recSize, F, N, vmin, vmax } = this.featureBin;
         for (let i = 0; i < numPoints; i++) {
             const pid = pointIds[i];
             if (pid < 0 || pid >= N) { featureValues[i] = -1e38; continue; }
             const recOff = offset + pid * recSize;
             if (bpf === 1) {
-                const q = dv.getUint8(recOff + featureIdx);
+                const q = dvUint8[recOff + featureIdx];
                 featureValues[i] = (q === 255) ? NaN
                     : vmin[featureIdx] + (q / 254) * (vmax[featureIdx] - vmin[featureIdx]);
             } else {
-                featureValues[i] = dv.getFloat32(recOff + featureIdx * 4, true);
+                featureValues[i] = dvFloat[(recOff + featureIdx * 4) / 4];
             }
         }
         const buf = new BABYLON.VertexBuffer(
@@ -1294,11 +1298,13 @@ export class Potree2Loader {
         // only the real point cloud colors.
         const originalColors = new Float32Array(colors);
 
+        const tmpVec = new BABYLON.Vector3();
+
         // Apply persistent selection highlight AFTER saving originalColors
         if (this.selectionHistory.length > 0) {
             for (let j = 0; j < numPoints; j++) {
-                const vector = new BABYLON.Vector3(positions[3 * j], positions[3 * j + 1], positions[3 * j + 2]);
-                const inHistory = this._isPointInSelectionHistory(vector);
+                tmpVec.set(positions[3 * j], positions[3 * j + 1], positions[3 * j + 2]);
+                const inHistory = this._isPointInSelectionHistory(tmpVec);
                 // If inverted: highlight points OUTSIDE the selection regions
                 const shouldHighlight = this.selectionInverted ? !inHistory : inHistory;
                 if (shouldHighlight) {
@@ -1321,8 +1327,8 @@ export class Potree2Loader {
 
         if (this.classificationHistory.length > 0) {
             for (let j = 0; j < numPoints; j++) {
-                const vector = new BABYLON.Vector3(positions[3 * j], positions[3 * j + 1], positions[3 * j + 2]);
-                const cls = this._getPointClassification(vector);
+                tmpVec.set(positions[3 * j], positions[3 * j + 1], positions[3 * j + 2]);
+                const cls = this._getPointClassification(tmpVec);
                 if (cls) {
                     classIds[j] = cls.classId;
                     classColors[j * 4] = cls.r;
@@ -1343,8 +1349,8 @@ export class Potree2Loader {
         const segmentIds = new Int32Array(numPoints); // 0 = main cloud
         if (this.cutHistory.length > 0 || !this.mainCloudVisible) {
             for (let j = 0; j < numPoints; j++) {
-                const vector = new BABYLON.Vector3(positions[3 * j], positions[3 * j + 1], positions[3 * j + 2]);
-                const seg = this._getPointSegment(vector);
+                tmpVec.set(positions[3 * j], positions[3 * j + 1], positions[3 * j + 2]);
+                const seg = this._getPointSegment(tmpVec);
                 if (seg !== null) {
                     segmentIds[j] = seg.segmentId;
                     if (!seg.visible) {
@@ -1451,18 +1457,19 @@ export class Potree2Loader {
 
     _matchesSelectionEntry(localVector, selections, deselections = [], inverted = false) {
         const worldMatrix = this.rootTransform.getWorldMatrix();
+        this._tmpProj = this._tmpProj || new BABYLON.Vector3();
 
         let selected = false;
         for (const sel of selections) {
-            const projection = BABYLON.Vector3.Project(localVector, worldMatrix, sel.transformMatrix, sel.viewport);
+            BABYLON.Vector3.ProjectToRef(localVector, worldMatrix, sel.transformMatrix, sel.viewport, this._tmpProj);
             if (sel.type === "rect") {
-                if (projection.x >= sel.area.x && projection.x <= sel.area.x + sel.area.width &&
-                    projection.y >= sel.area.y && projection.y <= sel.area.y + sel.area.height) {
+                if (this._tmpProj.x >= sel.area.x && this._tmpProj.x <= sel.area.x + sel.area.width &&
+                    this._tmpProj.y >= sel.area.y && this._tmpProj.y <= sel.area.y + sel.area.height) {
                     selected = true;
                     break;
                 }
             } else if (sel.type === "lasso") {
-                if (this._isPointInPoly(sel.area, [projection.x, projection.y])) {
+                if (this._isPointInPoly(sel.area, [this._tmpProj.x, this._tmpProj.y])) {
                     selected = true;
                     break;
                 }
@@ -1471,15 +1478,15 @@ export class Potree2Loader {
 
         if (selected) {
             for (const dsel of deselections) {
-                const projection = BABYLON.Vector3.Project(localVector, worldMatrix, dsel.transformMatrix, dsel.viewport);
+                BABYLON.Vector3.ProjectToRef(localVector, worldMatrix, dsel.transformMatrix, dsel.viewport, this._tmpProj);
                 if (dsel.type === "rect") {
-                    if (projection.x >= dsel.area.x && projection.x <= dsel.area.x + dsel.area.width &&
-                        projection.y >= dsel.area.y && projection.y <= dsel.area.y + dsel.area.height) {
+                    if (this._tmpProj.x >= dsel.area.x && this._tmpProj.x <= dsel.area.x + dsel.area.width &&
+                        this._tmpProj.y >= dsel.area.y && this._tmpProj.y <= dsel.area.y + dsel.area.height) {
                         selected = false;
                         break;
                     }
                 } else if (dsel.type === "lasso") {
-                    if (this._isPointInPoly(dsel.area, [projection.x, projection.y])) {
+                    if (this._isPointInPoly(dsel.area, [this._tmpProj.x, this._tmpProj.y])) {
                         selected = false;
                         break;
                     }
@@ -1575,6 +1582,8 @@ export class Potree2Loader {
         let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
         let anyClassified = false;
 
+        const tmpVec = new BABYLON.Vector3();
+
         this.loadedNodes.forEach((mesh) => {
             const positions = mesh.getVerticesData(BABYLON.VertexBuffer.PositionKind);
             if (!positions) return;
@@ -1589,10 +1598,10 @@ export class Potree2Loader {
                 // Skip invisible points (NaN-masked)
                 if (isNaN(positions[i * 3])) continue;
 
-                const vector = new BABYLON.Vector3(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
+                tmpVec.set(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
 
                 const isInside = this._matchesSelectionEntry(
-                    vector,
+                    tmpVec,
                     this.selectionHistory,
                     this.deselectionHistory,
                     this.selectionInverted
@@ -1693,6 +1702,9 @@ export class Potree2Loader {
 
         let totalSelected = 0;
 
+        const tmpVec = new BABYLON.Vector3();
+        const tmpProj = new BABYLON.Vector3();
+
         this.loadedNodes.forEach((mesh) => {
             const colors = mesh.getVerticesData(BABYLON.VertexBuffer.ColorKind);
             const positions = mesh.getVerticesData(BABYLON.VertexBuffer.PositionKind);
@@ -1702,18 +1714,15 @@ export class Potree2Loader {
             const meshWorldMatrix = mesh.getWorldMatrix();
 
             for (let i = 0; i < positions.length / 3; i++) {
-                const vector = new BABYLON.Vector3(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
-
-                const projection = BABYLON.Vector3.Project(
-                    vector, meshWorldMatrix, transformMatrix, viewport
-                );
+                tmpVec.set(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
+                BABYLON.Vector3.ProjectToRef(tmpVec, meshWorldMatrix, transformMatrix, viewport, tmpProj);
 
                 let isInside = false;
                 if (type === "rect") {
-                    isInside = (projection.x >= area.x && projection.x <= area.x + area.width &&
-                        projection.y >= area.y && projection.y <= area.y + area.height);
+                    isInside = (tmpProj.x >= area.x && tmpProj.x <= area.x + area.width &&
+                        tmpProj.y >= area.y && tmpProj.y <= area.y + area.height);
                 } else if (type === "lasso") {
-                    isInside = this._isPointInPoly(area, [projection.x, projection.y]);
+                    isInside = this._isPointInPoly(area, [tmpProj.x, tmpProj.y]);
                 }
 
                 if (isInside) {
@@ -1791,6 +1800,8 @@ export class Potree2Loader {
         let affected = 0;
 
         // Rebuild classIds/classColors from the remaining history for each loaded mesh.
+        const tmpVec = new BABYLON.Vector3();
+
         this.loadedNodes.forEach((mesh) => {
             if (!mesh.metadata) return;
 
@@ -1809,7 +1820,8 @@ export class Potree2Loader {
                 const y = originalPositions ? originalPositions[i * 3 + 1] : positions[i * 3 + 1];
                 const z = originalPositions ? originalPositions[i * 3 + 2] : positions[i * 3 + 2];
 
-                const cls = this._getPointClassification(new BABYLON.Vector3(x, y, z));
+                tmpVec.set(x, y, z);
+                const cls = this._getPointClassification(tmpVec);
                 if (cls) {
                     newClassIds[i] = cls.classId;
                     newClassColors[i * 4] = cls.r;
@@ -1860,6 +1872,8 @@ export class Potree2Loader {
         let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
         let anyAssigned = false;
 
+        const tmpVec = new BABYLON.Vector3();
+
         this.loadedNodes.forEach((mesh) => {
             const positions = mesh.getVerticesData(BABYLON.VertexBuffer.PositionKind);
             if (!positions) return;
@@ -1877,9 +1891,9 @@ export class Potree2Loader {
                 // which would wrongly capture every previously hidden point.
                 if (isNaN(positions[i * 3])) continue;
 
-                const vector = new BABYLON.Vector3(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
+                tmpVec.set(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
                 const isInside = this._matchesSelectionEntry(
-                    vector,
+                    tmpVec,
                     this.selectionHistory,
                     this.deselectionHistory,
                     this.selectionInverted
@@ -2174,6 +2188,9 @@ export class Potree2Loader {
 
         let totalDeselected = 0;
 
+        const tmpVec = new BABYLON.Vector3();
+        const tmpProj = new BABYLON.Vector3();
+
         this.loadedNodes.forEach((mesh) => {
             const colors = mesh.getVerticesData(BABYLON.VertexBuffer.ColorKind);
             const positions = mesh.getVerticesData(BABYLON.VertexBuffer.PositionKind);
@@ -2189,17 +2206,17 @@ export class Potree2Loader {
                 // Only act on currently-selected (red) points
                 if (!(colors[i * 4] > 0.9 && colors[i * 4 + 1] < 0.1 && colors[i * 4 + 2] < 0.1)) continue;
 
-                const vector = new BABYLON.Vector3(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
-                const projection = BABYLON.Vector3.Project(vector, meshWorldMatrix, transformMatrix, viewport);
+                tmpVec.set(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
+                BABYLON.Vector3.ProjectToRef(tmpVec, meshWorldMatrix, transformMatrix, viewport, tmpProj);
 
                 let isInside = false;
                 if (type === "rect") {
                     isInside = (
-                        projection.x >= area.x && projection.x <= area.x + area.width &&
-                        projection.y >= area.y && projection.y <= area.y + area.height
+                        tmpProj.x >= area.x && tmpProj.x <= area.x + area.width &&
+                        tmpProj.y >= area.y && tmpProj.y <= area.y + area.height
                     );
                 } else if (type === "lasso") {
-                    isInside = this._isPointInPoly(area, [projection.x, projection.y]);
+                    isInside = this._isPointInPoly(area, [tmpProj.x, tmpProj.y]);
                 }
 
                 if (isInside) {
@@ -2267,6 +2284,9 @@ export class Potree2Loader {
         let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
         let anyPoints = false;
 
+        const tmpVec = new BABYLON.Vector3();
+        const tmpProj = new BABYLON.Vector3();
+
         this.loadedNodes.forEach(mesh => {
             const positions = mesh.getVerticesData(BABYLON.VertexBuffer.PositionKind);
             const originalPositions = mesh.metadata.originalPositions;
@@ -2276,28 +2296,28 @@ export class Potree2Loader {
             let modified = false;
 
             for (let i = 0; i < segmentIds.length; i++) {
-                const vector = new BABYLON.Vector3(originalPositions[i * 3], originalPositions[i * 3 + 1], originalPositions[i * 3 + 2]);
+                tmpVec.set(originalPositions[i * 3], originalPositions[i * 3 + 1], originalPositions[i * 3 + 2]);
                 let isInside = false;
                 for (const sel of this.selectionHistory) {
-                    const p = BABYLON.Vector3.Project(vector, worldMatrix, sel.transformMatrix, sel.viewport);
+                    BABYLON.Vector3.ProjectToRef(tmpVec, worldMatrix, sel.transformMatrix, sel.viewport, tmpProj);
                     if (sel.type === "rect") {
-                        isInside = (p.x >= sel.area.x && p.x <= sel.area.x + sel.area.width &&
-                            p.y >= sel.area.y && p.y <= sel.area.y + sel.area.height);
+                        isInside = (tmpProj.x >= sel.area.x && tmpProj.x <= sel.area.x + sel.area.width &&
+                            tmpProj.y >= sel.area.y && tmpProj.y <= sel.area.y + sel.area.height);
                     } else if (sel.type === "lasso") {
-                        isInside = this._isPointInPoly(sel.area, [p.x, p.y]);
+                        isInside = this._isPointInPoly(sel.area, [tmpProj.x, tmpProj.y]);
                     }
                     if (isInside) break;
                 }
 
                 if (isInside && this.deselectionHistory.length > 0) {
                     for (const dsel of this.deselectionHistory) {
-                        const dp = BABYLON.Vector3.Project(vector, worldMatrix, dsel.transformMatrix, dsel.viewport);
+                        BABYLON.Vector3.ProjectToRef(tmpVec, worldMatrix, dsel.transformMatrix, dsel.viewport, tmpProj);
                         let deselected = false;
                         if (dsel.type === "rect") {
-                            deselected = (dp.x >= dsel.area.x && dp.x <= dsel.area.x + dsel.area.width &&
-                                dp.y >= dsel.area.y && dp.y <= dsel.area.y + dsel.area.height);
+                            deselected = (tmpProj.x >= dsel.area.x && tmpProj.x <= dsel.area.x + dsel.area.width &&
+                                tmpProj.y >= dsel.area.y && tmpProj.y <= dsel.area.y + dsel.area.height);
                         } else if (dsel.type === "lasso") {
-                            deselected = this._isPointInPoly(dsel.area, [dp.x, dp.y]);
+                            deselected = this._isPointInPoly(dsel.area, [tmpProj.x, tmpProj.y]);
                         }
                         if (deselected) { isInside = false; break; }
                     }
@@ -2594,6 +2614,9 @@ export class Potree2Loader {
         const worldMatrix = this.rootTransform.getWorldMatrix();
         let totalRemoved = 0;
 
+        const tmpVec = new BABYLON.Vector3();
+        const tmpProj = new BABYLON.Vector3();
+
         this.loadedNodes.forEach(mesh => {
             const positions = mesh.getVerticesData(BABYLON.VertexBuffer.PositionKind);
             const originalPositions = mesh.metadata.originalPositions;
@@ -2604,15 +2627,15 @@ export class Potree2Loader {
             for (let i = 0; i < segmentIds.length; i++) {
                 if (segmentIds[i] !== segmentId) continue;
 
-                const vector = new BABYLON.Vector3(originalPositions[i * 3], originalPositions[i * 3 + 1], originalPositions[i * 3 + 2]);
+                tmpVec.set(originalPositions[i * 3], originalPositions[i * 3 + 1], originalPositions[i * 3 + 2]);
                 let isInside = false;
                 for (const sel of this.selectionHistory) {
-                    const p = BABYLON.Vector3.Project(vector, worldMatrix, sel.transformMatrix, sel.viewport);
+                    BABYLON.Vector3.ProjectToRef(tmpVec, worldMatrix, sel.transformMatrix, sel.viewport, tmpProj);
                     if (sel.type === "rect") {
-                        isInside = (p.x >= sel.area.x && p.x <= sel.area.x + sel.area.width &&
-                            p.y >= sel.area.y && p.y <= sel.area.y + sel.area.height);
+                        isInside = (tmpProj.x >= sel.area.x && tmpProj.x <= sel.area.x + sel.area.width &&
+                            tmpProj.y >= sel.area.y && tmpProj.y <= sel.area.y + sel.area.height);
                     } else if (sel.type === "lasso") {
-                        isInside = this._isPointInPoly(sel.area, [p.x, p.y]);
+                        isInside = this._isPointInPoly(sel.area, [tmpProj.x, tmpProj.y]);
                     }
                     if (isInside) break;
                 }
@@ -2694,6 +2717,8 @@ export class Potree2Loader {
         let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
         let anyAssigned = false;
 
+        const tmpVec = new BABYLON.Vector3();
+
         this.loadedNodes.forEach((mesh) => {
             const positions = mesh.getVerticesData(BABYLON.VertexBuffer.PositionKind);
             if (!positions) return;
@@ -2706,9 +2731,9 @@ export class Potree2Loader {
             for (let i = 0; i < positions.length / 3; i++) {
                 if (isNaN(positions[i * 3])) continue; // already hidden — skip
 
-                const vector = new BABYLON.Vector3(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
+                tmpVec.set(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
                 const isInside = this._matchesSelectionEntry(
-                    vector,
+                    tmpVec,
                     this.selectionHistory,
                     this.deselectionHistory,
                     this.selectionInverted
