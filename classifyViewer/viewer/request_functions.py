@@ -908,10 +908,20 @@ def export_mapping(request):
             if raw[:4] != b'PCBN':
                 return JsonResponse({"error": "Invalid pcbin file (bad magic)"}, status=400)
 
-            N = struct.unpack_from('<I', raw, 8)[0]   # number of point slots
-            F = struct.unpack_from('<I', raw, 12)[0]  # number of features
-            header_size = 16 + F * 40                 # magic/ver/reserved/N/F + F*(name32+vmin+vmax)
-            record_size = F * 4 + 8                   # F floats + 4 annotation bytes + 4 confidence bytes
+                version = raw[4]
+                if version == 1:
+                    bpf = 4
+                elif version == 2:
+                    bpf = raw[5]   # bytes_per_feature stored at header byte [5]
+                    if bpf not in (1, 4):
+                        return JsonResponse({"error": f"Unsupported pcbin bpf={bpf}"}, status=400)
+                else:
+                    return JsonResponse({"error": f"Unsupported pcbin version={version}"}, status=400)
+
+                N = struct.unpack_from('<I', raw, 8)[0]   # number of point slots
+                F = struct.unpack_from('<I', raw, 12)[0]  # number of features
+                header_size = 16 + F * 40                 # magic/ver/bpf/reserved/N/F + F*(name32+vmin+vmax)
+                record_size = F * bpf + 8                 # F×bpf feature bytes + 4 annotation + 4 confidence
 
             data = bytearray(raw)
 
@@ -921,8 +931,8 @@ def export_mapping(request):
                 class_id   = buffer_data[pid * 2 + 1]
                 if seg_id_buf != 0:
                     rec_off = header_size + pid * record_size
-                    data[rec_off + F * 4]     = seg_id_buf - 1         # restore 0-based segment_id
-                    data[rec_off + F * 4 + 1] = class_id if class_id != 0 else 0xFF  # 0 = JS "no class" → 0xFF sentinel
+                    data[rec_off + F * bpf]     = seg_id_buf - 1         # restore 0-based segment_id
+                    data[rec_off + F * bpf + 1] = class_id if class_id != 0 else 0xFF  # 0 = JS "no class" → 0xFF sentinel
                     annotated += 1
 
             # Atomic write

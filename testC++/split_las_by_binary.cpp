@@ -124,9 +124,24 @@ static std::map<uint32_t, PointSegmentation> read_pcbin_annotations(const fs::pa
         throw std::runtime_error("Invalid .pcbin magic in: " + path.string());
 
     uint8_t  version  = 0;
-    uint8_t  reserved[3];
-    f.read(reinterpret_cast<char*>(&version),  1);
-    f.read(reinterpret_cast<char*>(reserved),  3);
+    uint8_t  hdr5     = 0;   // byte [5]: bpf for v2, reserved for v1
+    uint8_t  hdr67[2] = {};
+    f.read(reinterpret_cast<char*>(&version), 1);
+    f.read(reinterpret_cast<char*>(&hdr5),    1);
+    f.read(reinterpret_cast<char*>(hdr67),    2);
+
+    uint8_t bpf;
+    if (version == 1) {
+        bpf = 4;
+    } else if (version == 2) {
+        bpf = hdr5;
+        if (bpf != 1 && bpf != 4)
+            throw std::runtime_error("Unsupported bytes_per_feature=" +
+                                     std::to_string(bpf) + " in: " + path.string());
+    } else {
+        throw std::runtime_error("Unsupported .pcbin version=" +
+                                 std::to_string(version) + " in: " + path.string());
+    }
 
     uint32_t point_count   = 0;
     uint32_t feature_count = 0;
@@ -138,12 +153,12 @@ static std::map<uint32_t, PointSegmentation> read_pcbin_annotations(const fs::pa
     f.seekg(static_cast<std::streamoff>(F) * 40, std::ios::cur);
 
     // ── Read records ──────────────────────────────────────────────────────────
-    // Record layout: F*float32 | segment_id | manual_class_id | predicted_class_id | padding | confidence
+    // Record layout: F*bpf feature bytes | segment_id | manual_class_id | predicted_class_id | padding | confidence
     std::map<uint32_t, PointSegmentation> result;
 
     for (uint32_t pid = 0; pid < point_count; ++pid) {
-        // Skip features (F*4)
-        f.seekg(static_cast<std::streamoff>(F) * 4, std::ios::cur);
+        // Skip features (F*bpf bytes)
+        f.seekg(static_cast<std::streamoff>(F) * bpf, std::ios::cur);
 
         uint8_t seg_id = 0, class_id = 0, pred_id = 0, pad = 0;
         f.read(reinterpret_cast<char*>(&seg_id),   1);
@@ -199,12 +214,9 @@ struct DimMapping {
     pdal::Dimension::Id   dstId;
     pdal::Dimension::Type type;
 };
-
 // Standard PDAL dimension names — used to separate standard from extra dims
 static const std::set<std::string> kStandardDimNames = {
     "X","Y","Z","Intensity","ReturnNumber","NumberOfReturns",
-    "ScanDirectionFlag","EdgeOfFlightLine","Classification",
-    "ScanAngleRank","UserData","PointSourceId",
     "GpsTime","Red","Green","Blue",
     "ScannerChannel","ScanChannel","ClassificationFlags","ScanAngle",
     "NormalX","NormalY","NormalZ","Synthetic","KeyPoint","Withheld","Overlap"

@@ -551,7 +551,10 @@ export class Potree2Loader {
         const magic = String.fromCharCode(dv.getUint8(0), dv.getUint8(1), dv.getUint8(2), dv.getUint8(3));
         if (magic !== 'PCBN') throw new Error("Invalid .pcbin magic: " + magic);
 
-        // version (1) + reserved (3) = 4 bytes at offset 4
+        const version = dv.getUint8(4);
+        const bpf     = (version === 2) ? dv.getUint8(5) : 4;  // bytes per feature
+        if (version !== 1 && version !== 2)
+            throw new Error("Unsupported .pcbin version: " + version);
         const N = dv.getUint32(8,  true);   // point_count
         const F = dv.getUint32(12, true);   // feature_count
 
@@ -569,26 +572,26 @@ export class Potree2Loader {
         const vmax = new Float32Array(buffer.slice(offset, offset + F * 4)); offset += F * 4;
 
         // ── Records ─────────────────────────────────────────────────────────
-        const recSize = F * 4 + 8;  // features + 4 annotation bytes + float confidence
-        const featData    = new Float32Array(N * F);
-        const segIds      = new Uint8Array(N);
-        const classIds    = new Uint8Array(N);
-        const predIds     = new Uint8Array(N);
-        const confidence  = new Float32Array(N);
+        const recSize = F * bpf + 8;  // features + annotation tail
+        const segIds     = new Uint8Array(N);
+        const classIds   = new Uint8Array(N);
+        const predIds    = new Uint8Array(N);
+        const confidence = new Float32Array(N);
 
+        // Only scan the annotation tail per record (4 reads × N) — skip features.
+        // Feature data is looked up on demand from the raw DataView to avoid
+        // allocating N*F*4 bytes (e.g. 2+ GB for large datasets).
+        const annotOff = F * bpf;  // byte offset within a record to annotation tail
         for (let pid = 0; pid < N; pid++) {
             const recOff = offset + pid * recSize;
-            for (let f = 0; f < F; f++) {
-                featData[pid * F + f] = dv.getFloat32(recOff + f * 4, true);
-            }
-            segIds[pid]     = dv.getUint8(recOff + F * 4);
-            classIds[pid]   = dv.getUint8(recOff + F * 4 + 1);
-            predIds[pid]    = dv.getUint8(recOff + F * 4 + 2);
-            // byte F*4+3 = padding
-            confidence[pid] = dv.getFloat32(recOff + F * 4 + 4, true);
+            segIds[pid]     = dv.getUint8(recOff + annotOff);
+            classIds[pid]   = dv.getUint8(recOff + annotOff + 1);
+            predIds[pid]    = dv.getUint8(recOff + annotOff + 2);
+            confidence[pid] = dv.getFloat32(recOff + annotOff + 4, true);
         }
 
-        this.featureBin = { N, F, names, vmin, vmax, data: featData };
+        // Keep raw DataView for on-demand feature lookup (no N*F pre-allocation).
+        this.featureBin = { N, F, names, vmin, vmax, bpf, dv, offset, recSize };
         this.pcbinAnnotations = { segIds, classIds, predIds, confidence };
 
         console.log(".pcbin loaded: F=" + F + ", N=" + N);
@@ -666,7 +669,16 @@ export class Potree2Loader {
                 const pid = pointIds[i];
                 let r = 0.3, g = 0.3, b = 0.3;
                 if (pid >= 0 && pid < featureBin.N) {
-                    const val = featureBin.data[pid * featureBin.F + featureIdx];
+                    // On-demand feature lookup from raw DataView.
+                    const recOff = featureBin.offset + pid * featureBin.recSize;
+                    let val;
+                    if (featureBin.bpf === 1) {
+                        const q = featureBin.dv.getUint8(recOff + featureIdx);
+                        val = (q === 255) ? NaN
+                            : featureBin.vmin[featureIdx] + (q / 254) * (featureBin.vmax[featureIdx] - featureBin.vmin[featureIdx]);
+                    } else {
+                        val = featureBin.dv.getFloat32(recOff + featureIdx * 4, true);
+                    }
                     if (!isNaN(val)) {
                         let t;
                         if (isPredictionFeature) {
@@ -1095,10 +1107,18 @@ export class Potree2Loader {
         if (!pointIds) return;
         const numPoints = pointIds.length;
         const featureValues = new Float32Array(numPoints);
-        const { data, F, N } = this.featureBin;
+        const { bpf, dv, offset, recSize, F, N, vmin, vmax } = this.featureBin;
         for (let i = 0; i < numPoints; i++) {
             const pid = pointIds[i];
-            featureValues[i] = (pid >= 0 && pid < N) ? data[pid * F + featureIdx] : -1e38;
+            if (pid < 0 || pid >= N) { featureValues[i] = -1e38; continue; }
+            const recOff = offset + pid * recSize;
+            if (bpf === 1) {
+                const q = dv.getUint8(recOff + featureIdx);
+                featureValues[i] = (q === 255) ? NaN
+                    : vmin[featureIdx] + (q / 254) * (vmax[featureIdx] - vmin[featureIdx]);
+            } else {
+                featureValues[i] = dv.getFloat32(recOff + featureIdx * 4, true);
+            }
         }
         const buf = new BABYLON.VertexBuffer(
             this.scene.getEngine(), featureValues, 'featureValue', false, false, 1

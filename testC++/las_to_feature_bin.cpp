@@ -12,25 +12,30 @@
  *
  * ─── .pcbin binary format ────────────────────────────────────────────────────
  *
- * Header (fixed):
+ * Header (fixed, same layout for v1 and v2):
  *   [0-3]           magic: "PCBN"
- *   [4]             version: uint8 = 1
- *   [5-7]           reserved: 3 bytes = 0
+ *   [4]             version: uint8  (1 = float32 features, 2 = uint8 features)
+ *   [5]             bytes_per_feature (bpf): uint8  (4 for v1, 1 for v2)
+ *   [6-7]           reserved: 2 bytes = 0
  *   [8-11]          point_count: uint32  (= max_point_id + 1, number of slots)
  *   [12-15]         feature_count: uint32  (= F)
  *   [16 .. +F*32]   feature_names: char[32] × F  (null-padded)
  *   [.. +F*4]       vmin: float32 × F
  *   [.. +F*4]       vmax: float32 × F
- *   Header size = 16 + F*40
+ *   Header size = 16 + F*40  (same for v1 and v2)
  *
  * Records (N records, one per POINT_ID slot, indexed positionally):
- *   [0 .. F*4-1]    features: float32 × F  (NaN = no data / gap)
- *   [F*4]           segment_id: uint8      (0xFF = unassigned)
- *   [F*4+1]         manual_class_id: uint8 (0xFF = unassigned)
- *   [F*4+2]         predicted_class_id: uint8 (0xFF = unassigned)
- *   [F*4+3]         padding: uint8 = 0
- *   [F*4+4..F*4+7]  confidence: float32    (NaN = no prediction)
- *   Record size = F*4 + 8
+ *   v1: [0 .. F*4-1]  features: float32 × F  (NaN = no data / gap)
+ *   v2: [0 .. F-1]    features: uint8 × F    (255 = no-data; 0-254 → vmin+val/254*(vmax-vmin))
+ *   [F*bpf]           segment_id: uint8      (0xFF = unassigned)
+ *   [F*bpf+1]         manual_class_id: uint8 (0xFF = unassigned)
+ *   [F*bpf+2]         predicted_class_id: uint8 (0xFF = unassigned)
+ *   [F*bpf+3]         padding: uint8 = 0
+ *   [F*bpf+4..+7]     confidence: float32    (NaN = no prediction)
+ *   v1 record size = F*4 + 8
+ *   v2 record size = F   + 8   (~71% smaller for F=36)
+ *
+ * Default: v2 (uint8).  Pass --v1 to force legacy float32 output.
  */
 
 #include <algorithm>
@@ -194,7 +199,7 @@ static bool nameIsExcluded(const std::string& s) {
 
 // ─── Main conversion ─────────────────────────────────────────────────────────
 
-static void convert(const fs::path& las_path, const fs::path& out_path)
+static void convert(const fs::path& las_path, const fs::path& out_path, bool use_v1 = false)
 {
     std::cout << "Loading LAS: " << las_path << "\n";
 
@@ -226,95 +231,50 @@ static void convert(const fs::path& las_path, const fs::path& out_path)
     if (pid_offset < 0)
         throw std::runtime_error("POINT_ID not found in VLR.");
 
-    if (features.empty()) {
-        // ── Skeleton path: no feature dims → write annotation-only pcbin (F=0) ──
-        std::cout << "  No feature dims — writing annotation-only skeleton (F=0)\n\n";
+    const uint32_t F       = static_cast<uint32_t>(features.size());
+    const uint8_t  version = use_v1 ? 1u : 2u;
+    const uint8_t  bpf     = use_v1 ? 4u : 1u;   // bytes per feature in pcbin record
 
-        const uint64_t N_pts   = info.point_count;
-        const int      rec_len = info.point_record_len;
-        const int      base    = info.base_size;
-
-        std::vector<uint8_t> raw(static_cast<size_t>(N_pts) * rec_len);
-        std::ifstream fs(las_path, std::ios::binary);
-        if (!fs) throw std::runtime_error("Cannot reopen: " + las_path.string());
-        fs.seekg(info.offset_to_data);
-        fs.read(reinterpret_cast<char*>(raw.data()), static_cast<std::streamsize>(raw.size()));
-        if (!fs) throw std::runtime_error("Failed to read point data.");
-        fs.close();
-
-        uint32_t maxPid = 0;
-        for (uint64_t i = 0; i < N_pts; ++i) {
-            uint32_t pid = readUint32(raw.data() + i * rec_len + base + pid_offset);
-            if (pid > maxPid) maxPid = pid;
-        }
-        const uint32_t kMaxSane = static_cast<uint32_t>(N_pts) * 10u;
-        if (maxPid > kMaxSane)
-            throw std::runtime_error(
-                "max POINT_ID=" + std::to_string(maxPid) + " looks wrong (>" +
-                std::to_string(kMaxSane) + "). Check VLR layout.");
-
-        const uint32_t N  = maxPid + 1;
-        const uint32_t F0 = 0;
-        std::cout << "  max POINT_ID : " << maxPid << "  →  N=" << N << "\n";
-
-        std::cout << "\nWriting skeleton (F=0): " << out_path << "\n";
-        std::ofstream out(out_path, std::ios::binary);
-        if (!out) throw std::runtime_error("Cannot write: " + out_path.string());
-
-        const char magic[4] = {'P', 'C', 'B', 'N'};
-        uint8_t version = 1, reserved[3] = {0, 0, 0};
-        out.write(magic, 4);
-        out.write(reinterpret_cast<const char*>(&version),  1);
-        out.write(reinterpret_cast<const char*>(reserved),  3);
-        out.write(reinterpret_cast<const char*>(&N),        4);
-        out.write(reinterpret_cast<const char*>(&F0),       4);
-        // F=0 → no feature_names, no vmin, no vmax blocks
-
-        const float   kConfNaN    = std::numeric_limits<float>::quiet_NaN();
-        const uint8_t kUnassigned = 0xFF, kPadding = 0x00;
-        for (uint32_t pid = 0; pid < N; ++pid) {
-            out.write(reinterpret_cast<const char*>(&kUnassigned), 1);  // segment_id
-            out.write(reinterpret_cast<const char*>(&kUnassigned), 1);  // manual_class_id
-            out.write(reinterpret_cast<const char*>(&kUnassigned), 1);  // predicted_class_id
-            out.write(reinterpret_cast<const char*>(&kPadding),    1);  // padding
-            out.write(reinterpret_cast<const char*>(&kConfNaN),    4);  // confidence
-        }
-        out.close();
-
-        const size_t total_bytes = 16 + static_cast<size_t>(N) * 8;
-        std::cout << "  skeleton .pcbin written successfully\n";
-        std::cout << "  Point slots : " << N << ", Features: 0\n";
-        std::cout << "  Record size : 8 bytes  (F=0, annotation only)\n";
-        std::cout << "  Total size  : " << (total_bytes / 1024) << " KB\n\n";
-        std::cout << "\n" << out_path.string() << "\n";
-        return;
-    }
-
-    const uint32_t F = static_cast<uint32_t>(features.size());
     std::cout << "  POINT_ID at extra offset +" << pid_offset << "\n";
-    std::cout << "  Features: " << F << "\n\n";
-
-    // ── Load all points into memory ───────────────────────────────────────────
-    std::ifstream f(las_path, std::ios::binary);
-    if (!f) throw std::runtime_error("Cannot reopen: " + las_path.string());
+    std::cout << "  Features: " << F << "  pcbin version: " << (int)version
+              << "  bpf: " << (int)bpf << "\n\n";
 
     const uint64_t N_pts   = info.point_count;
     const int      rec_len = info.point_record_len;
     const int      base    = info.base_size;
 
-    std::vector<uint8_t> raw(static_cast<size_t>(N_pts) * rec_len);
-    f.seekg(info.offset_to_data);
-    f.read(reinterpret_cast<char*>(raw.data()),
-           static_cast<std::streamsize>(raw.size()));
-    if (!f) throw std::runtime_error("Failed to read point data.");
-    f.close();
+    if (rec_len <= 0)
+        throw std::runtime_error("Invalid point_record_len in LAS header.");
 
-    // ── First pass: find max POINT_ID ────────────────────────────────────────
+    // ── Pass 1: scan LAS — find max POINT_ID and per-feature min/max ──────────
+    std::ifstream fscan(las_path, std::ios::binary);
+    if (!fscan) throw std::runtime_error("Cannot reopen: " + las_path.string());
+    fscan.seekg(info.offset_to_data);
+
+    std::vector<uint8_t> rec(static_cast<size_t>(rec_len));
+    std::vector<float> vmin(F,  std::numeric_limits<float>::max());
+    std::vector<float> vmax(F, -std::numeric_limits<float>::max());
     uint32_t maxPid = 0;
+
     for (uint64_t i = 0; i < N_pts; ++i) {
-        uint32_t pid = readUint32(raw.data() + i * rec_len + base + pid_offset);
+        fscan.read(reinterpret_cast<char*>(rec.data()), rec_len);
+        if (!fscan) throw std::runtime_error("Failed to read point data (scan pass).");
+        const uint8_t* extra = rec.data() + base;
+        const uint32_t pid  = readUint32(extra + pid_offset);
         if (pid > maxPid) maxPid = pid;
+        for (uint32_t fi = 0; fi < F; ++fi) {
+            const float v = readAnyAsFloat(extra + features[fi].offset, features[fi].data_type);
+            if (!std::isnan(v)) {
+                if (v < vmin[fi]) vmin[fi] = v;
+                if (v > vmax[fi]) vmax[fi] = v;
+            }
+        }
     }
+    fscan.close();
+
+    // Any feature with no valid values → unit range
+    for (uint32_t fi = 0; fi < F; ++fi)
+        if (vmin[fi] > vmax[fi]) { vmin[fi] = 0.f; vmax[fi] = 1.f; }
 
     const uint32_t kMaxSane = static_cast<uint32_t>(N_pts) * 10u;
     if (maxPid > kMaxSane)
@@ -323,118 +283,174 @@ static void convert(const fs::path& las_path, const fs::path& out_path)
             std::to_string(kMaxSane) + "). Check VLR layout.");
 
     const uint32_t N = maxPid + 1;
-    std::cout << "  max POINT_ID : " << maxPid << "  →  N=" << N << "\n";
+    std::cout << "  max POINT_ID : " << maxPid << "  ->  N=" << N << "\n";
 
-    // ── Allocate output array (NaN = no data) ─────────────────────────────────
-    const size_t kMaxBytes  = size_t(2) * 1024 * 1024 * 1024;
-    const size_t allocBytes = static_cast<size_t>(N) * F * 4;
-    if (allocBytes > kMaxBytes)
-        throw std::runtime_error(
-            "Allocation too large: " + std::to_string(allocBytes / 1024 / 1024) + " MB");
+    // ── Prepare output file (header + default records) ───────────────────────
+    const uint64_t header_bytes = 16ull + static_cast<uint64_t>(F) * 40ull;
+    const uint64_t record_bytes = static_cast<uint64_t>(F) * bpf + 8ull;
+    const uint64_t total_bytes  = header_bytes + static_cast<uint64_t>(N) * record_bytes;
 
-    const float kNaN = std::numeric_limits<float>::quiet_NaN();
-    std::vector<float> data(static_cast<size_t>(N) * F, kNaN);
-
-    // ── Second pass: fill data array ─────────────────────────────────────────
-    for (uint64_t i = 0; i < N_pts; ++i) {
-        const uint8_t* rec = raw.data() + i * rec_len;
-        uint32_t pid = readUint32(rec + base + pid_offset);
-        if (pid >= N) continue;
-
-        float* row = data.data() + static_cast<size_t>(pid) * F;
-        for (uint32_t fi = 0; fi < F; ++fi)
-            row[fi] = readAnyAsFloat(rec + base + features[fi].offset, features[fi].data_type);
-    }
-
-    // ── Compute per-feature min/max ───────────────────────────────────────────
-    std::vector<float> vmin(F,  std::numeric_limits<float>::max());
-    std::vector<float> vmax(F, -std::numeric_limits<float>::max());
-
-    for (size_t i = 0; i < N; ++i) {
-        const float* row = data.data() + i * F;
-        for (uint32_t fi = 0; fi < F; ++fi) {
-            float v = row[fi];
-            if (!std::isnan(v)) {
-                if (v < vmin[fi]) vmin[fi] = v;
-                if (v > vmax[fi]) vmax[fi] = v;
-            }
-        }
-    }
-    for (uint32_t fi = 0; fi < F; ++fi)
-        if (vmin[fi] > vmax[fi]) { vmin[fi] = 0.f; vmax[fi] = 1.f; }
-
-    // ── Write .pcbin binary file ─────────────────────────────────────────────
     std::cout << "\nWriting: " << out_path << "\n";
+    std::cout << "  Streaming conversion (v" << (int)version
+              << ", bpf=" << (int)bpf << ").\n";
 
-    std::ofstream out(out_path, std::ios::binary);
-    if (!out) throw std::runtime_error("Cannot write: " + out_path.string());
+    auto writeHeader = [&](std::ofstream& out) {
+        // Header: [0-3] magic | [4] version | [5] bpf | [6-7] reserved | [8-11] N | [12-15] F
+        const char    magic[4]   = {'P', 'C', 'B', 'N'};
+        const uint8_t hdr_ver    = version;
+        const uint8_t hdr_bpf    = bpf;
+        const uint8_t hdr_pad[2] = {0, 0};
+        out.write(magic, 4);
+        out.write(reinterpret_cast<const char*>(&hdr_ver),  1);
+        out.write(reinterpret_cast<const char*>(&hdr_bpf),  1);
+        out.write(reinterpret_cast<const char*>(hdr_pad),   2);
+        out.write(reinterpret_cast<const char*>(&N), 4);
+        out.write(reinterpret_cast<const char*>(&F), 4);
 
-    // ── Header ────────────────────────────────────────────────────────────────
-    // magic "PCBN"
-    const char magic[4] = {'P', 'C', 'B', 'N'};
-    out.write(magic, 4);
+        for (uint32_t fi = 0; fi < F; ++fi) {
+            char name_buf[32] = {};
+            const std::string& nm = features[fi].name;
+            std::memcpy(name_buf, nm.data(), std::min(nm.size(), size_t(31)));
+            out.write(name_buf, 32);
+        }
 
-    // version (uint8) + 3 reserved bytes
-    uint8_t version = 1;
-    uint8_t reserved[3] = {0, 0, 0};
-    out.write(reinterpret_cast<const char*>(&version), 1);
-    out.write(reinterpret_cast<const char*>(reserved), 3);
-
-    // point_count (uint32) — number of slots (= max_pid + 1)
-    out.write(reinterpret_cast<const char*>(&N), 4);
-
-    // feature_count (uint32)
-    out.write(reinterpret_cast<const char*>(&F), 4);
-
-    // feature_names: F × 32 bytes, null-padded
-    for (uint32_t fi = 0; fi < F; ++fi) {
-        char name_buf[32] = {};
-        const std::string& nm = features[fi].name;
-        std::memcpy(name_buf, nm.data(), std::min(nm.size(), size_t(31)));
-        out.write(name_buf, 32);
-    }
-
-    // vmin: F × float32
-    out.write(reinterpret_cast<const char*>(vmin.data()), F * 4);
-
-    // vmax: F × float32
-    out.write(reinterpret_cast<const char*>(vmax.data()), F * 4);
-
-    // ── Records: one per point_id slot ────────────────────────────────────────
-    // Record layout (F*4 + 8 bytes each):
-    //   features[F]          float32 × F  (NaN = no data)
-    //   segment_id           uint8        (0xFF = unassigned)
-    //   manual_class_id      uint8        (0xFF = unassigned)
-    //   predicted_class_id   uint8        (0xFF = unassigned)
-    //   padding              uint8 = 0
-    //   confidence           float32      (NaN = no prediction)
+        if (F > 0) {
+            out.write(reinterpret_cast<const char*>(vmin.data()), static_cast<std::streamsize>(F * sizeof(float)));
+            out.write(reinterpret_cast<const char*>(vmax.data()), static_cast<std::streamsize>(F * sizeof(float)));
+        }
+    };
 
     const float kConfNaN = std::numeric_limits<float>::quiet_NaN();
-    const uint8_t kUnassigned = 0xFF;
-    const uint8_t kPadding    = 0x00;
 
-    for (size_t pid = 0; pid < N; ++pid) {
-        // features
-        const float* row = data.data() + pid * F;
-        out.write(reinterpret_cast<const char*>(row), F * 4);
-        // annotation bytes
-        out.write(reinterpret_cast<const char*>(&kUnassigned), 1);  // segment_id
-        out.write(reinterpret_cast<const char*>(&kUnassigned), 1);  // manual_class_id
-        out.write(reinterpret_cast<const char*>(&kUnassigned), 1);  // predicted_class_id
-        out.write(reinterpret_cast<const char*>(&kPadding),    1);  // padding
-        out.write(reinterpret_cast<const char*>(&kConfNaN),    4);  // confidence
+    if (use_v1) {
+        std::ofstream out_init(out_path, std::ios::binary | std::ios::trunc);
+        if (!out_init) throw std::runtime_error("Cannot write: " + out_path.string());
+        writeHeader(out_init);
+
+        // Default record: F×4 float NaN + annotation(0xFF,0xFF,0xFF,0x00) + conf(NaN)
+        std::vector<uint8_t> default_rec(static_cast<size_t>(record_bytes), 0xFF);
+        default_rec[static_cast<size_t>(F) * bpf + 3] = 0x00;
+        std::memcpy(default_rec.data() + static_cast<size_t>(F) * bpf + 4, &kConfNaN, 4);
+        const float kNaN = std::numeric_limits<float>::quiet_NaN();
+        for (uint32_t fi = 0; fi < F; ++fi)
+            std::memcpy(default_rec.data() + fi * 4, &kNaN, 4);
+
+        const uint32_t chunk_records = 8192;
+        std::vector<uint8_t> chunk;
+        chunk.reserve(static_cast<size_t>(record_bytes) * chunk_records);
+        for (uint32_t i = 0; i < chunk_records; ++i)
+            chunk.insert(chunk.end(), default_rec.begin(), default_rec.end());
+
+        uint32_t written = 0;
+        while (written < N) {
+            const uint32_t take  = std::min(chunk_records, N - written);
+            const size_t   bytes = static_cast<size_t>(take) * static_cast<size_t>(record_bytes);
+            out_init.write(reinterpret_cast<const char*>(chunk.data()), static_cast<std::streamsize>(bytes));
+            if (!out_init) throw std::runtime_error("Failed to initialize .pcbin records.");
+            written += take;
+        }
+        out_init.close();
+
+        std::ifstream fin(las_path, std::ios::binary);
+        if (!fin) throw std::runtime_error("Cannot reopen: " + las_path.string());
+        fin.seekg(info.offset_to_data);
+
+        std::fstream fout(out_path, std::ios::binary | std::ios::in | std::ios::out);
+        if (!fout) throw std::runtime_error("Cannot open output for random write: " + out_path.string());
+
+        std::vector<float> row(F);
+        for (uint64_t i = 0; i < N_pts; ++i) {
+            fin.read(reinterpret_cast<char*>(rec.data()), rec_len);
+            if (!fin) throw std::runtime_error("Failed to read point data (write pass).");
+            const uint8_t* extra = rec.data() + base;
+            const uint32_t pid   = readUint32(extra + pid_offset);
+            if (pid >= N) continue;
+            for (uint32_t fi = 0; fi < F; ++fi)
+                row[fi] = readAnyAsFloat(extra + features[fi].offset, features[fi].data_type);
+            const uint64_t rec_off = header_bytes + static_cast<uint64_t>(pid) * record_bytes;
+            fout.seekp(static_cast<std::streamoff>(rec_off));
+            if (F > 0)
+                fout.write(reinterpret_cast<const char*>(row.data()), static_cast<std::streamsize>(F * sizeof(float)));
+            if (!fout) throw std::runtime_error("Failed writing feature row in .pcbin.");
+        }
+        fin.close();
+        fout.close();
+    } else {
+        std::cout << "  PCBIN v2: quantized features (uint8) allocated, sequential I/O enabled.\n";
+
+        const uint64_t feature_slots_u64 = static_cast<uint64_t>(N) * static_cast<uint64_t>(F);
+        if (feature_slots_u64 > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+            throw std::runtime_error("Quantized feature matrix too large for this platform.");
+        }
+
+        std::vector<uint8_t> feat_data(static_cast<size_t>(feature_slots_u64), 0xFF);
+
+        std::ifstream fin(las_path, std::ios::binary);
+        if (!fin) throw std::runtime_error("Cannot reopen: " + las_path.string());
+        fin.seekg(info.offset_to_data);
+
+        for (uint64_t i = 0; i < N_pts; ++i) {
+            fin.read(reinterpret_cast<char*>(rec.data()), rec_len);
+            if (!fin) throw std::runtime_error("Failed to read point data (quantize pass).");
+
+            const uint8_t* extra = rec.data() + base;
+            const uint32_t pid   = readUint32(extra + pid_offset);
+            if (pid >= N) continue;
+
+            const size_t feature_offset = static_cast<size_t>(pid) * static_cast<size_t>(F);
+            for (uint32_t fi = 0; fi < F; ++fi) {
+                const float v = readAnyAsFloat(extra + features[fi].offset, features[fi].data_type);
+                if (std::isnan(v)) {
+                    feat_data[feature_offset + fi] = 255u;
+                } else {
+                    const float range = vmax[fi] - vmin[fi];
+                    float q = (range == 0.f) ? 127.f
+                                             : (v - vmin[fi]) / range * 254.f;
+                    if (q < 0.f)   q = 0.f;
+                    if (q > 254.f) q = 254.f;
+                    feat_data[feature_offset + fi] = static_cast<uint8_t>(q + 0.5f);
+                }
+            }
+        }
+        fin.close();
+
+        std::ofstream out(out_path, std::ios::binary | std::ios::trunc);
+        if (!out) throw std::runtime_error("Cannot write: " + out_path.string());
+        writeHeader(out);
+
+        std::vector<uint8_t> default_tail(8, 0xFF);
+        default_tail[3] = 0x00;
+        std::memcpy(default_tail.data() + 4, &kConfNaN, 4);
+
+        const uint32_t chunk_records = 8192;
+        std::vector<uint8_t> chunk(static_cast<size_t>(chunk_records) * static_cast<size_t>(record_bytes));
+
+        uint32_t written = 0;
+        while (written < N) {
+            const uint32_t take = std::min(chunk_records, N - written);
+            const size_t bytes = static_cast<size_t>(take) * static_cast<size_t>(record_bytes);
+
+            for (size_t ridx = 0; ridx < static_cast<size_t>(take); ++ridx) {
+                uint8_t* record_ptr = chunk.data() + ridx * static_cast<size_t>(record_bytes);
+                if (F > 0) {
+                    const size_t feature_offset = (static_cast<size_t>(written) + ridx) * static_cast<size_t>(F);
+                    std::memcpy(record_ptr, feat_data.data() + feature_offset, static_cast<size_t>(F));
+                }
+                std::memcpy(record_ptr + static_cast<size_t>(F), default_tail.data(), default_tail.size());
+            }
+
+            out.write(reinterpret_cast<const char*>(chunk.data()), static_cast<std::streamsize>(bytes));
+            if (!out) throw std::runtime_error("Failed writing sequential .pcbin records.");
+            written += take;
+        }
+        out.close();
     }
 
-    out.close();
-
     // ── Summary ───────────────────────────────────────────────────────────────
-    const size_t header_bytes = 16 + static_cast<size_t>(F) * 40;
-    const size_t record_bytes = static_cast<size_t>(F) * 4 + 8;
-    const size_t total_bytes  = header_bytes + static_cast<size_t>(N) * record_bytes;
     std::cout << "  .pcbin written successfully\n";
     std::cout << "  Point slots : " << N  << ", Features: " << F << "\n";
     std::cout << "  Header size : " << header_bytes << " bytes\n";
-    std::cout << "  Record size : " << record_bytes << " bytes  (F×4 + 8)\n";
+    std::cout << "  Record size : " << record_bytes << " bytes  (F\u00d7" << (int)bpf << " + 8)\n";
     std::cout << "  Total size  : " << (total_bytes / 1024 / 1024) << " MB\n\n";
 
     // Last line = output path (for Python caller)
@@ -445,12 +461,18 @@ static void convert(const fs::path& las_path, const fs::path& out_path)
 
 int main(int argc, char* argv[])
 {
-    if (argc < 3) {
-        std::cerr << "Usage: " << argv[0] << " <features.las> <output.pcbin>\n";
+    bool use_v1 = false;
+    std::vector<std::string> args;
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "--v1") use_v1 = true;
+        else args.push_back(argv[i]);
+    }
+    if (args.size() < 2) {
+        std::cerr << "Usage: " << argv[0] << " [--v1] <features.las> <output.pcbin>\n";
         return 1;
     }
     try {
-        convert(argv[1], argv[2]);
+        convert(args[0], args[1], use_v1);
     } catch (const std::exception& e) {
         std::cerr << "ERROR: " << e.what() << "\n";
         return 1;
