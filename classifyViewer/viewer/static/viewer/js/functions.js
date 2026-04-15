@@ -3777,7 +3777,7 @@ export function deselectPoints(scene, type, area) {
     return 0;
 }
 
-export function selectPoints(scene, pointCloudRoot, type, area) {
+export function selectPoints(scene, pointCloudRoot, type, area, append = false) {
     if (!pointCloudRoot) {
         console.warn("No point cloud loaded for selection.");
         return 0;
@@ -3786,7 +3786,11 @@ export function selectPoints(scene, pointCloudRoot, type, area) {
     // Check if we have a Potree2Loader for persistent selection across LOD levels
     const loader = getPotree2Loader(scene);
     if (loader && loader.applySelection) {
-        return loader.applySelection(type, area);
+        return loader.applySelection(type, area, append);
+    }
+
+    if (!append) {
+        clearSelection(scene);
     }
 
     // Fallback logic for simple meshes (non-LOD systems)

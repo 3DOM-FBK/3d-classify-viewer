@@ -316,7 +316,7 @@ function finalizePolygonSelection() {
     if (isCtrlDeselect) {
         deselectPoints(scene, "polygon", committedPoints);
     } else {
-        selectPoints(scene, sceneObjects.currentPointCloud, "polygon", committedPoints);
+        selectPoints(scene, sceneObjects.currentPointCloud, "polygon", committedPoints, isShiftAddSelection);
     }
 }
 
@@ -1584,6 +1584,7 @@ scene.onBeforeRenderObservable.add(() => {
 // --- Tools Logic (Lasso & Rect) using Babylon Observation ---
 // isCtrlDeselect: true quando il disegno è iniziato con CTRL premuto → modalità deselezione
 let isCtrlDeselect = false;
+let isShiftAddSelection = false;
 
 scene.onPointerObservable.add((pointerInfo) => {
     if (activeTool !== "tool-2" && activeTool !== "tool-3" && activeTool !== "tool-4") return;
@@ -1603,6 +1604,7 @@ scene.onPointerObservable.add((pointerInfo) => {
                 if (pointerInfo.event.button !== 0) break;
 
                 isCtrlDeselect = pointerInfo.event.ctrlKey;
+                isShiftAddSelection = pointerInfo.event.shiftKey;
                 const selStroke = isCtrlDeselect ? "5,3" : "none";
                 polygonPath.setAttribute("stroke-dasharray", selStroke);
                 polygonPreviewPath.setAttribute("stroke-dasharray", selStroke);
@@ -1630,6 +1632,7 @@ scene.onPointerObservable.add((pointerInfo) => {
 
             if (pointerInfo.event.button === 0) { // Left click
                 isCtrlDeselect = pointerInfo.event.ctrlKey;
+                isShiftAddSelection = pointerInfo.event.shiftKey;
                 // Stile tratteggiato per la deselezione, pieno per la selezione
                 const selStroke = isCtrlDeselect ? "5,3" : "none";
                 lassoPath.setAttribute("stroke-dasharray", selStroke);
@@ -1678,7 +1681,7 @@ scene.onPointerObservable.add((pointerInfo) => {
                 if (isCtrlDeselect) {
                     deselectPoints(scene, "rect", rect);
                 } else {
-                    selectPoints(scene, sceneObjects.currentPointCloud, "rect", rect);
+                    selectPoints(scene, sceneObjects.currentPointCloud, "rect", rect, isShiftAddSelection);
                 }
 
                 setTimeout(() => {
@@ -1693,7 +1696,7 @@ scene.onPointerObservable.add((pointerInfo) => {
                 if (isCtrlDeselect) {
                     deselectPoints(scene, "lasso", lassoPoints);
                 } else {
-                    selectPoints(scene, sceneObjects.currentPointCloud, "lasso", lassoPoints);
+                    selectPoints(scene, sceneObjects.currentPointCloud, "lasso", lassoPoints, isShiftAddSelection);
                 }
 
                 setTimeout(() => {

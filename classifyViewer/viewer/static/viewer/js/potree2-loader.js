@@ -1682,12 +1682,12 @@ export class Potree2Loader {
     /**
      * Store a selection region and highlight matching points in red.
      */
-    applySelection(type, area) {
+    applySelection(type, area, append = false) {
         if (!this.scene.activeCamera) return 0;
 
         // A new drag-selection starts a new selection session.
         // This avoids carrying old regions into invert/cut operations.
-        if (this.selectionHistory.length > 0 || this.deselectionHistory.length > 0 || this.selectionInverted) {
+        if (!append && (this.selectionHistory.length > 0 || this.deselectionHistory.length > 0 || this.selectionInverted)) {
             this.clearSelection();
         }
 
