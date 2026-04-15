@@ -1676,6 +1676,12 @@ export class Potree2Loader {
     applySelection(type, area) {
         if (!this.scene.activeCamera) return 0;
 
+        // A new drag-selection starts a new selection session.
+        // This avoids carrying old regions into invert/cut operations.
+        if (this.selectionHistory.length > 0 || this.deselectionHistory.length > 0 || this.selectionInverted) {
+            this.clearSelection();
+        }
+
         const camera = this.scene.activeCamera;
         const engine = this.scene.getEngine();
         const viewport = camera.viewport.toGlobal(engine.getRenderWidth(), engine.getRenderHeight());
@@ -1865,6 +1871,12 @@ export class Potree2Loader {
             let assigned = 0;
 
             for (let i = 0; i < positions.length / 3; i++) {
+                // Skip already-hidden points (NaN-masked by a previous cut/delete).
+                // With selectionInverted=true, a NaN point projects to (NaN,NaN,NaN),
+                // all area comparisons return false → selected=false → !selected=true,
+                // which would wrongly capture every previously hidden point.
+                if (isNaN(positions[i * 3])) continue;
+
                 const vector = new BABYLON.Vector3(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
                 const isInside = this._matchesSelectionEntry(
                     vector,
@@ -1948,6 +1960,7 @@ export class Potree2Loader {
         // A node should be visible as long as at least one of its points is visible
         // (i.e. mainCloudVisible OR any cut segment is visible).
         const anySegmentVisible = this.mainCloudVisible || this.cutHistory.some(e => e.visible);
+            this.rootTransform.setEnabled(anySegmentVisible);
 
         this.loadedNodes.forEach((mesh) => {
             const segmentIds = mesh.metadata?.segmentIds;
@@ -2691,6 +2704,8 @@ export class Potree2Loader {
             const segmentIds = mesh.metadata.segmentIds;
 
             for (let i = 0; i < positions.length / 3; i++) {
+                if (isNaN(positions[i * 3])) continue; // already hidden — skip
+
                 const vector = new BABYLON.Vector3(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
                 const isInside = this._matchesSelectionEntry(
                     vector,
@@ -2860,9 +2875,6 @@ export class Potree2Loader {
 
             this.cutHistory = this.cutHistory.filter(c => !sourceSet.has(c.segmentId));
         }
-
-        const anySegmentVisible = this.mainCloudVisible || this.cutHistory.some(e => e.visible);
-        this.rootTransform.setEnabled(anySegmentVisible);
 
         return {
             movedPoints,
