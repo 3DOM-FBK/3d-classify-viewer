@@ -1468,7 +1468,7 @@ export class Potree2Loader {
                     selected = true;
                     break;
                 }
-            } else if (sel.type === "lasso") {
+            } else if (sel.type === "lasso" || sel.type === "polygon") {
                 if (this._isPointInPoly(sel.area, [this._tmpProj.x, this._tmpProj.y])) {
                     selected = true;
                     break;
@@ -1485,7 +1485,7 @@ export class Potree2Loader {
                         selected = false;
                         break;
                     }
-                } else if (dsel.type === "lasso") {
+                } else if (dsel.type === "lasso" || dsel.type === "polygon") {
                     if (this._isPointInPoly(dsel.area, [this._tmpProj.x, this._tmpProj.y])) {
                         selected = false;
                         break;
@@ -1721,7 +1721,7 @@ export class Potree2Loader {
                 if (type === "rect") {
                     isInside = (tmpProj.x >= area.x && tmpProj.x <= area.x + area.width &&
                         tmpProj.y >= area.y && tmpProj.y <= area.y + area.height);
-                } else if (type === "lasso") {
+                } else if (type === "lasso" || type === "polygon") {
                     isInside = this._isPointInPoly(area, [tmpProj.x, tmpProj.y]);
                 }
 
@@ -2215,7 +2215,7 @@ export class Potree2Loader {
                         tmpProj.x >= area.x && tmpProj.x <= area.x + area.width &&
                         tmpProj.y >= area.y && tmpProj.y <= area.y + area.height
                     );
-                } else if (type === "lasso") {
+                } else if (type === "lasso" || type === "polygon") {
                     isInside = this._isPointInPoly(area, [tmpProj.x, tmpProj.y]);
                 }
 
@@ -2303,7 +2303,7 @@ export class Potree2Loader {
                     if (sel.type === "rect") {
                         isInside = (tmpProj.x >= sel.area.x && tmpProj.x <= sel.area.x + sel.area.width &&
                             tmpProj.y >= sel.area.y && tmpProj.y <= sel.area.y + sel.area.height);
-                    } else if (sel.type === "lasso") {
+                    } else if (sel.type === "lasso" || sel.type === "polygon") {
                         isInside = this._isPointInPoly(sel.area, [tmpProj.x, tmpProj.y]);
                     }
                     if (isInside) break;
@@ -2316,7 +2316,7 @@ export class Potree2Loader {
                         if (dsel.type === "rect") {
                             deselected = (tmpProj.x >= dsel.area.x && tmpProj.x <= dsel.area.x + dsel.area.width &&
                                 tmpProj.y >= dsel.area.y && tmpProj.y <= dsel.area.y + dsel.area.height);
-                        } else if (dsel.type === "lasso") {
+                        } else if (dsel.type === "lasso" || dsel.type === "polygon") {
                             deselected = this._isPointInPoly(dsel.area, [tmpProj.x, tmpProj.y]);
                         }
                         if (deselected) { isInside = false; break; }
@@ -2634,7 +2634,7 @@ export class Potree2Loader {
                     if (sel.type === "rect") {
                         isInside = (tmpProj.x >= sel.area.x && tmpProj.x <= sel.area.x + sel.area.width &&
                             tmpProj.y >= sel.area.y && tmpProj.y <= sel.area.y + sel.area.height);
-                    } else if (sel.type === "lasso") {
+                    } else if (sel.type === "lasso" || sel.type === "polygon") {
                         isInside = this._isPointInPoly(sel.area, [tmpProj.x, tmpProj.y]);
                     }
                     if (isInside) break;

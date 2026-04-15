@@ -229,11 +229,17 @@ let activeTool = "tool-1"; // Default mode
 // selection state
 let isDrawingLasso = false;
 let isDrawingRect = false;
+let isDrawingPolygon = false;
 let lassoPoints = [];
 let rectStartPoint = null;
 let lassoOverlay = null;
 let lassoPath = null;
 let rectShape = null;
+let polygonPoints = [];
+let polygonPath = null;
+let polygonPreviewPath = null;
+let lastPointerX = 0;
+let lastPointerY = 0;
 
 function initLassoOverlay() {
     if (document.getElementById('lasso-overlay')) return;
@@ -250,10 +256,68 @@ function initLassoOverlay() {
     rectShape.setAttribute("class", "lasso-path");
     rectShape.style.display = "none";
 
+    polygonPath = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+    polygonPath.setAttribute("class", "lasso-path");
+    polygonPath.style.display = "none";
+
+    polygonPreviewPath = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+    polygonPreviewPath.setAttribute("class", "lasso-path");
+    polygonPreviewPath.style.fill = "none";
+    polygonPreviewPath.style.display = "none";
+
     lassoOverlay.appendChild(lassoPath);
     lassoOverlay.appendChild(rectShape);
+    lassoOverlay.appendChild(polygonPath);
+    lassoOverlay.appendChild(polygonPreviewPath);
     centralViewport.appendChild(lassoOverlay);
     lassoOverlay.style.display = "none";
+}
+
+function resetPolygonOverlay() {
+    isDrawingPolygon = false;
+    polygonPoints = [];
+    if (polygonPath) {
+        polygonPath.style.display = "none";
+        polygonPath.setAttribute("points", "");
+    }
+    if (polygonPreviewPath) {
+        polygonPreviewPath.style.display = "none";
+        polygonPreviewPath.setAttribute("points", "");
+    }
+    if (lassoOverlay) lassoOverlay.style.display = "none";
+}
+
+function updatePolygonOverlay() {
+    if (!polygonPath || !polygonPreviewPath) return;
+
+    if (polygonPoints.length < 1) {
+        polygonPath.setAttribute("points", "");
+        polygonPreviewPath.setAttribute("points", "");
+        return;
+    }
+
+    const closedPointsStr = polygonPoints.map(p => `${p[0]},${p[1]}`).join(" ");
+    polygonPath.setAttribute("points", closedPointsStr);
+
+    const previewPoints = [...polygonPoints, [lastPointerX, lastPointerY]];
+    const previewStr = previewPoints.map(p => `${p[0]},${p[1]}`).join(" ");
+    polygonPreviewPath.setAttribute("points", previewStr);
+}
+
+function finalizePolygonSelection() {
+    if (!isDrawingPolygon) return;
+
+    const committedPoints = polygonPoints.slice();
+    const shouldApply = committedPoints.length >= 3;
+
+    resetPolygonOverlay();
+
+    if (!shouldApply) return;
+    if (isCtrlDeselect) {
+        deselectPoints(scene, "polygon", committedPoints);
+    } else {
+        selectPoints(scene, sceneObjects.currentPointCloud, "polygon", committedPoints);
+    }
 }
 
 initLassoOverlay();
@@ -786,6 +850,7 @@ function setCameraView(alpha, beta) {
 // --- Layout mode tool-button references (set inside initToolbar) ---
 let toolBtnRect = null;
 let toolBtnLasso = null;
+let toolBtnPolygon = null;
 let toolBtnCut = null;
 let toolBtnMeasure = null;
 let toolBtnArea = null;
@@ -802,50 +867,56 @@ function initToolbar() {
     const tool1Img = `<img src="${iconBase}cursor.png" alt="Cursor">`;
     const tool2Img = `<img src="${iconBase}rec_select.png" alt="Rectangle Select">`;
     const tool3Img = `<img src="${iconBase}lasso-select.png" alt="Lasso Select">`;
-    const tool4Img = `<img src="${iconBase}scissor.png" alt="Scissor">`;
-    const tool5Img = `<img src="${iconBase}frame-to-pcd.png" alt="Frame to PCD">`;
+    const tool4Img = `<img src="${iconBase}poly_select.png" alt="Polygon Select">`;
+    const tool5Img = `<img src="${iconBase}scissor.png" alt="Scissor">`;
+    const tool6Img = `<img src="${iconBase}frame-to-pcd.png" alt="Frame to PCD">`;
 
     createToolButton("tool-1", tool1Img, "Default mode", rightToolbar, () => {
         clearSelection(scene);
     });
     toolBtnRect = createToolButton("tool-2", tool2Img, "Rectangle selection", rightToolbar);
     toolBtnLasso = createToolButton("tool-3", tool3Img, "Lasso selection", rightToolbar);
-    toolBtnCut = createToolButton("tool-4", tool4Img, "Cut mode", rightToolbar);
-    createToolButton("tool-5", tool5Img, "Frame to PCD", rightToolbar);
-    const tool6Img = `<img src="${iconBase}measure.png" alt="Measure">`;
-    toolBtnMeasure = createToolButton("tool-6", tool6Img, "Measure distance", rightToolbar);
-    const tool7Img = `<img src="${iconBase}measure-area.png" alt="Measure Area">`;
-    toolBtnArea = createToolButton("tool-7", tool7Img, "Measure area", rightToolbar);
+    toolBtnPolygon = createToolButton("tool-4", tool4Img, "Polygon selection", rightToolbar);
+    toolBtnCut = createToolButton("tool-5", tool5Img, "Cut mode", rightToolbar);
+    createToolButton("tool-6", tool6Img, "Frame to PCD", rightToolbar);
+    const tool7Img = `<img src="${iconBase}measure.png" alt="Measure">`;
+    toolBtnMeasure = createToolButton("tool-7", tool7Img, "Measure distance", rightToolbar);
+    const tool8Img = `<img src="${iconBase}measure-area.png" alt="Measure Area">`;
+    toolBtnArea = createToolButton("tool-8", tool8Img, "Measure area", rightToolbar);
 
     // Initial active button
     document.getElementById("tool-1").classList.add("active");
 
     // Tool switching logic
-    [1, 2, 3, 4, 6, 7].forEach(i => {
+    [1, 2, 3, 4, 5, 7, 8].forEach(i => {
         const btn = document.getElementById(`tool-${i}`);
         btn.addEventListener('click', () => {
             // Remove active from all stateful tools
             document.querySelectorAll('.tool-btn').forEach(b => {
-                if (b.id !== "tool-5") b.classList.remove('active');
+                if (b.id !== "tool-6") b.classList.remove('active');
             });
             // Add to current
             btn.classList.add('active');
             activeTool = `tool-${i}`;
 
-            // Disable camera control for drawing tools (rect, lasso) and measure
-            if (activeTool === "tool-2" || activeTool === "tool-3" || activeTool === "tool-6" || activeTool === "tool-7") {
+            // Disable camera control for drawing tools (rect, lasso, polygon) and measure
+            if (activeTool === "tool-2" || activeTool === "tool-3" || activeTool === "tool-4" || activeTool === "tool-7" || activeTool === "tool-8") {
                 camera.detachControl(canvas);
             } else {
                 camera.attachControl(canvas, true);
             }
+
+            if (activeTool !== "tool-4") {
+                resetPolygonOverlay();
+            }
             // Hide measure guides when switching away
             const measureGroup = document.getElementById('guide-measure');
-            if (measureGroup && activeTool !== "tool-6") measureGroup.style.display = "none";
+            if (measureGroup && activeTool !== "tool-7") measureGroup.style.display = "none";
             const areaGroup = document.getElementById('guide-area');
-            if (areaGroup && activeTool !== "tool-7") areaGroup.style.display = "none";
+            if (areaGroup && activeTool !== "tool-8") areaGroup.style.display = "none";
             // Reset measure/area state when switching away
-            if (activeTool !== "tool-6") clearMeasure();
-            if (activeTool !== "tool-7") clearArea();
+            if (activeTool !== "tool-7") clearMeasure();
+            if (activeTool !== "tool-8") clearArea();
 
             // Manage command guide visibility and content
             const guide = document.getElementById('command-guide');
@@ -857,11 +928,11 @@ function initToolbar() {
                     guide.classList.add('visible');
                     navGroup.style.display = "block";
                     selectionGroup.style.display = "none";
-                } else if (activeTool === "tool-2" || activeTool === "tool-3") {
+                } else if (activeTool === "tool-2" || activeTool === "tool-3" || activeTool === "tool-4") {
                     guide.classList.add('visible');
                     navGroup.style.display = "none";
                     selectionGroup.style.display = "block";
-                } else if (activeTool === "tool-6") {
+                } else if (activeTool === "tool-7") {
                     guide.classList.add('visible');
                     navGroup.style.display = "none";
                     selectionGroup.style.display = "none";
@@ -869,7 +940,7 @@ function initToolbar() {
                     if (measureGroup) measureGroup.style.display = "block";
                     const areaGroupHide = document.getElementById('guide-area');
                     if (areaGroupHide) areaGroupHide.style.display = "none";
-                } else if (activeTool === "tool-7") {
+                } else if (activeTool === "tool-8") {
                     guide.classList.add('visible');
                     navGroup.style.display = "none";
                     selectionGroup.style.display = "none";
@@ -878,7 +949,7 @@ function initToolbar() {
                     const areaGroup = document.getElementById('guide-area');
                     if (areaGroup) areaGroup.style.display = "block";
                 } else {
-                    // tool-4 (Cut), tool-5 (Frame)
+                    // tool-5 (Cut), tool-6 (Frame)
                     guide.classList.remove('visible');
                 }
             }
@@ -1515,10 +1586,48 @@ scene.onBeforeRenderObservable.add(() => {
 let isCtrlDeselect = false;
 
 scene.onPointerObservable.add((pointerInfo) => {
-    if (activeTool !== "tool-2" && activeTool !== "tool-3") return;
+    if (activeTool !== "tool-2" && activeTool !== "tool-3" && activeTool !== "tool-4") return;
+
+    lastPointerX = scene.pointerX;
+    lastPointerY = scene.pointerY;
 
     switch (pointerInfo.type) {
         case BABYLON.PointerEventTypes.POINTERDOWN:
+            if (activeTool === "tool-4") {
+                if (pointerInfo.event.button === 2) {
+                    pointerInfo.event.preventDefault();
+                    finalizePolygonSelection();
+                    break;
+                }
+
+                if (pointerInfo.event.button !== 0) break;
+
+                isCtrlDeselect = pointerInfo.event.ctrlKey;
+                const selStroke = isCtrlDeselect ? "5,3" : "none";
+                polygonPath.setAttribute("stroke-dasharray", selStroke);
+                polygonPreviewPath.setAttribute("stroke-dasharray", selStroke);
+
+                const isDoubleClick = pointerInfo.event.detail >= 2;
+
+                if (!isDrawingPolygon) {
+                    isDrawingPolygon = true;
+                    polygonPoints = [[scene.pointerX, scene.pointerY]];
+                    lassoOverlay.style.display = "block";
+                    polygonPath.style.display = "block";
+                    polygonPreviewPath.style.display = "block";
+                    lassoPath.style.display = "none";
+                    rectShape.style.display = "none";
+                } else {
+                    polygonPoints.push([scene.pointerX, scene.pointerY]);
+                }
+
+                updatePolygonOverlay();
+                if (isDoubleClick && polygonPoints.length >= 3) {
+                    finalizePolygonSelection();
+                }
+                break;
+            }
+
             if (pointerInfo.event.button === 0) { // Left click
                 isCtrlDeselect = pointerInfo.event.ctrlKey;
                 // Stile tratteggiato per la deselezione, pieno per la selezione
@@ -1550,6 +1659,8 @@ scene.onPointerObservable.add((pointerInfo) => {
             } else if (isDrawingLasso) {
                 lassoPoints.push([scene.pointerX, scene.pointerY]);
                 updateLassoPath();
+            } else if (isDrawingPolygon) {
+                updatePolygonOverlay();
             }
             break;
 
@@ -1621,7 +1732,7 @@ function updateLassoPath() {
 }
 
 // ---------------------------------------------------------------------------
-// MEASURE TOOL (tool-6) — click two points, show distance
+// MEASURE TOOL (tool-7) — click two points, show distance
 // ---------------------------------------------------------------------------
 let measurePoint1 = null;   // BABYLON.Vector3 | null
 let measurePoint2 = null;   // BABYLON.Vector3 | null
@@ -1853,7 +1964,7 @@ function pickClosestPointInCloud(screenX, screenY) {
 
 // Pointer observer for the measure tool
 scene.onPointerObservable.add((pointerInfo) => {
-    if (activeTool !== 'tool-6') return;
+    if (activeTool !== 'tool-7') return;
     if (pointerInfo.type !== BABYLON.PointerEventTypes.POINTERDOWN) return;
     if (pointerInfo.event.button !== 0) return;
 
@@ -1901,7 +2012,7 @@ scene.onBeforeRenderObservable.add(() => {
 
 
 // ---------------------------------------------------------------------------
-// AREA TOOL (tool-7) — click N points, double-click to close, shows area
+// AREA TOOL (tool-8) — click N points, double-click to close, shows area
 // ---------------------------------------------------------------------------
 let areaPoints = [];    // BABYLON.Vector3[]
 let areaMarkers = [];    // TransformNode[] (one per vertex)
@@ -2040,7 +2151,7 @@ function closeAreaPolygon() {
 let _areaSingleClickTimer = null;
 
 scene.onPointerObservable.add((pointerInfo) => {
-    if (activeTool !== 'tool-7') return;
+    if (activeTool !== 'tool-8') return;
 
     const sx = scene.pointerX;
     const sy = scene.pointerY;
@@ -2438,14 +2549,14 @@ window.addEventListener('contextmenu', (e) => {
 // --- Keyboard Shortcuts ---
 // Esc cancels a measure in progress
 window.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && activeTool === 'tool-6') {
+    if (e.key === 'Escape' && activeTool === 'tool-7') {
         clearMeasure();
-    } else if (e.key === 'Escape' && activeTool === 'tool-7') {
+    } else if (e.key === 'Escape' && activeTool === 'tool-8') {
         clearArea();
     }
 });
 
-// Active only when a selection tool (rect or lasso) is active:
+// Active only when a selection tool (rect, lasso, polygon) is active:
 // I → Invert Selection
 // Delete → move selected points to internal hidden deleted segment
 // Escape → Deselect All
@@ -2456,7 +2567,25 @@ function handleSelectionKeydown(e) {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
 
     // Only active when a selection tool is active
-    if (activeTool !== "tool-2" && activeTool !== "tool-3") return;
+    if (activeTool !== "tool-2" && activeTool !== "tool-3" && activeTool !== "tool-4") return;
+
+    if (activeTool === "tool-4") {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            e.stopPropagation();
+            finalizePolygonSelection();
+            return;
+        }
+
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            e.stopPropagation();
+            if (isDrawingPolygon) {
+                resetPolygonOverlay();
+                return;
+            }
+        }
+    }
 
     if (e.key === 'i' || e.key === 'I') {
         e.preventDefault();
@@ -2543,12 +2672,11 @@ initToolbar();
 
 // --- Tool Actions ---
 
-// tool-4: Frame to PCD (era tool-4, ma nel toolbar è già mappato come tool-4 con scissor)
-// NOTA: tool-4 è "Cut mode" (scissor), tool-5 è "Frame to PCD"
+    // tool-5: Cut mode (scissor), tool-6: Frame to PCD
 // Qui gestiamo entrambi:
 
-// tool-5: Frame to PCD (Instant Action)
-const frameToPCDButton = document.getElementById("tool-5");
+// tool-6: Frame to PCD (Instant Action)
+const frameToPCDButton = document.getElementById("tool-6");
 if (frameToPCDButton) {
     frameToPCDButton.addEventListener("click", () => {
         if (sceneObjects.currentPointCloud) {
@@ -2572,8 +2700,8 @@ if (frameToPCDButton) {
 // --- Outline: cut segment counter ---
 let cutSegmentCounter = 1;
 
-// tool-4: Cut Mode — promuove la selezione corrente in un nuovo segmento
-const cutModeButton = document.getElementById("tool-4");
+// tool-5: Cut Mode — promuove la selezione corrente in un nuovo segmento
+const cutModeButton = document.getElementById("tool-5");
 if (cutModeButton) {
     cutModeButton.addEventListener("click", () => {
         const loader = scene.potree2Loader;
@@ -2582,7 +2710,7 @@ if (cutModeButton) {
             return;
         }
         if (!loader.selectionHistory || loader.selectionHistory.length === 0) {
-            console.warn("No active selection. Use rectangle or lasso selection first.");
+            console.warn("No active selection. Use rectangle, lasso, or polygon selection first.");
             return;
         }
 
@@ -2694,10 +2822,11 @@ function setLayoutMode(mode) {
     // returned by createToolButton and stored at module level.
     if (toolBtnRect) toolBtnRect.style.display = isClassify ? 'none' : '';
     if (toolBtnLasso) toolBtnLasso.style.display = isClassify ? 'none' : '';
+    if (toolBtnPolygon) toolBtnPolygon.style.display = isClassify ? 'none' : '';
     if (toolBtnCut) toolBtnCut.style.display = isClassify ? 'none' : '';
 
     // If the active tool is one of the hidden ones, snap back to tool-1
-    if (isClassify && (activeTool === 'tool-2' || activeTool === 'tool-3' || activeTool === 'tool-4')) {
+    if (isClassify && (activeTool === 'tool-2' || activeTool === 'tool-3' || activeTool === 'tool-4' || activeTool === 'tool-5')) {
         const defaultBtn = document.getElementById('tool-1');
         if (defaultBtn) defaultBtn.click();
     }

@@ -3814,7 +3814,7 @@ export function selectPoints(scene, pointCloudRoot, type, area) {
             if (type === "rect") {
                 isInside = (projection.x >= area.x && projection.x <= area.x + area.width &&
                     projection.y >= area.y && projection.y <= area.y + area.height);
-            } else if (type === "lasso") {
+            } else if (type === "lasso" || type === "polygon") {
                 isInside = isPointInPoly(area, [projection.x, projection.y]);
             }
 
