@@ -359,6 +359,7 @@ code {
     align-items: center;
     justify-content: center;
     transition: border-color 0.18s;
+    position: relative;
 }
 
 /* .schema-figure:hover .schema-img-wrap { border-color: var(--accent-blue); } */
@@ -688,3 +689,97 @@ kbd {
     .doc-page { padding: 24px 16px 60px; }
     .schema-figure { max-width: 100%; }
 }
+
+/* ══════════════════════════════════════
+   SCHEMA FULLSCREEN OVERLAY
+══════════════════════════════════════ */
+#schemaOverlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.82);
+    backdrop-filter: blur(5px);
+    z-index: 1000;
+    align-items: center;
+    justify-content: center;
+}
+
+#schemaOverlay.visible { display: flex; }
+
+#schemaOverlayInner {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+}
+
+#schemaOverlayImg {
+    max-width: 87dvw;
+    max-height: 82dvh;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    border-radius: 10px;
+    border: 1px solid var(--border-color);
+    background: var(--panel-bg);
+    padding: 16px;
+    display: block;
+}
+
+#schemaOverlayCaption {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+}
+
+#schemaOverlayClose {
+    position: absolute;
+    top: -14px;
+    right: -14px;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: var(--panel-bg);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 0.95rem;
+    transition: background 0.15s, border-color 0.15s;
+    z-index: 1;
+}
+
+#schemaOverlayClose:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: var(--text-muted);
+}
+
+/* Expand icon inside each schema figure */
+.schema-expand-btn {
+    position: absolute;
+    top: 7px;
+    right: 7px;
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.55);
+    border: 1px solid var(--border-color);
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 0.75rem;
+    opacity: 0;
+    transition: opacity 0.18s, color 0.18s, background 0.18s;
+    z-index: 2;
+}
+
+.schema-figure:hover .schema-expand-btn { opacity: 1; }
+.schema-expand-btn:hover { color: var(--text-primary); background: rgba(0, 0, 0, 0.75); }

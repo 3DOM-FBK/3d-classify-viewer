@@ -33,6 +33,7 @@ document.addEventListener('DOMContentLoaded', () => {
     setupResizer();
     setupSearch();
     setupOutlineTracking();
+    setupSchemaFullscreen();
 
     // Navigate to hash or default
     const hash = location.hash.replace('#', '');
@@ -310,5 +311,62 @@ function setupResizer() {
         resizer.classList.remove('active');
         document.body.style.cursor = '';
         document.body.style.userSelect = '';
+    });
+}
+
+
+// ─────────────────────────────────────────────
+//  Schema Fullscreen
+// ─────────────────────────────────────────────
+
+function setupSchemaFullscreen() {
+    // Build overlay once
+    const overlay = document.createElement('div');
+    overlay.id = 'schemaOverlay';
+    overlay.innerHTML = `
+        <div id="schemaOverlayInner">
+            <button id="schemaOverlayClose" title="Close"><i class="bi bi-x-lg"></i></button>
+            <p id="schemaOverlayCaption"></p>
+            <img id="schemaOverlayImg" src="" alt="">
+        </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const overlayImg     = document.getElementById('schemaOverlayImg');
+    const overlayCaption = document.getElementById('schemaOverlayCaption');
+
+    function openOverlay(src, alt, caption) {
+        overlayImg.src           = src;
+        overlayImg.alt           = alt;
+        overlayCaption.textContent = caption;
+        overlay.classList.add('visible');
+    }
+
+    function closeOverlay() {
+        overlay.classList.remove('visible');
+    }
+
+    document.getElementById('schemaOverlayClose').addEventListener('click', closeOverlay);
+    overlay.addEventListener('click', e => { if (e.target === overlay) closeOverlay(); });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') closeOverlay(); });
+
+    // Attach expand button + click to every .schema-figure that has an <img>
+    document.querySelectorAll('.schema-figure').forEach(fig => {
+        const img = fig.querySelector('img');
+        if (!img) return;
+
+        const caption = fig.querySelector('figcaption')?.textContent.trim() ?? '';
+
+        // Expand icon overlay button
+        const btn = document.createElement('button');
+        btn.className = 'schema-expand-btn';
+        btn.title     = 'View fullscreen';
+        btn.innerHTML = '<i class="bi bi-arrows-angle-expand"></i>';
+        fig.querySelector('.schema-img-wrap').appendChild(btn);
+
+        const open = () => openOverlay(img.src, img.alt, caption);
+        btn.addEventListener('click', e => { e.stopPropagation(); open(); });
+        fig.style.cursor = 'zoom-in';
+        fig.addEventListener('click', open);
     });
 }
