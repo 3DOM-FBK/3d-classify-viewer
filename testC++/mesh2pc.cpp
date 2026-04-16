@@ -7,6 +7,8 @@
 #include <cmath>
 #include <algorithm>
 #include <cstring>
+#include <random>
+#include <unordered_map>
 // CGAL
 #include <CGAL/Simple_cartesian.h>
 #include <CGAL/AABB_tree.h>
@@ -157,8 +159,8 @@ void write_las(const std::string& out_file,
         write_val<uint8_t>(f, 0);   // return bits
         write_val<uint8_t>(f, 0);   // classification
         write_val<uint8_t>(f, 0);   // scan angle
-        write_val<uint8_t>(f, 0);   // user data
-        write_val<uint16_t>(f, 0);  // point source ID
+        write_val<uint8_t>(f, 0);   // user data (mandatory LAS field)
+        write_val<uint16_t>(f, 0);  // point source ID (mandatory LAS field)
         write_val<double>(f, 0.0);  // GPS time
         write_val<uint16_t>(f, (uint16_t)(std::clamp(colors[i][0], 0.0, 1.0) * 65535));
         write_val<uint16_t>(f, (uint16_t)(std::clamp(colors[i][1], 0.0, 1.0) * 65535));
@@ -181,8 +183,216 @@ struct GLBMesh {
     std::vector<std::array<float,3>> vertices;
     std::vector<std::array<int,3>>   faces;
     std::vector<std::array<float,2>> uvs;
+    std::vector<std::array<float,4>> vertex_colors;
     int texture_index = -1;
+    std::array<float,3> base_color = {1.0f, 1.0f, 1.0f};
+    int wrap_s = TINYGLTF_TEXTURE_WRAP_REPEAT;
+    int wrap_t = TINYGLTF_TEXTURE_WRAP_REPEAT;
 };
+
+Eigen::Matrix4d get_node_local_transform(const tinygltf::Node& node) {
+    Eigen::Matrix4d transform = Eigen::Matrix4d::Identity();
+    if (node.matrix.size() == 16) {
+        for (int row = 0; row < 4; ++row) {
+            for (int col = 0; col < 4; ++col) {
+                transform(row, col) = node.matrix[col * 4 + row];
+            }
+        }
+        return transform;
+    }
+
+    Eigen::Vector3d translation(0.0, 0.0, 0.0);
+    Eigen::Vector3d scale(1.0, 1.0, 1.0);
+    Eigen::Quaterniond rotation = Eigen::Quaterniond::Identity();
+
+    if (node.translation.size() == 3) {
+        translation = Eigen::Vector3d(node.translation[0], node.translation[1], node.translation[2]);
+    }
+    if (node.scale.size() == 3) {
+        scale = Eigen::Vector3d(node.scale[0], node.scale[1], node.scale[2]);
+    }
+    if (node.rotation.size() == 4) {
+        rotation = Eigen::Quaterniond(node.rotation[3], node.rotation[0], node.rotation[1], node.rotation[2]);
+    }
+
+    Eigen::Matrix4d translation_matrix = Eigen::Matrix4d::Identity();
+    translation_matrix.block<3,1>(0, 3) = translation;
+
+    Eigen::Matrix4d rotation_matrix = Eigen::Matrix4d::Identity();
+    rotation_matrix.block<3,3>(0, 0) = rotation.normalized().toRotationMatrix();
+
+    Eigen::Matrix4d scale_matrix = Eigen::Matrix4d::Identity();
+    scale_matrix(0, 0) = scale.x();
+    scale_matrix(1, 1) = scale.y();
+    scale_matrix(2, 2) = scale.z();
+
+    return translation_matrix * rotation_matrix * scale_matrix;
+}
+
+std::array<float,3> transform_position(const Eigen::Matrix4d& transform, const std::array<float,3>& position) {
+    Eigen::Vector4d p(position[0], position[1], position[2], 1.0);
+    Eigen::Vector4d out = transform * p;
+    return {
+        static_cast<float>(out.x()),
+        static_cast<float>(out.y()),
+        static_cast<float>(out.z())
+    };
+}
+
+double apply_wrap_mode(double uv, int wrap_mode) {
+    switch (wrap_mode) {
+        case TINYGLTF_TEXTURE_WRAP_CLAMP_TO_EDGE:
+            return std::clamp(uv, 0.0, 1.0);
+        case TINYGLTF_TEXTURE_WRAP_MIRRORED_REPEAT: {
+            double t = std::fmod(uv, 2.0);
+            if (t < 0.0) t += 2.0;
+            return (t <= 1.0) ? t : (2.0 - t);
+        }
+        case TINYGLTF_TEXTURE_WRAP_REPEAT:
+        default: {
+            double t = std::fmod(uv, 1.0);
+            if (t < 0.0) t += 1.0;
+            return t;
+        }
+    }
+}
+
+std::array<double,3> sample_texture_color(const std::vector<uint8_t>& tex,
+                                         int width,
+                                         int height,
+                                         int channels,
+                                         double u,
+                                         double v)
+{
+    if (width <= 0 || height <= 0 || channels < 3) {
+        return {1.0, 1.0, 1.0};
+    }
+
+    double x = u * (width - 1);
+    double y = v * (height - 1);
+    int x0 = std::clamp((int)std::floor(x), 0, width - 1);
+    int y0 = std::clamp((int)std::floor(y), 0, height - 1);
+    int x1 = std::min(x0 + 1, width - 1);
+    int y1 = std::min(y0 + 1, height - 1);
+    double tx = x - x0;
+    double ty = y - y0;
+
+    auto read_texel = [&](int px, int py) {
+        int offset = (py * width + px) * channels;
+        double alpha = (channels >= 4) ? tex[offset + 3] / 255.0 : 1.0;
+        return std::array<double,4>{
+            tex[offset] / 255.0,
+            tex[offset + 1] / 255.0,
+            tex[offset + 2] / 255.0,
+            alpha
+        };
+    };
+
+    auto c00 = read_texel(x0, y0);
+    auto c10 = read_texel(x1, y0);
+    auto c01 = read_texel(x0, y1);
+    auto c11 = read_texel(x1, y1);
+
+    double w00 = (1.0 - tx) * (1.0 - ty);
+    double w10 = tx * (1.0 - ty);
+    double w01 = (1.0 - tx) * ty;
+    double w11 = tx * ty;
+
+    double aw00 = w00 * c00[3];
+    double aw10 = w10 * c10[3];
+    double aw01 = w01 * c01[3];
+    double aw11 = w11 * c11[3];
+    double alpha_weight_sum = aw00 + aw10 + aw01 + aw11;
+
+    if (alpha_weight_sum > 1e-8) {
+        return {
+            (c00[0] * aw00 + c10[0] * aw10 + c01[0] * aw01 + c11[0] * aw11) / alpha_weight_sum,
+            (c00[1] * aw00 + c10[1] * aw10 + c01[1] * aw01 + c11[1] * aw11) / alpha_weight_sum,
+            (c00[2] * aw00 + c10[2] * aw10 + c01[2] * aw01 + c11[2] * aw11) / alpha_weight_sum
+        };
+    }
+
+    double weight_sum = w00 + w10 + w01 + w11;
+    if (weight_sum <= 1e-8) {
+        return {c00[0], c00[1], c00[2]};
+    }
+
+    return {
+        (c00[0] * w00 + c10[0] * w10 + c01[0] * w01 + c11[0] * w11) / weight_sum,
+        (c00[1] * w00 + c10[1] * w10 + c01[1] * w01 + c11[1] * w11) / weight_sum,
+        (c00[2] * w00 + c10[2] * w10 + c01[2] * w01 + c11[2] * w11) / weight_sum
+    };
+}
+
+int component_size_bytes(int component_type) {
+    switch (component_type) {
+        case TINYGLTF_COMPONENT_TYPE_BYTE:
+        case TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE:  return 1;
+        case TINYGLTF_COMPONENT_TYPE_SHORT:
+        case TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT: return 2;
+        case TINYGLTF_COMPONENT_TYPE_INT:
+        case TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT:
+        case TINYGLTF_COMPONENT_TYPE_FLOAT:          return 4;
+        case TINYGLTF_COMPONENT_TYPE_DOUBLE:         return 8;
+        default:                                     return 0;
+    }
+}
+
+double read_component_as_double(const uint8_t* ptr, int component_type, bool normalized) {
+    switch (component_type) {
+        case TINYGLTF_COMPONENT_TYPE_FLOAT: {
+            float v;
+            std::memcpy(&v, ptr, sizeof(float));
+            return static_cast<double>(v);
+        }
+        case TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE: {
+            uint8_t v;
+            std::memcpy(&v, ptr, sizeof(uint8_t));
+            return normalized ? static_cast<double>(v) / 255.0 : static_cast<double>(v);
+        }
+        case TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT: {
+            uint16_t v;
+            std::memcpy(&v, ptr, sizeof(uint16_t));
+            return normalized ? static_cast<double>(v) / 65535.0 : static_cast<double>(v);
+        }
+        case TINYGLTF_COMPONENT_TYPE_BYTE: {
+            int8_t v;
+            std::memcpy(&v, ptr, sizeof(int8_t));
+            if (!normalized) return static_cast<double>(v);
+            return std::max(-1.0, static_cast<double>(v) / 127.0);
+        }
+        case TINYGLTF_COMPONENT_TYPE_SHORT: {
+            int16_t v;
+            std::memcpy(&v, ptr, sizeof(int16_t));
+            if (!normalized) return static_cast<double>(v);
+            return std::max(-1.0, static_cast<double>(v) / 32767.0);
+        }
+        default:
+            return 0.0;
+    }
+}
+
+int read_index_as_int(const uint8_t* ptr, int component_type) {
+    switch (component_type) {
+        case TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT: {
+            uint32_t v;
+            std::memcpy(&v, ptr, sizeof(uint32_t));
+            return static_cast<int>(v);
+        }
+        case TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT: {
+            uint16_t v;
+            std::memcpy(&v, ptr, sizeof(uint16_t));
+            return static_cast<int>(v);
+        }
+        case TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE: {
+            uint8_t v;
+            std::memcpy(&v, ptr, sizeof(uint8_t));
+            return static_cast<int>(v);
+        }
+        default:
+            return 0;
+    }
+}
 
 bool load_glb(const std::string& path,
               std::vector<GLBMesh>& meshes,
@@ -200,9 +410,15 @@ bool load_glb(const std::string& path,
         textures.push_back(img.image);
         tex_sizes.push_back({img.width, img.height});
     }
-    for (int mi = 0; mi < (int)model.meshes.size(); ++mi) {
-        auto& mesh = model.meshes[mi];
-        for (auto& prim : mesh.primitives) {
+
+    std::function<void(int, const Eigen::Matrix4d&)> visit_node;
+    visit_node = [&](int node_index, const Eigen::Matrix4d& parent_transform) {
+        const auto& node = model.nodes[node_index];
+        Eigen::Matrix4d world_transform = parent_transform * get_node_local_transform(node);
+
+        if (node.mesh >= 0 && node.mesh < (int)model.meshes.size()) {
+            auto& mesh = model.meshes[node.mesh];
+            for (auto& prim : mesh.primitives) {
             GLBMesh m;
             auto& pa = model.accessors[prim.attributes.at("POSITION")];
             auto& pbv = model.bufferViews[pa.bufferView];
@@ -211,46 +427,145 @@ bool load_glb(const std::string& path,
             m.vertices.resize(pa.count);
             for (size_t i = 0; i < pa.count; ++i) {
                 const float* pd = reinterpret_cast<const float*>(pbase + i * pos_stride);
-                m.vertices[i] = {pd[0], pd[1], pd[2]};
+                m.vertices[i] = transform_position(world_transform, {pd[0], pd[1], pd[2]});
             }
-            auto& ia = model.accessors[prim.indices];
-            auto& ibv = model.bufferViews[ia.bufferView];
-            const uint8_t* ibase = model.buffers[ibv.buffer].data.data() + ibv.byteOffset + ia.byteOffset;
-            m.faces.resize(ia.count / 3);
-            for (size_t i = 0; i < ia.count / 3; ++i) {
-                if (ia.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT) {
-                    const uint32_t* idx = reinterpret_cast<const uint32_t*>(ibase);
-                    m.faces[i] = {(int)idx[i*3], (int)idx[i*3+1], (int)idx[i*3+2]};
-                } else {
-                    const uint16_t* idx = reinterpret_cast<const uint16_t*>(ibase);
-                    m.faces[i] = {(int)idx[i*3], (int)idx[i*3+1], (int)idx[i*3+2]};
+            if (prim.indices >= 0) {
+                auto& ia = model.accessors[prim.indices];
+                auto& ibv = model.bufferViews[ia.bufferView];
+                const uint8_t* ibase = model.buffers[ibv.buffer].data.data() + ibv.byteOffset + ia.byteOffset;
+                int idx_comp_size = component_size_bytes(ia.componentType);
+                int idx_stride = (ibv.byteStride > 0) ? ibv.byteStride : idx_comp_size;
+                m.faces.resize(ia.count / 3);
+                for (size_t i = 0; i < ia.count / 3; ++i) {
+                    const uint8_t* i0 = ibase + (i * 3 + 0) * idx_stride;
+                    const uint8_t* i1 = ibase + (i * 3 + 1) * idx_stride;
+                    const uint8_t* i2 = ibase + (i * 3 + 2) * idx_stride;
+                    m.faces[i] = {
+                        read_index_as_int(i0, ia.componentType),
+                        read_index_as_int(i1, ia.componentType),
+                        read_index_as_int(i2, ia.componentType)
+                    };
+                }
+            } else {
+                // Non-indexed primitive: assume triangles in-order (mode TRIANGLES).
+                size_t tri_count = m.vertices.size() / 3;
+                m.faces.resize(tri_count);
+                for (size_t i = 0; i < tri_count; ++i) {
+                    m.faces[i] = {static_cast<int>(i * 3), static_cast<int>(i * 3 + 1), static_cast<int>(i * 3 + 2)};
                 }
             }
-            m.uvs.resize(pa.count, {0.0f, 0.0f});
-            if (prim.attributes.count("TEXCOORD_0")) {
-                auto& ua = model.accessors[prim.attributes.at("TEXCOORD_0")];
-                auto& ubv = model.bufferViews[ua.bufferView];
-                int uv_stride = (ubv.byteStride > 0) ? ubv.byteStride : 2 * (int)sizeof(float);
-                const uint8_t* ubase = model.buffers[ubv.buffer].data.data() + ubv.byteOffset + ua.byteOffset;
-                for (size_t i = 0; i < ua.count; ++i) {
-                    const float* ud = reinterpret_cast<const float*>(ubase + i * uv_stride);
-                    m.uvs[i] = {ud[0], ud[1]};
-                }
-            }
-            m.texture_index = (int)meshes.size();
+            m.texture_index = -1;  // nessuna texture di default
             if (prim.material >= 0) {
                 auto& mat = model.materials[prim.material];
+                if (mat.pbrMetallicRoughness.baseColorFactor.size() >= 3) {
+                    m.base_color = {
+                        static_cast<float>(mat.pbrMetallicRoughness.baseColorFactor[0]),
+                        static_cast<float>(mat.pbrMetallicRoughness.baseColorFactor[1]),
+                        static_cast<float>(mat.pbrMetallicRoughness.baseColorFactor[2])
+                    };
+                }
                 int tex_idx = mat.pbrMetallicRoughness.baseColorTexture.index;
                 if (tex_idx >= 0 && tex_idx < (int)model.textures.size()) {
-                    int img_idx = model.textures[tex_idx].source;
+                    const auto& tex = model.textures[tex_idx];
+                    int img_idx = tex.source;
                     if (img_idx >= 0 && img_idx < (int)textures.size()) {
                         m.texture_index = img_idx;
                     }
+
+                    if (tex.sampler >= 0 && tex.sampler < (int)model.samplers.size()) {
+                        const auto& s = model.samplers[tex.sampler];
+                        if (s.wrapS != 0) m.wrap_s = s.wrapS;
+                        if (s.wrapT != 0) m.wrap_t = s.wrapT;
+                    }
                 }
             }
+
+            m.vertex_colors.resize(pa.count, {1.0f, 1.0f, 1.0f, 1.0f});
+            if (prim.attributes.count("COLOR_0")) {
+                auto& ca = model.accessors[prim.attributes.at("COLOR_0")];
+                auto& cbv = model.bufferViews[ca.bufferView];
+                int color_comp_size = component_size_bytes(ca.componentType);
+                int color_components = (ca.type == TINYGLTF_TYPE_VEC4) ? 4 : 3;
+                int color_stride = (cbv.byteStride > 0) ? cbv.byteStride : color_components * color_comp_size;
+                const uint8_t* cbase = model.buffers[cbv.buffer].data.data() + cbv.byteOffset + ca.byteOffset;
+                size_t color_count = std::min((size_t)ca.count, m.vertex_colors.size());
+                for (size_t i = 0; i < color_count; ++i) {
+                    const uint8_t* color_ptr = cbase + i * color_stride;
+                    double r = read_component_as_double(color_ptr, ca.componentType, ca.normalized);
+                    double g = read_component_as_double(color_ptr + color_comp_size, ca.componentType, ca.normalized);
+                    double b = read_component_as_double(color_ptr + 2 * color_comp_size, ca.componentType, ca.normalized);
+                    double a = 1.0;
+                    if (color_components == 4) {
+                        a = read_component_as_double(color_ptr + 3 * color_comp_size, ca.componentType, ca.normalized);
+                    }
+                    m.vertex_colors[i] = {
+                        static_cast<float>(std::clamp(r, 0.0, 1.0)),
+                        static_cast<float>(std::clamp(g, 0.0, 1.0)),
+                        static_cast<float>(std::clamp(b, 0.0, 1.0)),
+                        static_cast<float>(std::clamp(a, 0.0, 1.0))
+                    };
+                }
+            }
+            // Read the UV set requested by the baseColorTexture (texCoord field).
+            // If unavailable, fallback to TEXCOORD_0, then TEXCOORD_1.
+            int uv_set = 0;
+            if (prim.material >= 0) {
+                auto& mat = model.materials[prim.material];
+                uv_set = mat.pbrMetallicRoughness.baseColorTexture.texCoord;
+            }
+            std::string uv_attr = "TEXCOORD_" + std::to_string(uv_set);
+            int uv_accessor_index = -1;
+            if (prim.attributes.count(uv_attr)) {
+                uv_accessor_index = prim.attributes.at(uv_attr);
+            } else if (prim.attributes.count("TEXCOORD_0")) {
+                uv_accessor_index = prim.attributes.at("TEXCOORD_0");
+            } else if (prim.attributes.count("TEXCOORD_1")) {
+                uv_accessor_index = prim.attributes.at("TEXCOORD_1");
+            }
+
+            m.uvs.resize(pa.count, {0.0f, 0.0f});
+            if (uv_accessor_index >= 0) {
+                auto& ua = model.accessors[uv_accessor_index];
+                auto& ubv = model.bufferViews[ua.bufferView];
+                int uv_comp_size = component_size_bytes(ua.componentType);
+                int uv_stride = (ubv.byteStride > 0) ? ubv.byteStride : 2 * uv_comp_size;
+                const uint8_t* ubase = model.buffers[ubv.buffer].data.data() + ubv.byteOffset + ua.byteOffset;
+                size_t uv_count = std::min((size_t)ua.count, m.uvs.size());
+                for (size_t i = 0; i < uv_count; ++i) {
+                    const uint8_t* uv_ptr = ubase + i * uv_stride;
+                    double u = read_component_as_double(uv_ptr, ua.componentType, ua.normalized);
+                    double v = read_component_as_double(uv_ptr + uv_comp_size, ua.componentType, ua.normalized);
+                    m.uvs[i] = {
+                        static_cast<float>(u),
+                        static_cast<float>(v)
+                    };
+                }
+
+            }
+
             meshes.push_back(std::move(m));
         }
+        }
+
+        for (int child_index : node.children) {
+            visit_node(child_index, world_transform);
+        }
+    };
+
+    std::vector<int> root_nodes;
+    if (model.defaultScene >= 0 && model.defaultScene < (int)model.scenes.size()) {
+        root_nodes = model.scenes[model.defaultScene].nodes;
+    } else if (!model.scenes.empty()) {
+        root_nodes = model.scenes[0].nodes;
+    } else {
+        root_nodes.resize(model.nodes.size());
+        for (int i = 0; i < (int)model.nodes.size(); ++i) root_nodes[i] = i;
     }
+
+    for (int node_index : root_nodes) {
+        visit_node(node_index, Eigen::Matrix4d::Identity());
+    }
+
     return true;
 }
 
@@ -264,89 +579,105 @@ SubMeshResult process_submesh(
     SubMeshResult result;
     auto t = now_t();
 
-    auto o3d_mesh = std::make_shared<open3d::geometry::TriangleMesh>();
-    o3d_mesh->vertices_.resize(mesh.vertices.size());
-    for (size_t i = 0; i < mesh.vertices.size(); ++i)
-        o3d_mesh->vertices_[i] = {mesh.vertices[i][0], mesh.vertices[i][1], mesh.vertices[i][2]};
-    o3d_mesh->triangles_.resize(mesh.faces.size());
-    for (size_t i = 0; i < mesh.faces.size(); ++i)
-        o3d_mesh->triangles_[i] = {mesh.faces[i][0], mesh.faces[i][1], mesh.faces[i][2]};
-
-    auto pcd = o3d_mesh->SamplePointsUniformly(points_per_mesh);
-
-    std::vector<Triangle_3> triangles;
-    triangles.reserve(mesh.faces.size());
-    for (auto& f : mesh.faces) {
-        auto& v0 = mesh.vertices[f[0]];
-        auto& v1 = mesh.vertices[f[1]];
-        auto& v2 = mesh.vertices[f[2]];
-        triangles.push_back(Triangle_3(
-            Point_3(v0[0], v0[1], v0[2]),
-            Point_3(v1[0], v1[1], v1[2]),
-            Point_3(v2[0], v2[1], v2[2])
-        ));
+    std::vector<double> cumulative_areas;
+    cumulative_areas.reserve(mesh.faces.size());
+    double total_area = 0.0;
+    for (const auto& f : mesh.faces) {
+        const auto& v0 = mesh.vertices[f[0]];
+        const auto& v1 = mesh.vertices[f[1]];
+        const auto& v2 = mesh.vertices[f[2]];
+        Eigen::Vector3d e1(v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]);
+        Eigen::Vector3d e2(v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]);
+        double area = 0.5 * e1.cross(e2).norm();
+        total_area += std::max(area, 0.0);
+        cumulative_areas.push_back(total_area);
     }
-    Tree tree(triangles.begin(), triangles.end());
-    tree.accelerate_distance_queries();
 
-    int n = pcd->points_.size();
+    if (mesh.faces.empty() || total_area <= 0.0 || points_per_mesh <= 0) {
+        return result;
+    }
+
+    int n = points_per_mesh;
     result.points.resize(n);
     result.colors.resize(n);
 
-    int tex_idx = (mesh.texture_index >= 0 && mesh.texture_index < (int)textures.size())
-                  ? mesh.texture_index : 0;
-    const auto& tex = textures[tex_idx];
-    int tw = tex_sizes[tex_idx][0];
-    int th = tex_sizes[tex_idx][1];
-    int channels = (tw > 0 && th > 0) ? (int)tex.size() / (tw * th) : 4;
-
+    bool has_texture = mesh.texture_index >= 0 && mesh.texture_index < (int)textures.size();
+    bool has_vertex_colors = !mesh.vertex_colors.empty();
+    const std::vector<uint8_t>* tex_ptr = nullptr;
+    int tw = 0, th = 0, channels = 0;
+    if (has_texture) {
+        tex_ptr = &textures[mesh.texture_index];
+        tw = tex_sizes[mesh.texture_index][0];
+        th = tex_sizes[mesh.texture_index][1];
+        if (tw > 0 && th > 0) {
+            channels = (int)tex_ptr->size() / (tw * th);
+        }
+        if (channels < 3) has_texture = false;
+    }
     #pragma omp parallel for schedule(dynamic, 1000)
     for (int i = 0; i < n; ++i) {
-        auto& pt = pcd->points_[i];
-        Point_3 query(pt[0], pt[1], pt[2]);
-        auto closest = tree.closest_point_and_primitive(query);
-        Point_3 cp = closest.first;
-        auto tri_it = closest.second;
-        int tri_id = (int)std::distance(triangles.begin(), tri_it);
-
-        result.points[i] = {pt[0], pt[1], pt[2]};
+        std::mt19937_64 rng(static_cast<uint64_t>(idx + 1) * 1000003ULL + static_cast<uint64_t>(i));
+        std::uniform_real_distribution<double> dist01(0.0, 1.0);
+        double area_pick = dist01(rng) * total_area;
+        int tri_id = (int)(std::lower_bound(cumulative_areas.begin(), cumulative_areas.end(), area_pick) - cumulative_areas.begin());
+        tri_id = std::clamp(tri_id, 0, (int)mesh.faces.size() - 1);
 
         auto& f = mesh.faces[tri_id];
         auto& v0 = mesh.vertices[f[0]];
         auto& v1 = mesh.vertices[f[1]];
         auto& v2 = mesh.vertices[f[2]];
 
-        Eigen::Vector3d e1 = {v1[0]-v0[0], v1[1]-v0[1], v1[2]-v0[2]};
-        Eigen::Vector3d e2 = {v2[0]-v0[0], v2[1]-v0[1], v2[2]-v0[2]};
-        Eigen::Vector3d ep = {cp.x()-v0[0], cp.y()-v0[1], cp.z()-v0[2]};
-        double d11 = e1.dot(e1), d12 = e1.dot(e2), d22 = e2.dot(e2);
-        double dp1 = ep.dot(e1), dp2 = ep.dot(e2);
-        double denom = d11*d22 - d12*d12;
-        double bv = (denom > 1e-10) ? (d22*dp1 - d12*dp2) / denom : 0.0;
-        double bw = (denom > 1e-10) ? (d11*dp2 - d12*dp1) / denom : 0.0;
-        double bu = 1.0 - bv - bw;
+        double r1 = dist01(rng);
+        double r2 = dist01(rng);
+        double sqrt_r1 = std::sqrt(r1);
+        double bu = 1.0 - sqrt_r1;
+        double bv = sqrt_r1 * (1.0 - r2);
+        double bw = sqrt_r1 * r2;
 
-        auto& uv0 = mesh.uvs[f[0]];
-        auto& uv1 = mesh.uvs[f[1]];
-        auto& uv2 = mesh.uvs[f[2]];
-        double u = std::clamp(bu*uv0[0] + bv*uv1[0] + bw*uv2[0], 0.0, 1.0);
-        double v = std::clamp(bu*uv0[1] + bv*uv1[1] + bw*uv2[1], 0.0, 1.0);
-
-        int px = std::clamp((int)(u * (tw - 1)), 0, tw - 1);
-        int py = std::clamp((int)(v * (th - 1)), 0, th - 1);
-        int offset = (py * tw + px) * channels;
-        result.colors[i] = {
-            tex[offset]   / 255.0,
-            tex[offset+1] / 255.0,
-            tex[offset+2] / 255.0
+        result.points[i] = {
+            bu * v0[0] + bv * v1[0] + bw * v2[0],
+            bu * v0[1] + bv * v1[1] + bw * v2[1],
+            bu * v0[2] + bv * v1[2] + bw * v2[2]
         };
+
+        if (has_texture) {
+            auto& uv0 = mesh.uvs[f[0]];
+            auto& uv1 = mesh.uvs[f[1]];
+            auto& uv2 = mesh.uvs[f[2]];
+            double u = bu*uv0[0] + bv*uv1[0] + bw*uv2[0];
+            double v = bu*uv0[1] + bv*uv1[1] + bw*uv2[1];
+            u = apply_wrap_mode(u, mesh.wrap_s);
+            v = apply_wrap_mode(v, mesh.wrap_t);
+            const auto& tex = *tex_ptr;
+            auto sampled = sample_texture_color(tex, tw, th, channels, u, v);
+            result.colors[i] = {
+                sampled[0] * std::clamp((double)mesh.base_color[0], 0.0, 1.0),
+                sampled[1] * std::clamp((double)mesh.base_color[1], 0.0, 1.0),
+                sampled[2] * std::clamp((double)mesh.base_color[2], 0.0, 1.0)
+            };
+        } else if (has_vertex_colors) {
+            auto& c0 = mesh.vertex_colors[f[0]];
+            auto& c1 = mesh.vertex_colors[f[1]];
+            auto& c2 = mesh.vertex_colors[f[2]];
+            result.colors[i] = {
+                std::clamp(bu*c0[0] + bv*c1[0] + bw*c2[0], 0.0, 1.0),
+                std::clamp(bu*c0[1] + bv*c1[1] + bw*c2[1], 0.0, 1.0),
+                std::clamp(bu*c0[2] + bv*c1[2] + bw*c2[2], 0.0, 1.0)
+            };
+        } else {
+            result.colors[i] = {
+                (double)std::clamp(mesh.base_color[0], 0.0f, 1.0f),
+                (double)std::clamp(mesh.base_color[1], 0.0f, 1.0f),
+                (double)std::clamp(mesh.base_color[2], 0.0f, 1.0f)
+            };
+        }
     }
     return result;
 }
 
 int main(int argc, char* argv[]) {
     if (argc < 3) {
-        std::cerr << "Usage: " << argv[0] << " <input.ply> <output.las> [num_points]" << std::endl;
+        std::cerr << "Usage: " << argv[0] << " <input.glb> <output.las> [num_points]" << std::endl;
         return 1;
     }
 
