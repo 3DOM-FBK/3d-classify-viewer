@@ -221,6 +221,10 @@ __global__ void computeFeaturesKernel(
                     int start = cellStart[cellId];
                     int end   = cellEnd[cellId];
 
+                    // Empty cells keep start=-1/end=0. Skip them to avoid invalid j=-1 access.
+                    if (start < 0 || end <= start || start >= N) continue;
+                    if (end > N) end = N;
+
                     for (int j = start; j < end; j++) {
                         double qx = xyz[j * 3 + 0];
                         double qy = xyz[j * 3 + 1];
@@ -304,6 +308,9 @@ int computeFeaturesGPU(
     const GpuFeatureParams& params,
     float*        h_features)
 {
+    // Clear any stale CUDA error from previous calls in the same process.
+    (void)cudaGetLastError();
+
     int N = params.numPoints;
     if (N == 0) return 0;
 
