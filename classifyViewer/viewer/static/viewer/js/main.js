@@ -1393,6 +1393,11 @@ const ORTHO_MIN_DISTANCE = 1.0;
 const ORTHO_ZOOM_WHEEL_SENSITIVITY = 0.0015;
 const ORTHO_ZOOM_MIN = 0.01;
 const ORTHO_ZOOM_MAX = 100000;
+// Blender-like pan tuning: sensibility follows visible world scale on screen.
+const PAN_GAIN = 0.9;
+const PAN_EXPONENT = 1.35;
+const PAN_MIN_SENSIBILITY = 12;
+const PAN_MAX_SENSIBILITY = 260000;
 const orthoCameraState = {
     lastOrthoSize: null,
     lastAspect: null,
@@ -1558,15 +1563,28 @@ scene.onPointerObservable.add((pointerInfo) => {
 
 // Implementation of adaptive panning: Panning speed proportional to distance (radius)
 scene.onBeforeRenderObservable.add(() => {
-    // panningSensibility is inverse: higher value = slower panning
-    // We want visually consistent panning, so sensibility should be inversely proportional to radius
-    // Base value (e.g., 2000) divided by radius ensures speed increases with distance
-    const baseSensibility = 2000;
-    camera.panningSensibility = baseSensibility / camera.radius;
+    // Blender-like behavior: panning depends on currently visible world scale.
+    // Higher sensibility means slower pan in Babylon ArcRotateCamera.
+    const viewportHeight = Math.max(1, engine.getRenderHeight());
 
-    // Safety limits to prevent extreme values
-    if (camera.panningSensibility < 50) camera.panningSensibility = 50;
-    if (camera.panningSensibility > 10000) camera.panningSensibility = 10000;
+    let visibleWorldHeight;
+    if (camera.mode === BABYLON.Camera.ORTHOGRAPHIC_CAMERA) {
+        const top = (typeof camera.orthoTop === 'number') ? camera.orthoTop : 1;
+        const bottom = (typeof camera.orthoBottom === 'number') ? camera.orthoBottom : -1;
+        visibleWorldHeight = Math.max(1e-6, Math.abs(top - bottom));
+    } else {
+        const dist = Math.max(BABYLON.Vector3.Distance(camera.position, camera.getTarget()), 1e-4);
+        const fov = Math.max(1e-4, camera.fov || (Math.PI / 4));
+        visibleWorldHeight = Math.max(1e-6, 2 * dist * Math.tan(fov * 0.5));
+    }
+
+    const pixelsPerWorldUnit = viewportHeight / visibleWorldHeight;
+    const curved = Math.pow(Math.max(pixelsPerWorldUnit, 1e-6), PAN_EXPONENT);
+    camera.panningSensibility = BABYLON.Scalar.Clamp(
+        curved * PAN_GAIN,
+        PAN_MIN_SENSIBILITY,
+        PAN_MAX_SENSIBILITY
+    );
 
     // Keep orthographic extents and clip planes aligned with inertia-based zoom.
     syncOrthoCamera(false);
