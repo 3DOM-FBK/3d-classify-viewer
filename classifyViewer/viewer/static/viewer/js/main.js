@@ -1409,11 +1409,14 @@ const orthoCameraState = {
 
 function _computePointCloudBounds() {
     const root = sceneObjects.currentPointCloud;
-    if (!root) return null;
+    const loader = scene.potree2Loader;
+    if (!root && !loader?.loadedNodes) return null;
 
-    const meshes = root instanceof BABYLON.AbstractMesh
-        ? [root]
-        : (typeof root.getChildMeshes === 'function' ? root.getChildMeshes() : []);
+    const meshes = (loader?.loadedNodes && loader.loadedNodes.size > 0)
+        ? [...loader.loadedNodes.values()]
+        : (root instanceof BABYLON.AbstractMesh
+            ? [root]
+            : (typeof root?.getChildMeshes === 'function' ? root.getChildMeshes() : []));
 
     if (!meshes || meshes.length === 0) return null;
 
@@ -1422,12 +1425,17 @@ function _computePointCloudBounds() {
     let found = false;
 
     meshes.forEach((mesh) => {
+        if (!mesh || mesh.isDisposed?.()) return;
+        if (!mesh.isVisible || !mesh.isEnabled?.()) return;
+
         const bb = mesh?.getBoundingInfo?.()?.boundingBox;
         if (!bb) return;
 
         const mn = bb.minimumWorld;
         const mx = bb.maximumWorld;
         if (!mn || !mx) return;
+        if (!Number.isFinite(mn.x) || !Number.isFinite(mn.y) || !Number.isFinite(mn.z)) return;
+        if (!Number.isFinite(mx.x) || !Number.isFinite(mx.y) || !Number.isFinite(mx.z)) return;
 
         if (mn.x < minX) minX = mn.x;
         if (mn.y < minY) minY = mn.y;
@@ -1438,7 +1446,12 @@ function _computePointCloudBounds() {
         found = true;
     });
 
-    if (!found) return null;
+    if (!found) {
+        if (loader?.rootTransform) {
+            return { center: loader.rootTransform.getAbsolutePosition().clone(), radius: 0 };
+        }
+        return null;
+    }
 
     const center = new BABYLON.Vector3(
         (minX + maxX) * 0.5,
@@ -2552,6 +2565,59 @@ window.addEventListener('keydown', (e) => {
     }
 });
 
+function _isTypingTarget(target) {
+    if (!target) return false;
+    const tagName = target.tagName;
+    return tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT' || target.isContentEditable;
+}
+
+function _triggerToolShortcut(toolId) {
+    const btn = document.getElementById(toolId);
+    if (btn) btn.click();
+}
+
+window.addEventListener('keydown', (e) => {
+    if (_isTypingTarget(e.target)) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+    switch (e.code) {
+        case 'Digit1':
+            e.preventDefault();
+            setCameraView(0, -Math.PI / 2);
+            return;
+        case 'Digit2':
+            e.preventDefault();
+            setCameraView(0, Math.PI / 2);
+            return;
+        case 'Digit3':
+            e.preventDefault();
+            setCameraView(Math.PI / 2, Math.PI / 2);
+            return;
+        case 'Digit4':
+            e.preventDefault();
+            setCameraView(Math.PI, Math.PI / 2);
+            return;
+        case 'KeyF':
+            e.preventDefault();
+            _triggerToolShortcut('tool-8');
+            return;
+        case 'KeyT':
+            e.preventDefault();
+            _triggerToolShortcut('tool-6');
+            return;
+        case 'KeyR':
+            e.preventDefault();
+            _triggerToolShortcut('tool-7');
+            return;
+        case 'KeyC':
+            e.preventDefault();
+            _triggerToolShortcut('tool-5');
+            return;
+        default:
+            return;
+    }
+});
+
 // Active only when a selection tool (rect, lasso, polygon) is active:
 // I → Invert Selection
 // Delete → move selected points to internal hidden deleted segment
@@ -2560,7 +2626,7 @@ window.addEventListener('keydown', (e) => {
 // capture: true ensures we intercept before BabylonJS can consume the event.
 function handleSelectionKeydown(e) {
     // Ignore shortcuts when typing inside inputs/textareas
-    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    if (_isTypingTarget(e.target)) return;
 
     // Only active when a selection tool is active
     if (activeTool !== "tool-2" && activeTool !== "tool-3" && activeTool !== "tool-4") return;

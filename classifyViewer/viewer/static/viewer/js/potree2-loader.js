@@ -1915,8 +1915,10 @@ export class Potree2Loader {
             }
             total += assigned;
 
-            if (anyAssigned) {
+            if (assigned > 0) {
                 mesh.setVerticesData(BABYLON.VertexBuffer.PositionKind, positions);
+                if (mesh.refreshBoundingInfo) mesh.refreshBoundingInfo();
+                mesh.computeWorldMatrix(true);
             }
 
             // Restore colors (remove red highlight), keep classification colors
@@ -1974,7 +1976,8 @@ export class Potree2Loader {
         // A node should be visible as long as at least one of its points is visible
         // (i.e. mainCloudVisible OR any cut segment is visible).
         const anySegmentVisible = this.mainCloudVisible || this.cutHistory.some(e => e.visible);
-            this.rootTransform.setEnabled(anySegmentVisible);
+        // Keep root transform enabled: segment visibility is handled at point level.
+        this.rootTransform.setEnabled(true);
 
         this.loadedNodes.forEach((mesh) => {
             const segmentIds = mesh.metadata?.segmentIds;
@@ -2003,7 +2006,11 @@ export class Potree2Loader {
                 modified = true;
             }
 
-            if (modified) mesh.setVerticesData(BABYLON.VertexBuffer.PositionKind, positions);
+            if (modified) {
+                mesh.setVerticesData(BABYLON.VertexBuffer.PositionKind, positions);
+                if (mesh.refreshBoundingInfo) mesh.refreshBoundingInfo();
+                mesh.computeWorldMatrix(true);
+            }
 
             // Keep mesh.isVisible in sync: hide entirely only when nothing is visible,
             // show immediately when at least one segment becomes visible again.
@@ -2056,7 +2063,11 @@ export class Potree2Loader {
             modified = true;
         }
 
-        if (modified) mesh.setVerticesData(BABYLON.VertexBuffer.PositionKind, positions);
+        if (modified) {
+            mesh.setVerticesData(BABYLON.VertexBuffer.PositionKind, positions);
+            if (mesh.refreshBoundingInfo) mesh.refreshBoundingInfo();
+            mesh.computeWorldMatrix(true);
+        }
     }
 
     /**
