@@ -146,6 +146,7 @@ def train_model(X_train, Y_train, n_jobs, use_gpu=False,
         return model, fi
    
     else:
+        print(f"GPU is NOT AVAILABLE, so use scikit-learn for training.")
         # Fallback CPU (scikit-learn)
         model = RandomForestClassifier(
             n_estimators=n_estimators, max_depth=max_depth,
