@@ -852,8 +852,17 @@ let toolBtnRect = null;
 let toolBtnLasso = null;
 let toolBtnPolygon = null;
 let toolBtnCut = null;
+let toolBtnMove = null;
+let toolBtnRotate = null;
 let toolBtnMeasure = null;
 let toolBtnArea = null;
+// Move gizmo state
+let moveGizmoManager = null;
+let moveAnchorMesh = null;
+// Rotate gizmo state
+let rotateGizmoManager = null;
+let rotateAnchorMesh = null;
+let _rotateShiftSnap = false;
 
 // --- Right Toolbar Buttons Logic ---
 function initToolbar() {
@@ -869,7 +878,9 @@ function initToolbar() {
     const tool3Img = `<img src="${iconBase}lasso-select.png" alt="Lasso Select">`;
     const tool4Img = `<img src="${iconBase}poly_select.png" alt="Polygon Select">`;
     const tool5Img = `<img src="${iconBase}scissor.png" alt="Scissor">`;
-    const tool6Img = `<img src="${iconBase}frame-to-pcd.png" alt="Frame to PCD">`;
+    const tool6Img = `<img src="${iconBase}move.png" alt="Move">`;
+    const tool7Img = `<img src="${iconBase}rotate.png" alt="Rotate">`;
+    const tool8Img = `<img src="${iconBase}frame-to-pcd.png" alt="Frame to PCD">`;
 
     createToolButton("tool-1", tool1Img, "Default mode", rightToolbar, () => {
         clearSelection(scene);
@@ -878,32 +889,44 @@ function initToolbar() {
     toolBtnLasso = createToolButton("tool-3", tool3Img, "Lasso selection", rightToolbar);
     toolBtnPolygon = createToolButton("tool-4", tool4Img, "Polygon selection", rightToolbar);
     toolBtnCut = createToolButton("tool-5", tool5Img, "Cut mode", rightToolbar);
-    createToolButton("tool-6", tool6Img, "Frame to PCD", rightToolbar);
-    const tool7Img = `<img src="${iconBase}measure.png" alt="Measure">`;
-    toolBtnMeasure = createToolButton("tool-7", tool7Img, "Measure distance", rightToolbar);
-    const tool8Img = `<img src="${iconBase}measure-area.png" alt="Measure Area">`;
-    toolBtnArea = createToolButton("tool-8", tool8Img, "Measure area", rightToolbar);
+    toolBtnMove = createToolButton("tool-6", tool6Img, "Move point cloud", rightToolbar);
+    toolBtnRotate = createToolButton("tool-7", tool7Img, "Rotate point cloud", rightToolbar);
+    createToolButton("tool-8", tool8Img, "Frame to PCD", rightToolbar);
+    const tool9Img = `<img src="${iconBase}measure.png" alt="Measure">`;
+    toolBtnMeasure = createToolButton("tool-9", tool9Img, "Measure distance", rightToolbar);
+    const tool10Img = `<img src="${iconBase}measure-area.png" alt="Measure Area">`;
+    toolBtnArea = createToolButton("tool-10", tool10Img, "Measure area", rightToolbar);
 
     // Initial active button
     document.getElementById("tool-1").classList.add("active");
 
     // Tool switching logic
-    [1, 2, 3, 4, 5, 7, 8].forEach(i => {
+    [1, 2, 3, 4, 5, 6, 7, 9, 10].forEach(i => {
         const btn = document.getElementById(`tool-${i}`);
         btn.addEventListener('click', () => {
             // Remove active from all stateful tools
             document.querySelectorAll('.tool-btn').forEach(b => {
-                if (b.id !== "tool-6") b.classList.remove('active');
+                if (b.id !== "tool-8") b.classList.remove('active');
             });
             // Add to current
             btn.classList.add('active');
             activeTool = `tool-${i}`;
 
             // Disable camera control for drawing tools (rect, lasso, polygon) and measure
-            if (activeTool === "tool-2" || activeTool === "tool-3" || activeTool === "tool-4" || activeTool === "tool-7" || activeTool === "tool-8") {
+            if (activeTool === "tool-2" || activeTool === "tool-3" || activeTool === "tool-4" || activeTool === "tool-9" || activeTool === "tool-10") {
                 camera.detachControl(canvas);
             } else {
                 camera.attachControl(canvas, true);
+            }
+
+            // Dispose move gizmo when leaving tool-6
+            if (activeTool !== "tool-6") {
+                disposeMoveTool();
+            }
+
+            // Dispose rotate gizmo when leaving tool-7
+            if (activeTool !== "tool-7") {
+                disposeRotateTool();
             }
 
             if (activeTool !== "tool-4") {
@@ -911,12 +934,14 @@ function initToolbar() {
             }
             // Hide measure guides when switching away
             const measureGroup = document.getElementById('guide-measure');
-            if (measureGroup && activeTool !== "tool-7") measureGroup.style.display = "none";
+            if (measureGroup && activeTool !== "tool-9") measureGroup.style.display = "none";
             const areaGroup = document.getElementById('guide-area');
-            if (areaGroup && activeTool !== "tool-8") areaGroup.style.display = "none";
+            if (areaGroup && activeTool !== "tool-10") areaGroup.style.display = "none";
+            const rotateGroup = document.getElementById('guide-rotate');
+            if (rotateGroup && activeTool !== "tool-7") rotateGroup.style.display = "none";
             // Reset measure/area state when switching away
-            if (activeTool !== "tool-7") clearMeasure();
-            if (activeTool !== "tool-8") clearArea();
+            if (activeTool !== "tool-9") clearMeasure();
+            if (activeTool !== "tool-10") clearArea();
 
             // Manage command guide visibility and content
             const guide = document.getElementById('command-guide');
@@ -936,11 +961,17 @@ function initToolbar() {
                     guide.classList.add('visible');
                     navGroup.style.display = "none";
                     selectionGroup.style.display = "none";
+                    const rotateGroup = document.getElementById('guide-rotate');
+                    if (rotateGroup) rotateGroup.style.display = "block";
+                } else if (activeTool === "tool-9") {
+                    guide.classList.add('visible');
+                    navGroup.style.display = "none";
+                    selectionGroup.style.display = "none";
                     const measureGroup = document.getElementById('guide-measure');
                     if (measureGroup) measureGroup.style.display = "block";
                     const areaGroupHide = document.getElementById('guide-area');
                     if (areaGroupHide) areaGroupHide.style.display = "none";
-                } else if (activeTool === "tool-8") {
+                } else if (activeTool === "tool-10") {
                     guide.classList.add('visible');
                     navGroup.style.display = "none";
                     selectionGroup.style.display = "none";
@@ -949,7 +980,7 @@ function initToolbar() {
                     const areaGroup = document.getElementById('guide-area');
                     if (areaGroup) areaGroup.style.display = "block";
                 } else {
-                    // tool-5 (Cut), tool-6 (Frame)
+                    // tool-5 (Cut), tool-6 (Move), tool-8 (Frame)
                     guide.classList.remove('visible');
                 }
             }
@@ -1286,47 +1317,7 @@ const gridToggle = createCheckbox("Show Grid", true, viewportContent);
 const lightModeToggle = createCheckbox("Light Background", false, viewportContent);
 const pointSizeSlider = createSlider("Point Size", 0.1, 3.0, 1.0, 0.05, viewportContent);
 
-const rotationControls = document.createElement('div');
-rotationControls.classList.add('viewport-rotation-controls');
-
-const rotationLabel = document.createElement('div');
-rotationLabel.classList.add('property-label', 'viewport-rotation-title');
-rotationLabel.textContent = 'Rotate Point Cloud';
-rotationControls.appendChild(rotationLabel);
-
-const createRotationRow = (axisName) => {
-    const row = document.createElement('div');
-    row.classList.add('viewport-rotation-row');
-
-    const label = document.createElement('span');
-    label.classList.add('property-label', 'viewport-rotation-axis');
-    label.textContent = axisName.toUpperCase();
-
-    const minusButton = document.createElement('button');
-    minusButton.type = 'button';
-    minusButton.classList.add('viewport-rotation-button');
-    minusButton.textContent = '-90°';
-
-    const plusButton = document.createElement('button');
-    plusButton.type = 'button';
-    plusButton.classList.add('viewport-rotation-button');
-    plusButton.textContent = '+90°';
-
-    row.appendChild(label);
-    row.appendChild(minusButton);
-    row.appendChild(plusButton);
-    rotationControls.appendChild(row);
-
-    return { minusButton, plusButton };
-};
-
-const rotationButtons = {
-    x: createRotationRow('x'),
-    y: createRotationRow('y'),
-    z: createRotationRow('z')
-};
-
-viewportContent.appendChild(rotationControls);
+// Rotation controls moved to toolbar gizmo tool (tool-7).
 
 // --- Resizing Logic ---
 let isResizing = false;
@@ -1735,7 +1726,7 @@ function updateLassoPath() {
 }
 
 // ---------------------------------------------------------------------------
-// MEASURE TOOL (tool-7) — click two points, show distance
+// MEASURE TOOL (tool-9) — click two points, show distance
 // ---------------------------------------------------------------------------
 let measurePoint1 = null;   // BABYLON.Vector3 | null
 let measurePoint2 = null;   // BABYLON.Vector3 | null
@@ -1967,7 +1958,7 @@ function pickClosestPointInCloud(screenX, screenY) {
 
 // Pointer observer for the measure tool
 scene.onPointerObservable.add((pointerInfo) => {
-    if (activeTool !== 'tool-7') return;
+    if (activeTool !== 'tool-9') return;
     if (pointerInfo.type !== BABYLON.PointerEventTypes.POINTERDOWN) return;
     if (pointerInfo.event.button !== 0) return;
 
@@ -2015,7 +2006,7 @@ scene.onBeforeRenderObservable.add(() => {
 
 
 // ---------------------------------------------------------------------------
-// AREA TOOL (tool-8) — click N points, double-click to close, shows area
+// AREA TOOL (tool-10) — click N points, double-click to close, shows area
 // ---------------------------------------------------------------------------
 let areaPoints = [];    // BABYLON.Vector3[]
 let areaMarkers = [];    // TransformNode[] (one per vertex)
@@ -2154,7 +2145,7 @@ function closeAreaPolygon() {
 let _areaSingleClickTimer = null;
 
 scene.onPointerObservable.add((pointerInfo) => {
-    if (activeTool !== 'tool-8') return;
+    if (activeTool !== 'tool-10') return;
 
     const sx = scene.pointerX;
     const sy = scene.pointerY;
@@ -2414,22 +2405,6 @@ pointSizeSlider.addEventListener('input', (e) => {
     }
 });
 
-const rotatePointCloud = (axisName, stepDegrees) => {
-    const loader = scene.potree2Loader;
-    if (loader && typeof loader.rotateAroundBoundingBoxCenter === 'function') {
-        const rotated = loader.rotateAroundBoundingBoxCenter(axisName, stepDegrees);
-        if (!rotated) console.warn('Point cloud rotation failed.');
-        return;
-    }
-
-    console.warn('Rotation is available only when a point cloud is loaded.');
-};
-
-Object.entries(rotationButtons).forEach(([axisName, buttons]) => {
-    buttons.minusButton.addEventListener('click', () => rotatePointCloud(axisName, -90));
-    buttons.plusButton.addEventListener('click', () => rotatePointCloud(axisName, 90));
-});
-
 // --- Scene Info Bar Logic ---
 // const mouseCoordsDisplay = document.getElementById('mouse-coords');
 const pointCountDisplay = document.getElementById('point-count');
@@ -2552,9 +2527,9 @@ window.addEventListener('contextmenu', (e) => {
 // --- Keyboard Shortcuts ---
 // Esc cancels a measure in progress
 window.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && activeTool === 'tool-7') {
+    if (e.key === 'Escape' && activeTool === 'tool-9') {
         clearMeasure();
-    } else if (e.key === 'Escape' && activeTool === 'tool-8') {
+    } else if (e.key === 'Escape' && activeTool === 'tool-10') {
         clearArea();
     }
 });
@@ -2673,13 +2648,32 @@ initToolbar();
     guide.appendChild(g);
 })();
 
+// Inject guide-rotate group into the command-guide (hidden by default)
+(function () {
+    const guide = document.getElementById('command-guide');
+    if (!guide) return;
+    const g = document.createElement('div');
+    g.id = 'guide-rotate';
+    g.style.display = 'none';
+    g.innerHTML = `
+        <div class="command-item">
+            <div class="mouse-icon left"></div>
+            <span style="font-size:0.75rem;color:var(--text-primary)">Drag arc — rotate freely</span>
+        </div>
+        <div class="command-item">
+            <div class="command-key-container"><span class="command-key">Shift</span></div>
+            <span style="font-size:0.75rem;color:var(--text-primary)">Hold — snap to 10°</span>
+        </div>`;
+    guide.appendChild(g);
+})();
+
 // --- Tool Actions ---
 
-    // tool-5: Cut mode (scissor), tool-6: Frame to PCD
+    // tool-5: Cut mode, tool-6: Move, tool-7: Rotate, tool-8: Frame to PCD
 // Qui gestiamo entrambi:
 
-// tool-6: Frame to PCD (Instant Action)
-const frameToPCDButton = document.getElementById("tool-6");
+// tool-8: Frame to PCD (Instant Action)
+const frameToPCDButton = document.getElementById("tool-8");
 if (frameToPCDButton) {
     frameToPCDButton.addEventListener("click", () => {
         if (sceneObjects.currentPointCloud) {
@@ -2704,6 +2698,193 @@ if (frameToPCDButton) {
 let cutSegmentCounter = 1;
 
 // tool-5: Cut Mode — promuove la selezione corrente in un nuovo segmento
+// ---------------------------------------------------------------------------
+// MOVE TOOL (tool-6) — translate the point cloud with a position gizmo
+// ---------------------------------------------------------------------------
+function disposeMoveTool() {
+    if (moveGizmoManager) {
+        moveGizmoManager.dispose();
+        moveGizmoManager = null;
+    }
+    if (moveAnchorMesh) {
+        moveAnchorMesh.dispose();
+        moveAnchorMesh = null;
+    }
+}
+
+function activateMoveTool() {
+    const loader = scene.potree2Loader;
+    if (!loader || !loader.rootTransform) {
+        console.warn('No point cloud loaded — cannot activate move tool.');
+        return;
+    }
+
+    disposeMoveTool();
+
+    // Compute world-space bounding box centre from loaded mesh nodes
+    const bounds = _computePointCloudBounds();
+    const worldCenter = bounds
+        ? bounds.center
+        : loader.rootTransform.getAbsolutePosition().clone();
+
+    moveAnchorMesh = BABYLON.MeshBuilder.CreateSphere(
+        '__moveGizmoAnchor',
+        { diameter: 0.001 },
+        scene
+    );
+    moveAnchorMesh.isPickable = false;
+    moveAnchorMesh.isVisible = false;
+    moveAnchorMesh.position.copyFrom(worldCenter);
+
+    moveGizmoManager = new BABYLON.GizmoManager(scene);
+    moveGizmoManager.positionGizmoEnabled = true;
+    moveGizmoManager.rotationGizmoEnabled = false;
+    moveGizmoManager.scaleGizmoEnabled = false;
+    moveGizmoManager.boundingBoxGizmoEnabled = false;
+    moveGizmoManager.usePointerToAttachGizmos = false;
+    moveGizmoManager.attachToMesh(moveAnchorMesh);
+
+    // Apply drag delta to rootTransform
+    let lastAnchorPos = moveAnchorMesh.position.clone();
+    function onDrag() {
+        const delta = moveAnchorMesh.position.subtract(lastAnchorPos);
+        loader.rootTransform.position.addInPlace(delta);
+        lastAnchorPos.copyFrom(moveAnchorMesh.position);
+    }
+
+    const pg = moveGizmoManager.gizmos.positionGizmo;
+    pg.xGizmo.dragBehavior.onDragObservable.add(onDrag);
+    pg.yGizmo.dragBehavior.onDragObservable.add(onDrag);
+    pg.zGizmo.dragBehavior.onDragObservable.add(onDrag);
+}
+
+const moveModeButton = document.getElementById('tool-6');
+if (moveModeButton) {
+    moveModeButton.addEventListener('click', () => {
+        if (sceneObjects.currentPointCloud) {
+            activateMoveTool();
+        } else {
+            console.warn('No point cloud loaded.');
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// ROTATE TOOL (tool-7) — rotate the point cloud with a rotation gizmo
+// SHIFT key held → snap to 10° increments
+// ---------------------------------------------------------------------------
+function disposeRotateTool() {
+    const loader = scene.potree2Loader;
+    if (loader?.rootTransform && rotateAnchorMesh && loader.rootTransform.parent === rotateAnchorMesh) {
+        // Bake world transform back onto root before detaching pivot parent.
+        const world = loader.rootTransform.getWorldMatrix();
+        const scale = new BABYLON.Vector3();
+        const rot = new BABYLON.Quaternion();
+        const pos = new BABYLON.Vector3();
+        world.decompose(scale, rot, pos);
+
+        loader.rootTransform.parent = null;
+        loader.rootTransform.position.copyFrom(pos);
+        loader.rootTransform.scaling.copyFrom(scale);
+        loader.rootTransform.rotationQuaternion = rot;
+        loader.rootTransform.rotation.setAll(0);
+        loader.rootTransform.computeWorldMatrix(true);
+    }
+
+    if (rotateGizmoManager) {
+        rotateGizmoManager.dispose();
+        rotateGizmoManager = null;
+    }
+    if (rotateAnchorMesh) {
+        rotateAnchorMesh.dispose();
+        rotateAnchorMesh = null;
+    }
+    _rotateShiftSnap = false;
+}
+
+function activateRotateTool() {
+    const loader = scene.potree2Loader;
+    if (!loader || !loader.rootTransform) {
+        console.warn('No point cloud loaded — cannot activate rotate tool.');
+        return;
+    }
+
+    disposeRotateTool();
+
+    // Anchor at visual bounding-box world centre
+    const bounds = _computePointCloudBounds();
+    const worldCenter = bounds
+        ? bounds.center
+        : loader.rootTransform.getAbsolutePosition().clone();
+
+    rotateAnchorMesh = BABYLON.MeshBuilder.CreateSphere(
+        '__rotateGizmoAnchor',
+        { diameter: 0.001 },
+        scene
+    );
+    rotateAnchorMesh.isPickable = false;
+    rotateAnchorMesh.isVisible = false;
+    rotateAnchorMesh.position.copyFrom(worldCenter);
+    rotateAnchorMesh.rotationQuaternion = BABYLON.Quaternion.Identity();
+
+    // Parent root to pivot anchor so gizmo rotation directly rotates the cloud.
+    const rt = loader.rootTransform;
+    const rootWorldPos = rt.getAbsolutePosition();
+    let rootWorldRot = rt.rotationQuaternion ? rt.rotationQuaternion.clone() : BABYLON.Quaternion.FromEulerAngles(rt.rotation.x, rt.rotation.y, rt.rotation.z);
+    rootWorldRot.normalize();
+    rt.parent = rotateAnchorMesh;
+    rt.position.copyFrom(rootWorldPos.subtract(worldCenter));
+    rt.rotationQuaternion = rootWorldRot;
+    rt.rotation.setAll(0);
+    rt.computeWorldMatrix(true);
+
+    rotateGizmoManager = new BABYLON.GizmoManager(scene);
+    rotateGizmoManager.rotationGizmoEnabled = true;
+    rotateGizmoManager.positionGizmoEnabled = false;
+    rotateGizmoManager.scaleGizmoEnabled = false;
+    rotateGizmoManager.boundingBoxGizmoEnabled = false;
+    rotateGizmoManager.usePointerToAttachGizmos = false;
+    rotateGizmoManager.attachToMesh(rotateAnchorMesh);
+
+    const rg = rotateGizmoManager.gizmos.rotationGizmo;
+    const snap = _rotateShiftSnap ? BABYLON.Tools.ToRadians(10) : 0;
+    if (rg?.xGizmo) rg.xGizmo.snapDistance = snap;
+    if (rg?.yGizmo) rg.yGizmo.snapDistance = snap;
+    if (rg?.zGizmo) rg.zGizmo.snapDistance = snap;
+}
+
+const rotateModeButton = document.getElementById('tool-7');
+if (rotateModeButton) {
+    rotateModeButton.addEventListener('click', () => {
+        if (sceneObjects.currentPointCloud) {
+            activateRotateTool();
+        } else {
+            console.warn('No point cloud loaded.');
+        }
+    });
+}
+
+// SHIFT key toggles 10° snap for rotate tool
+window.addEventListener('keydown', (e) => {
+    if (e.key === 'Shift' && activeTool === 'tool-7') {
+        _rotateShiftSnap = true;
+        const rg = rotateGizmoManager?.gizmos?.rotationGizmo;
+        const snap = BABYLON.Tools.ToRadians(10);
+        if (rg?.xGizmo) rg.xGizmo.snapDistance = snap;
+        if (rg?.yGizmo) rg.yGizmo.snapDistance = snap;
+        if (rg?.zGizmo) rg.zGizmo.snapDistance = snap;
+    }
+});
+window.addEventListener('keyup', (e) => {
+    if (e.key === 'Shift') {
+        _rotateShiftSnap = false;
+        const rg = rotateGizmoManager?.gizmos?.rotationGizmo;
+        if (rg?.xGizmo) rg.xGizmo.snapDistance = 0;
+        if (rg?.yGizmo) rg.yGizmo.snapDistance = 0;
+        if (rg?.zGizmo) rg.zGizmo.snapDistance = 0;
+    }
+});
+
 const cutModeButton = document.getElementById("tool-5");
 if (cutModeButton) {
     cutModeButton.addEventListener("click", () => {
@@ -2827,9 +3008,11 @@ function setLayoutMode(mode) {
     if (toolBtnLasso) toolBtnLasso.style.display = isClassify ? 'none' : '';
     if (toolBtnPolygon) toolBtnPolygon.style.display = isClassify ? 'none' : '';
     if (toolBtnCut) toolBtnCut.style.display = isClassify ? 'none' : '';
+    if (toolBtnMove) toolBtnMove.style.display = isClassify ? 'none' : '';
+    if (toolBtnRotate) toolBtnRotate.style.display = isClassify ? 'none' : '';
 
     // If the active tool is one of the hidden ones, snap back to tool-1
-    if (isClassify && (activeTool === 'tool-2' || activeTool === 'tool-3' || activeTool === 'tool-4' || activeTool === 'tool-5')) {
+    if (isClassify && (activeTool === 'tool-2' || activeTool === 'tool-3' || activeTool === 'tool-4' || activeTool === 'tool-5' || activeTool === 'tool-6' || activeTool === 'tool-7')) {
         const defaultBtn = document.getElementById('tool-1');
         if (defaultBtn) defaultBtn.click();
     }
