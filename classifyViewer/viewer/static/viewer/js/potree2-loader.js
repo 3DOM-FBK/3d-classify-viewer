@@ -263,6 +263,10 @@ export class Potree2Loader {
 
         await this._loadInitialNodes();
 
+        // Fix LAS ↔ BabylonJS coordinate system mismatch: negate X scale to remove mirror effect
+        this.rootTransform.scaling.x = -1;
+        this.rootTransform.computeWorldMatrix(true);
+
         return this.rootTransform;
     }
 
