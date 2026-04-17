@@ -63,11 +63,11 @@ void write_extra_bytes_record(std::ofstream& f, const char* name, const char* de
     write_str(f, description, 32);
 }
 
-// Per POINT_ID: tipo 6 = uint32
+// Per POINT_ID: tipo 5 = uint32 (LAS Extra Bytes standard)
 void write_extra_bytes_record_uint32(std::ofstream& f, const char* name, const char* description) {
     write_val<uint8_t>(f, 0);
     write_val<uint8_t>(f, 0);
-    write_val<uint8_t>(f, 6);   // uint32
+    write_val<uint8_t>(f, 5);   // uint32
     write_val<uint8_t>(f, 0);
     write_str(f, name, 32);
     for (int i = 0; i < 4;  i++) write_val<uint8_t>(f, 0);
@@ -701,13 +701,64 @@ int main(int argc, char* argv[]) {
         tex_sizes.push_back({1, 1});
     }
 
-    int points_per_mesh = num_points / (int)meshes.size();
+    // Distribute samples proportionally to submesh area (only non-empty meshes).
+    // This avoids severe sampling bias and preserves the exact requested count.
     int n_meshes = (int)meshes.size();
-    std::vector<SubMeshResult> results(n_meshes);
+    std::vector<double> mesh_areas(n_meshes, 0.0);
+    double total_area = 0.0;
+    for (int i = 0; i < n_meshes; ++i) {
+        const auto& m = meshes[i];
+        double a_sum = 0.0;
+        for (const auto& f : m.faces) {
+            const auto& v0 = m.vertices[f[0]];
+            const auto& v1 = m.vertices[f[1]];
+            const auto& v2 = m.vertices[f[2]];
+            Eigen::Vector3d e1(v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]);
+            Eigen::Vector3d e2(v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]);
+            a_sum += std::max(0.0, 0.5 * e1.cross(e2).norm());
+        }
+        mesh_areas[i] = a_sum;
+        total_area += a_sum;
+    }
 
-    #pragma omp parallel for num_threads(n_meshes)
-    for (int i = 0; i < n_meshes; ++i)
-        results[i] = process_submesh(i, meshes[i], points_per_mesh, textures, tex_sizes);
+    if (total_area <= 0.0) {
+        std::cerr << "No valid mesh area found for sampling." << std::endl;
+        return 1;
+    }
+
+    std::vector<int> points_for_mesh(n_meshes, 0);
+    std::vector<std::pair<double, int>> remainders;
+    remainders.reserve(n_meshes);
+    int assigned = 0;
+    for (int i = 0; i < n_meshes; ++i) {
+        if (mesh_areas[i] <= 0.0) continue;
+        double exact = (mesh_areas[i] / total_area) * (double)num_points;
+        int base = (int)std::floor(exact);
+        points_for_mesh[i] = base;
+        assigned += base;
+        remainders.push_back({exact - base, i});
+    }
+
+    int missing = std::max(0, num_points - assigned);
+    std::sort(remainders.begin(), remainders.end(),
+        [](const auto& a, const auto& b) { return a.first > b.first; });
+    for (int k = 0; k < missing && k < (int)remainders.size(); ++k) {
+        points_for_mesh[remainders[k].second]++;
+    }
+
+    int total_assigned = 0;
+    for (int v : points_for_mesh) total_assigned += v;
+    std::cout << "Sampling target: " << num_points
+              << " points (assigned: " << total_assigned << ")" << std::endl;
+
+    std::vector<SubMeshResult> results(n_meshes);
+    int omp_threads = std::max(1, std::min(omp_get_max_threads(), n_meshes));
+    #pragma omp parallel for num_threads(omp_threads)
+    for (int i = 0; i < n_meshes; ++i) {
+        if (points_for_mesh[i] > 0) {
+            results[i] = process_submesh(i, meshes[i], points_for_mesh[i], textures, tex_sizes);
+        }
+    }
 
     std::cout << "Merging submeshes into final point cloud" << std::endl;
     std::vector<std::array<double,3>> all_points, all_colors;
