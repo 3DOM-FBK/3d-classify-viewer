@@ -1561,10 +1561,12 @@ export function showDownloadModal() {
                 const addCandidate = (modelName) => {
                     if (!modelName) return;
                     const relPath = `viewer/static/viewer/data/working/${modelName}/predicted.las`;
+                    const publicUrl = `/static/viewer/data/working/${modelName}/predicted.las`;
                     if (seen.has(relPath)) return;
                     seen.add(relPath);
                     candidates.push({
                         path: relPath,
+                        publicUrl,
                         label: 'predicted.las',
                         modelName,
                     });
@@ -1592,7 +1594,7 @@ export function showDownloadModal() {
                 const availableFiles = [];
                 for (const candidate of candidates) {
                     try {
-                        const headRes = await fetch(`/${candidate.path}`, { method: 'HEAD' });
+                        const headRes = await fetch(candidate.publicUrl, { method: 'HEAD' });
                         if (headRes.ok) availableFiles.push(candidate);
                     } catch (_) {
                         // Ignore missing/unreachable candidate files.
