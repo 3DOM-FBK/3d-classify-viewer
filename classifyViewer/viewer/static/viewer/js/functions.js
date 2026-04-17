@@ -1785,6 +1785,8 @@ export function showLoadModal() {
 
     let subToggle = null;
     let voxelInput = null;
+    let subContainerEl = null;
+    let subSettingsEl = null;
 
     createModal(
         "Load Data",
@@ -1822,6 +1824,15 @@ export function showLoadModal() {
                     if (meshPointsRow) {
                         meshPointsRow.style.display = ext === 'glb' ? "flex" : "none";
                     }
+                    // For GLB, subsampling is not applicable (GLB has mesh-point control).
+                    if (subContainerEl && subSettingsEl && subToggle) {
+                        const isGlb = ext === 'glb';
+                        subContainerEl.style.display = isGlb ? 'none' : '';
+                        if (isGlb) {
+                            subToggle.checked = false;
+                            subSettingsEl.classList.remove('visible');
+                        }
+                    }
                 }
             };
 
@@ -1846,9 +1857,11 @@ export function showLoadModal() {
 
             const subContainer = document.createElement('div');
             subToggle = createSimpleCheckbox("Enable Subsampling", false, subContainer);
+            subContainerEl = subContainer;
 
             const subSettings = document.createElement('div');
             subSettings.classList.add('expandable-content');
+            subSettingsEl = subSettings;
 
             // Add settings to subSettings
             // Voxel Size Slider
@@ -2062,13 +2075,37 @@ export function showLoadModal() {
                     const extension = filename.split('.').pop().toLowerCase();
                     const inputPath = `viewer/static/viewer/data/working/${filename}`;
                     let lasPath = `viewer/static/viewer/data/working/features.las`;
+                    const subsampleEnabled = Boolean(subToggle?.checked) && extension !== 'glb';
+                    const rawVoxel = parseFloat(voxelInput?.value || '0.05');
+                    const voxelSize = Number.isFinite(rawVoxel) && rawVoxel > 0 ? rawVoxel : 0.05;
 
                     if (extension === 'ply') {
+                        let plyInputPath = inputPath;
+                        if (subsampleEnabled) {
+                            console.log(`🔧 Step 3.1: Subsampling PLY (voxel ${voxelSize} m)...`);
+                            const plySubsamplePath = `viewer/static/viewer/data/working/features.ply`;
+                            const subResponse = await fetch('/subsample_pc/', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
+                                body: JSON.stringify({
+                                    file_path: inputPath,
+                                    out_path: plySubsamplePath,
+                                    voxel_size: voxelSize,
+                                })
+                            });
+                            if (!subResponse.ok) {
+                                const errData = await subResponse.json().catch(() => ({}));
+                                throw new Error(errData.message || errData.error || 'PLY subsampling failed');
+                            }
+                            plyInputPath = plySubsamplePath;
+                            console.log('✅ Step 3.1: PLY subsampling completed');
+                        }
+
                         console.log("🔄 Step 3: Converting PLY to LAS...");
                         const plyResponse = await fetch('/ply2las/', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
-                            body: JSON.stringify({ file_path: inputPath, out_path: lasPath })
+                            body: JSON.stringify({ file_path: plyInputPath, out_path: lasPath })
                         });
                         if (!plyResponse.ok) {
                             const errData = await plyResponse.json().catch(() => ({}));
@@ -2090,8 +2127,39 @@ export function showLoadModal() {
                         }
                         console.log(`✅ Mesh sampled to point cloud (${numPoints} points)`);
                     } else if (extension === 'las' || extension === 'laz') {
-                        console.log("⏩ Step 3: Skipping conversion (already LAS/LAZ)");
-                        lasPath = `viewer/static/viewer/data/working/features.las`;
+                        let lasInputPath = inputPath;
+                        if (subsampleEnabled) {
+                            console.log(`🔧 Step 3.1: Subsampling LAS (voxel ${voxelSize} m)...`);
+                            const lasSubsamplePath = `viewer/static/viewer/data/working/features.las`;
+                            const subResponse = await fetch('/subsample_pc/', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
+                                body: JSON.stringify({
+                                    file_path: inputPath,
+                                    out_path: lasSubsamplePath,
+                                    voxel_size: voxelSize,
+                                })
+                            });
+                            if (!subResponse.ok) {
+                                const errData = await subResponse.json().catch(() => ({}));
+                                throw new Error(errData.message || errData.error || 'LAS subsampling failed');
+                            }
+                            lasInputPath = lasSubsamplePath;
+                            console.log('✅ Step 3.1: LAS subsampling completed');
+                        }
+
+                        // Normalize/add POINT_ID into canonical output path used by next steps.
+                        console.log('🔄 Step 3: Checking POINT_ID on LAS...');
+                        const checkResponse = await fetch('/check_point_id/', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
+                            body: JSON.stringify({ input_path: lasInputPath, output_path: lasPath })
+                        });
+                        if (!checkResponse.ok) {
+                            const errData = await checkResponse.json().catch(() => ({}));
+                            throw new Error(errData.message || errData.error || 'check_point_id failed');
+                        }
+                        console.log('✅ LAS ready (POINT_ID checked)');
                     }
 
                     console.log("💾 Step 3: Saving backup copy of features.las...");
