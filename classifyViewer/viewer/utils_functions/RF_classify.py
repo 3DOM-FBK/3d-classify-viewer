@@ -203,10 +203,13 @@ def main():
 
     print('\nClassifying ...')
     if args.use_gpu and GPU_AVAILABLE and cuRF is not None and isinstance(model, cuRF):
+        print(f"GPU requested and it is AVAILABLE, so use cuml for training.")
         Y_pred = cp.asnumpy(model.predict(cp.asarray(X[:, feat_to_use])))
     else:
         if args.use_gpu and not GPU_AVAILABLE:
             print('Warning: --use_gpu requested but cuML not available; using CPU.')
+        elif not args.use_gpu:
+            print(f"GPU is NOT requested, so use scikit-learn for training; using CPU.")
         Y_pred = model.predict(X[:, feat_to_use])
 
     t2 = time.time()

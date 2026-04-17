@@ -119,7 +119,7 @@ def train_model(X_train, Y_train, n_jobs, use_gpu=False,
                 n_estimators=200, max_depth=15, min_samples_split=20, max_features='sqrt'):
     
     if use_gpu and GPU_AVAILABLE:
-        print(f"GPU is AVAILABLE, so use cuml for training.")
+        print(f"GPU requested and it is AVAILABLE, so use cuml for training.")
         Xg = cp.asarray(X_train, dtype=cp.float32)
         yg = cp.asarray(Y_train, dtype=cp.int32)
         
@@ -137,7 +137,7 @@ def train_model(X_train, Y_train, n_jobs, use_gpu=False,
         try:
             fi = model.feature_importances_.get()
         except:
-            print("[INFO] cuML non espone importanze. Calcolo stima su subset CPU...")
+            # print("[INFO] cuML non espone importanze. Calcolo stima su subset CPU...")
             subset_idx = np.random.choice(len(X_train), min(100000, len(X_train)), replace=False)
             rf_cpu = RandomForestClassifier(n_estimators=50, max_depth=10, n_jobs=n_jobs)
             rf_cpu.fit(X_train[subset_idx], Y_train[subset_idx])
@@ -146,7 +146,10 @@ def train_model(X_train, Y_train, n_jobs, use_gpu=False,
         return model, fi
    
     else:
-        print(f"GPU is NOT AVAILABLE, so use scikit-learn for training.")
+        if use_gpu and not GPU_AVAILABLE:
+            print('Warning: --use_gpu requested but cuML not available; using CPU.')
+        elif not use_gpu:
+            print(f"GPU is NOT requested, so use scikit-learn for training; using CPU.")
         # Fallback CPU (scikit-learn)
         model = RandomForestClassifier(
             n_estimators=n_estimators, max_depth=max_depth,
