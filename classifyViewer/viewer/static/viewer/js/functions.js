@@ -2904,6 +2904,7 @@ export function showTrainingModal(scene, onStart) {
 
             const algoContainer = document.createElement('div');
             algoContainer.classList.add('modal-section');
+            algoContainer.id = 'rf-settings-section';
             algoContainer.style.display = "none"; // Initial state: collapsed
             algoContainer.style.paddingTop = "10px";
             algoContainer.style.borderTop = "1px solid rgba(255,255,255,0.05)";
@@ -2916,7 +2917,7 @@ export function showTrainingModal(scene, onStart) {
             };
 
             // Helper to build a standard number row
-            const makeNumberRow = (labelText, defaultVal, minVal, maxVal, placeholderText) => {
+            const makeNumberRow = (labelText, defaultVal, minVal, maxVal, placeholderText, paramKey) => {
                 const row = document.createElement('div');
                 row.classList.add('property-row');
                 row.style.padding = "0 4px";
@@ -2924,6 +2925,7 @@ export function showTrainingModal(scene, onStart) {
                 const inp = document.createElement('input');
                 inp.type = "number";
                 inp.classList.add('property-input');
+                if (paramKey) inp.setAttribute('data-rf-param', paramKey);
                 if (defaultVal !== null) inp.value = defaultVal;
                 if (minVal !== null) inp.min = minVal;
                 if (maxVal !== null) inp.max = maxVal;
@@ -2934,13 +2936,13 @@ export function showTrainingModal(scene, onStart) {
             };
 
             // n_estimators
-            const estInput = makeNumberRow("N. Estimators:", 200, 10, 2000, null);
+            const estInput = makeNumberRow("N. Estimators:", 200, 10, 2000, null, 'n_estimators');
             // max_depth
-            const depthInput = makeNumberRow("Max Depth:", 15, 1, 100, null);
+            const depthInput = makeNumberRow("Max Depth:", 15, 1, 100, null, 'max_depth');
             // min_samples_split
-            const minSplitInput = makeNumberRow("Min Samples Split:", 20, 2, 1000, null);
+            const minSplitInput = makeNumberRow("Min Samples Split:", 20, 2, 1000, null, 'min_samples_split');
             // n_jobs
-            const jobsInput = makeNumberRow("N. Jobs:", 12, 1, 128, null);
+            const jobsInput = makeNumberRow("N. Jobs:", 12, 1, 128, null, 'n_jobs');
 
             // use_gpu — toggle switch row
             const gpuRow = document.createElement('div');
@@ -2954,6 +2956,7 @@ export function showTrainingModal(scene, onStart) {
             const gpuToggle = document.createElement('button');
             gpuToggle.classList.add('rf-toggle-btn');
             gpuToggle.setAttribute('data-on', 'false');
+            gpuToggle.setAttribute('data-rf-toggle', 'gpu');
             gpuToggle.textContent = 'OFF';
             gpuToggle.onclick = () => {
                 const isOn = gpuToggle.getAttribute('data-on') === 'true';
@@ -2978,6 +2981,7 @@ export function showTrainingModal(scene, onStart) {
             const rgbToggle = document.createElement('button');
             rgbToggle.classList.add('rf-toggle-btn');
             rgbToggle.setAttribute('data-on', 'false');
+            rgbToggle.setAttribute('data-rf-toggle', 'rgb');
             rgbToggle.textContent = 'OFF';
             rgbToggle.onclick = () => {
                 const isOn = rgbToggle.getAttribute('data-on') === 'true';
@@ -3058,18 +3062,25 @@ export function showTrainingModal(scene, onStart) {
                 });
 
                 // Extract RF params directly from named inputs/toggle
-                const algoSec = body.querySelectorAll('.modal-section')[2];
-                const rfInputs = algoSec.querySelectorAll('input[type="number"]');
-                const allToggleBtns = algoSec.querySelectorAll('.rf-toggle-btn');
-                const gpuBtn = allToggleBtns[0];
-                const rgbBtn = allToggleBtns[1];
+                const algoSec = body.querySelector('#rf-settings-section');
+                if (!algoSec) {
+                    showError('Random Forest settings section not found. Please reopen the modal.');
+                    return;
+                }
+
+                const getRfNumber = (key, fallback) => {
+                    const raw = parseInt(algoSec.querySelector(`input[data-rf-param="${key}"]`)?.value, 10);
+                    return Number.isFinite(raw) ? raw : fallback;
+                };
+
+                const gpuBtn = algoSec.querySelector('button[data-rf-toggle="gpu"]');
+                const rgbBtn = algoSec.querySelector('button[data-rf-toggle="rgb"]');
                 const useRgb = rgbBtn?.getAttribute('data-on') === 'true';
                 const finalFeatures = useRgb
                     ? [...selectedFeatures, 'red', 'green', 'blue']
                     : selectedFeatures;
-
                 // --- Validation: at least one feature must be selected ---
-                const loader = scene.potree2Loader;
+                const loader = getPotree2Loader(scene) || scene?.potree2Loader;
                 const availableFeatures = loader ? loader.getFeatureList() : [];
                 const noFeaturesAvailable = availableFeatures.length === 0;
                 const noFeaturesSelected = selectedFeatures.length === 0 && !useRgb;
@@ -3091,10 +3102,10 @@ export function showTrainingModal(scene, onStart) {
                     split,
                     features: finalFeatures,
                     rf_params: {
-                        n_estimators: parseInt(rfInputs[0]?.value) || 200,
-                        max_depth: parseInt(rfInputs[1]?.value) || 15,
-                        min_samples_split: parseInt(rfInputs[2]?.value) || 20,
-                        n_jobs: parseInt(rfInputs[3]?.value) || 12,
+                        n_estimators: getRfNumber('n_estimators', 200),
+                        max_depth: getRfNumber('max_depth', 15),
+                        min_samples_split: getRfNumber('min_samples_split', 20),
+                        n_jobs: getRfNumber('n_jobs', 12),
                         use_gpu: gpuBtn?.getAttribute('data-on') === 'true'
                     }
                 };
