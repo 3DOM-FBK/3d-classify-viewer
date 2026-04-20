@@ -6,6 +6,7 @@
 #include <cmath>
 #include <algorithm>
 #include <cstring>
+#include <filesystem>
 
 // ============================================================
 // Read/Write helpers
@@ -486,6 +487,19 @@ std::string check_and_fix(const std::string& input_path,
 
     if (!needs_normals && !needs_point_id && !needs_canonical) {
         std::cout << "Normals and POINT_ID already present with canonical format. No modification needed." << std::endl;
+
+        if (input_path != output_path) {
+            std::filesystem::path in_path(input_path);
+            std::filesystem::path out_path(output_path);
+
+            if (std::filesystem::exists(out_path)) {
+                std::filesystem::remove(out_path);
+            }
+            std::filesystem::rename(in_path, out_path);
+            std::cout << "Save into output path: " << output_path << std::endl;
+            return output_path;
+        }
+
         return input_path;
     }
 
