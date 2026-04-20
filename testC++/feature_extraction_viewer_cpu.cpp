@@ -418,7 +418,7 @@ int main(int argc, char** argv)
     outExtra.push_back({"normal_y", off_ny});
     outExtra.push_back({"normal_z", off_nz});
 
-    const int BASE_SIZE = 36;
+    const int BASE_SIZE = 34;
     const int REC_LEN   = BASE_SIZE + extraOffset;
 
     // ------------------------------------------------------------------
@@ -426,17 +426,17 @@ int main(int argc, char** argv)
     // ------------------------------------------------------------------
     uint32_t numVlrs     = 1;
     uint32_t vlrBodySize = (uint32_t)(outExtra.size() * 192);
-    uint32_t headerSize  = 375;
+    uint32_t headerSize  = 227;
     uint32_t offsetToData = headerSize + 54 + vlrBodySize;
 
     std::vector<uint8_t> headerBuf(headerSize, 0);
     std::memcpy(headerBuf.data(), "LASF", 4);
     wLE<uint16_t>(headerBuf, 6, 0x0011u);
-    headerBuf[24] = 1; headerBuf[25] = 4;
+    headerBuf[24] = 1; headerBuf[25] = 2;
     wLE<uint16_t>(headerBuf, 94,  (uint16_t)headerSize);
     wLE<uint32_t>(headerBuf, 96,  offsetToData);
     wLE<uint32_t>(headerBuf, 100, numVlrs);
-    headerBuf[104] = 7;
+    headerBuf[104] = 3;
     wLE<uint16_t>(headerBuf, 105, (uint16_t)REC_LEN);
     wLE<double>(headerBuf, 131, hdr.scaleX); wLE<double>(headerBuf, 139, hdr.scaleY); wLE<double>(headerBuf, 147, hdr.scaleZ);
     wLE<double>(headerBuf, 155, hdr.offX);   wLE<double>(headerBuf, 163, hdr.offY);   wLE<double>(headerBuf, 171, hdr.offZ);
@@ -736,13 +736,15 @@ int main(int argc, char** argv)
                 wLE<int32_t>(rec_buf, 4, iyr);
                 wLE<int32_t>(rec_buf, 8, izr);
                 wLE<uint16_t>(rec_buf, 12, (uint16_t)pt.intensity);
-                rec_buf[14] = ((uint8_t)pt.return_num & 0x0F) |
-                              (((uint8_t)pt.number_of_returns & 0x0F) << 4);
-                rec_buf[16] = (uint8_t)pt.class_id;
-                wLE<int16_t>(rec_buf, 18, (int16_t)pt.scan_angle);
-                wLE<uint16_t>(rec_buf, 30, (uint16_t)(pt.r / color_bitter));
-                wLE<uint16_t>(rec_buf, 32, (uint16_t)(pt.g / color_bitter));
-                wLE<uint16_t>(rec_buf, 34, (uint16_t)(pt.b / color_bitter));
+                rec_buf[14] = ((uint8_t)pt.return_num & 0x07) |
+                              (((uint8_t)pt.number_of_returns & 0x07) << 3);
+                rec_buf[15] = (uint8_t)pt.class_id;
+                int scan_angle_rank = (int)std::lround(pt.scan_angle);
+                scan_angle_rank = std::max(-128, std::min(127, scan_angle_rank));
+                rec_buf[16] = (uint8_t)((int8_t)scan_angle_rank);
+                wLE<uint16_t>(rec_buf, 28, (uint16_t)(pt.r / color_bitter));
+                wLE<uint16_t>(rec_buf, 30, (uint16_t)(pt.g / color_bitter));
+                wLE<uint16_t>(rec_buf, 32, (uint16_t)(pt.b / color_bitter));
 
                 wLE<uint32_t>(rec_buf, BASE_SIZE + off_pid, pt.raw_point_id);
 
@@ -775,8 +777,11 @@ int main(int argc, char** argv)
     // ------------------------------------------------------------------
     // 7. Patch point count in LAS header
     // ------------------------------------------------------------------
-    out.seekp(247);
-    out.write((char*)&totalWritten, 8);
+    uint32_t totalWritten32 = static_cast<uint32_t>(std::min<uint64_t>(totalWritten, 0xFFFFFFFFull));
+    out.seekp(107);
+    out.write((char*)&totalWritten32, 4);
+    out.seekp(111);
+    out.write((char*)&totalWritten32, 4);
     out.close();
 
     double total = elapsed(global_start);

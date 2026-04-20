@@ -71,7 +71,11 @@ def read_las_data(filepath):
     # SALVATAGGIO OFFSET E SCALE ORIGINALI
     original_metadata = {
         'offsets': np.array(las.header.offsets), 
-        'scales': np.array(las.header.scales)
+        'scales': np.array(las.header.scales),
+        # Keep full-precision world coordinates to avoid XY drift on rewrite
+        'world_x': np.array(las.x, dtype=np.float64),
+        'world_y': np.array(las.y, dtype=np.float64),
+        'world_z': np.array(las.z, dtype=np.float64)
     }
     
     columns = []
@@ -122,12 +126,13 @@ def write_classification_las(X, Y, filename, header, original_metadata=None):
     n_points = len(X)
 
     LAS_NATIVE = {
-        'x', 'y', 'z', 'red', 'green', 'blue', 'intensity', 
-        'normal_x', 'normal_y', 'normal_z', 'gps_time', 
-        'classification', 'user_data', 'point_source_id', 'scan_angle'
+        'x', 'y', 'z', 'intensity', 'return_number', 'number_of_returns',
+        'scan_direction_flag', 'edge_of_flight_line', 'classification',
+        'synthetic_flag', 'keypoint_flag', 'withheld_flag', 'scan_angle_rank',
+        'user_data', 'point_source_id', 'gps_time', 'red', 'green', 'blue'
     }
 
-    las_header = laspy.LasHeader(point_format=7, version="1.4")
+    las_header = laspy.LasHeader(point_format=3, version="1.2")
 
     # APPLICAZIONE OFFSET E SCALE ORIGINALI NELL'HEADER
     if original_metadata is not None:
@@ -150,9 +155,14 @@ def write_classification_las(X, Y, filename, header, original_metadata=None):
     xi, yi, zi = header.index('X'), header.index('Y'), header.index('Z')
 
     # RIPRISTINO COORDINATE GLOBALI (X + Offset) PRIMA DEL SALVATAGGIO
-    las.x = X[:, xi] + original_metadata['offsets'][0]
-    las.y = X[:, yi] + original_metadata['offsets'][1]
-    las.z = X[:, zi] + original_metadata['offsets'][2]
+    if original_metadata is not None and all(k in original_metadata for k in ('world_x', 'world_y', 'world_z')):
+        las.x = original_metadata['world_x']
+        las.y = original_metadata['world_y']
+        las.z = original_metadata['world_z']
+    else:
+        las.x = X[:, xi] + original_metadata['offsets'][0]
+        las.y = X[:, yi] + original_metadata['offsets'][1]
+        las.z = X[:, zi] + original_metadata['offsets'][2]
 
     for i, col_name in enumerate(header):
         cl = col_name.lower()
@@ -163,10 +173,7 @@ def write_classification_las(X, Y, filename, header, original_metadata=None):
         elif cl == 'green': las.green = data.astype(np.uint16)
         elif cl == 'blue': las.blue = data.astype(np.uint16)
         elif cl == 'intensity': las.intensity = data.astype(np.uint16)
-        elif cl == 'scan_angle': las.scan_angle = data.astype(np.float32)
-        elif cl == 'normal_x': las.normal_x = data.astype(np.float32)
-        elif cl == 'normal_y': las.normal_y = data.astype(np.float32)
-        elif cl == 'normal_z': las.normal_z = data.astype(np.float32)
+        elif cl == 'scan_angle': las.scan_angle_rank = np.clip(np.rint(data), -128, 127).astype(np.int8)
         else:
             las[col_name] = data.astype(np.float32 if 'point_id' not in cl else np.uint32)
 

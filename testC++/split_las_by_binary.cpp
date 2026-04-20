@@ -43,6 +43,41 @@ struct ExtraBytesEntry {
     int                   size;
 };
 
+static const char* pdalTypeToReaderTypeName(pdal::Dimension::Type t)
+{
+    switch (t) {
+        case pdal::Dimension::Type::Unsigned8:  return "uint8";
+        case pdal::Dimension::Type::Signed8:    return "int8";
+        case pdal::Dimension::Type::Unsigned16: return "uint16";
+        case pdal::Dimension::Type::Signed16:   return "int16";
+        case pdal::Dimension::Type::Unsigned32: return "uint32";
+        case pdal::Dimension::Type::Signed32:   return "int32";
+        case pdal::Dimension::Type::Unsigned64: return "uint64";
+        case pdal::Dimension::Type::Signed64:   return "int64";
+        case pdal::Dimension::Type::Float:      return "float";
+        case pdal::Dimension::Type::Double:     return "double";
+        default:                                return nullptr;
+    }
+}
+
+static std::string buildReaderExtraDimsSpec(const std::vector<ExtraBytesEntry>& extras)
+{
+    std::string spec;
+    for (const auto& e : extras) {
+        const char* tname = pdalTypeToReaderTypeName(e.type);
+        if (!tname || e.name.empty()) {
+            continue;
+        }
+        if (!spec.empty()) {
+            spec += ",";
+        }
+        spec += e.name;
+        spec += "=";
+        spec += tname;
+    }
+    return spec;
+}
+
 static pdal::Dimension::Type lasTypeToPdal(uint8_t data_type, int& size)
 {
     switch (data_type) {
@@ -431,8 +466,8 @@ static void writeOutput(SegmentOutput& out)
     pdal::Options wOpts;
     wOpts.add("filename",      out.outPath.string());
     wOpts.add("extra_dims",    "all");
-    wOpts.add("minor_version", 4);
-    wOpts.add("dataformat_id", 7);
+    wOpts.add("minor_version", 2);
+    wOpts.add("dataformat_id", 3);
 
     pdal::LasWriter writer;
     writer.setOptions(wOpts);
@@ -467,18 +502,19 @@ static void processPointsFromMapping(
         ? pdal::Dimension::Id::Unknown
         : outputs.begin()->second->srcPointId;
 
-    if (pidSrc == pdal::Dimension::Id::Unknown)
-        std::cerr << "  WARNING: No POINT_ID dimension found — falling back to "
-                     "sequential indices (segment results will be wrong).\n";
+    if (pidSrc == pdal::Dimension::Id::Unknown) {
+        throw std::runtime_error(
+            "No POINT_ID dimension found in source LAS. "
+            "Ensure readers.las loads extra dimensions (extra_dims=all)."
+        );
+    }
 
     // Diagnostic: print first 10 POINT_ID values
     {
         size_t diag = std::min<size_t>(nPts, 10);
         std::cout << "  First " << diag << " POINT_ID values:";
         for (size_t d = 0; d < diag; ++d) {
-            uint32_t dpid = (pidSrc != pdal::Dimension::Id::Unknown)
-                ? srcView->getFieldAs<uint32_t>(pidSrc, d)
-                : static_cast<uint32_t>(d);
+            uint32_t dpid = srcView->getFieldAs<uint32_t>(pidSrc, d);
             std::cout << " " << dpid;
         }
         std::cout << "\n";
@@ -486,9 +522,7 @@ static void processPointsFromMapping(
 
     for (pdal::PointId i = 0; i < (pdal::PointId)nPts; ++i) {
         // Read POINT_ID attribute → key into pcbin annotation map
-        uint32_t pid = (pidSrc != pdal::Dimension::Id::Unknown)
-            ? srcView->getFieldAs<uint32_t>(pidSrc, i)
-            : static_cast<uint32_t>(i);
+        uint32_t pid = srcView->getFieldAs<uint32_t>(pidSrc, i);
 
         // Look up segmentation from mapping
         auto it = mapping.find(pid);
@@ -521,11 +555,8 @@ static void processPointsFromMapping(
             copyFieldTyped(srcView, i, out.view, di, m.srcId, m.dstId, m.type);
 
         // POINT_ID
-        if (out.srcPointId != pdal::Dimension::Id::Unknown)
-            out.view->setField(out.dstPointId, di,
-                               srcView->getFieldAs<uint32_t>(out.srcPointId, i));
-        else
-            out.view->setField(out.dstPointId, di, (uint32_t)i);
+        out.view->setField(out.dstPointId, di,
+                           srcView->getFieldAs<uint32_t>(out.srcPointId, i));
 
         // labels (training mode only)
         if (addLabels && out.dimLabels != pdal::Dimension::Id::Unknown)
@@ -552,12 +583,22 @@ static void run_split_from_pcbin(const fs::path&                las_path,
                                   bool                           addLabels,
                                   bool                           excludeUnclassified = false)
 {
+    // ── Parse Extra Bytes VLR first (used to configure reader extra_dims) ───
+    auto vlrExtras = readExtraBytesVLR(las_path);
+    const std::string extraDimsSpec = buildReaderExtraDimsSpec(vlrExtras);
+
     // ── Read source LAS once ──────────────────────────────────────────────────
     std::cout << "Loading LAS: " << las_path << "\n";
     pdal::PointTable srcTable;
     pdal::LasReader  srcReader;
     {
-        pdal::Options opts; opts.add("filename", las_path.string());
+        pdal::Options opts;
+        opts.add("filename", las_path.string());
+        // Older PDAL versions don't accept extra_dims=all for readers.las,
+        // so pass explicit <name>=<type> list from VLR.
+        if (!extraDimsSpec.empty()) {
+            opts.add("extra_dims", extraDimsSpec);
+        }
         srcReader.setOptions(opts);
         srcReader.prepare(srcTable);
     }
@@ -567,9 +608,6 @@ static void run_split_from_pcbin(const fs::path&                las_path,
     // ── Read annotations from .pcbin ──────────────────────────────────────────
     std::cout << "Loading .pcbin: " << pcbin_path << "\n";
     auto mapping = read_pcbin_annotations(pcbin_path);
-
-    // ── Parse Extra Bytes VLR (corrects non-UTF8 dim names) ──────────────────
-    auto vlrExtras = readExtraBytesVLR(las_path);
 
     // ── Diagnostic: dump all PDAL dimension names ─────────────────────────────
     std::cout << "  PDAL dimensions (" << srcView->dims().size() << "):";
