@@ -880,7 +880,7 @@ function initToolbar() {
     const tool5Img = `<img src="${iconBase}scissor.png" alt="Scissor">`;
     const tool6Img = `<img src="${iconBase}move.png" alt="Move">`;
     const tool7Img = `<img src="${iconBase}rotate.png" alt="Rotate">`;
-    const tool8Img = `<img src="${iconBase}frame-to-pcd.png" alt="Frame to PCD">`;
+    const tool8Img = `<img src="${iconBase}frame-to-pcd.png" alt="Frame Selection">`;
 
     createToolButton("tool-1", tool1Img, "Default mode", rightToolbar, () => {
         clearSelection(scene);
@@ -891,7 +891,7 @@ function initToolbar() {
     toolBtnCut = createToolButton("tool-5", tool5Img, "Cut mode", rightToolbar);
     toolBtnMove = createToolButton("tool-6", tool6Img, "Move point cloud", rightToolbar);
     toolBtnRotate = createToolButton("tool-7", tool7Img, "Rotate point cloud", rightToolbar);
-    createToolButton("tool-8", tool8Img, "Frame to PCD", rightToolbar);
+    createToolButton("tool-8", tool8Img, "Frame Selection", rightToolbar);
     const tool9Img = `<img src="${iconBase}measure.png" alt="Measure">`;
     toolBtnMeasure = createToolButton("tool-9", tool9Img, "Measure distance", rightToolbar);
     const tool10Img = `<img src="${iconBase}measure-area.png" alt="Measure Area">`;
@@ -2757,10 +2757,10 @@ initToolbar();
 
 // --- Tool Actions ---
 
-    // tool-5: Cut mode, tool-6: Move, tool-7: Rotate, tool-8: Frame to PCD
+    // tool-5: Cut mode, tool-6: Move, tool-7: Rotate, tool-8: Frame Selection
 // Qui gestiamo entrambi:
 
-// tool-8: Frame to PCD (Instant Action)
+// tool-8: Frame Selection (Instant Action)
 const frameToPCDButton = document.getElementById("tool-8");
 if (frameToPCDButton) {
     frameToPCDButton.addEventListener("click", () => {
