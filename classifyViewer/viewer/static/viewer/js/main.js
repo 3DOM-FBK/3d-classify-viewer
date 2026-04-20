@@ -2582,18 +2582,22 @@ window.addEventListener('keydown', (e) => {
 
     switch (e.code) {
         case 'Digit1':
+        case 'Numpad1':
             e.preventDefault();
             setCameraView(0, -Math.PI / 2);
             return;
         case 'Digit2':
+        case 'Numpad2':
             e.preventDefault();
             setCameraView(0, Math.PI / 2);
             return;
         case 'Digit3':
+        case 'Numpad3':
             e.preventDefault();
             setCameraView(Math.PI / 2, Math.PI / 2);
             return;
         case 'Digit4':
+        case 'Numpad4':
             e.preventDefault();
             setCameraView(Math.PI, Math.PI / 2);
             return;
