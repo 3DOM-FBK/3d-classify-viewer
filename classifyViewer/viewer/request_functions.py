@@ -677,31 +677,31 @@ def upload_data(request):
                 for chunk in uploaded_file.chunks():
                     destination.write(chunk)
 
-            # --- Validation & Enhancement for LAS files ---
-            if uploaded_file.name.lower().endswith('.las'):
-                try:
-                    print(f"Validating upload: {file_path}")
-                    # check_point_id(in, out=None) will overwrite by default with my change
-                    # or I can pass a separate path for safety.
-                    fixed_path = file_path.replace('.las', '_fix.las')
-                    result_path = check_point_id(file_path, out_path=fixed_path)
+            # # --- Validation & Enhancement for LAS files ---
+            # if uploaded_file.name.lower().endswith('.las'):
+            #     try:
+            #         print(f"Validating upload: {file_path}")
+            #         # check_point_id(in, out=None) will overwrite by default with my change
+            #         # or I can pass a separate path for safety.
+            #         fixed_path = file_path.replace('.las', '_fix.las')
+            #         result_path = check_point_id(file_path, out_path=fixed_path)
                     
-                    if result_path == fixed_path:
-                        # File was actually changed/fixed, replace the original
-                        os.replace(fixed_path, file_path)
-                        print(f"File validated and enhanced: {file_path}")
-                    else:
-                        # No change needed, cleanup temp if it was created
-                        if os.path.exists(fixed_path):
-                            os.remove(fixed_path)
-                        print("File already valid.")
-                except Exception as ex:
-                    print(f"Validation error (ignored): {ex}")
+            #         if result_path == fixed_path:
+            #             # File was actually changed/fixed, replace the original
+            #             os.replace(fixed_path, file_path)
+            #             print(f"File validated and enhanced: {file_path}")
+            #         else:
+            #             # No change needed, cleanup temp if it was created
+            #             if os.path.exists(fixed_path):
+            #                 os.remove(fixed_path)
+            #             print("File already valid.")
+            #     except Exception as ex:
+            #         print(f"Validation error (ignored): {ex}")
 
-                features_las_path = os.path.join(data_dir, 'features.las')
-                if os.path.abspath(file_path) != os.path.abspath(features_las_path):
-                    shutil.copy2(file_path, features_las_path)
-                print(f"Canonical features.las prepared: {features_las_path}")
+            #     features_las_path = os.path.join(data_dir, 'features.las')
+            #     if os.path.abspath(file_path) != os.path.abspath(features_las_path):
+            #         shutil.copy2(file_path, features_las_path)
+            #     print(f"Canonical features.las prepared: {features_las_path}")
 
             return JsonResponse({
                 "message": "File uploaded successfully",
