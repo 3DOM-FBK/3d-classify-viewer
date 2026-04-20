@@ -1007,6 +1007,7 @@ def package_download_view(request):
 
             # ── 1. Direct point-cloud files (final pipeline outputs) ────────
             # Example: viewer/static/viewer/data/working/<model>/predicted.las
+            print("Preparing segments for ZIP package...")
             for file_entry in selected_point_cloud_files:
                 raw_path = file_entry.get('path')
                 if not raw_path:
@@ -1058,6 +1059,7 @@ def package_download_view(request):
 
             # ── 3. Models ─────────────────────────────────────────────────────
             # Model zip files are built in memory (BytesIO) — no files on disk.
+            print("Preparing models for ZIP package...")
             for model_name in selected_models:
                 model_dir = os.path.join(models_root, model_name)
                 if os.path.isdir(model_dir):
@@ -1091,6 +1093,7 @@ def package_download_view(request):
             zip_buffer.seek(0)
             response = HttpResponse(zip_buffer.read(), content_type='application/zip')
             response['Content-Disposition'] = 'attachment; filename="download_package.zip"'
+            print(f"Prepared ZIP with {len(items_to_zip)} items ( {len(selected_point_cloud_files)} segments, {len(selected_models)} models )")
             return response
 
         except Exception as e:
