@@ -44,11 +44,11 @@ void write_extra_bytes_record(std::ofstream& f, const char* name, const char* de
 }
 
 // ============================================================
-// Extra Bytes Record: uint32 (type=6) per POINT_ID
+// Extra Bytes Record: uint32 (type=5) per POINT_ID
 // ============================================================
 void write_extra_bytes_record_uint32(std::ofstream& f, const char* name, const char* description) {
     write_val<uint8_t>(f, 0); write_val<uint8_t>(f, 0);
-    write_val<uint8_t>(f, 6); write_val<uint8_t>(f, 0);
+    write_val<uint8_t>(f, 5); write_val<uint8_t>(f, 0);
     write_str(f, name, 32);
     for (int i = 0; i < 4;  i++) write_val<uint8_t>(f, 0);
     for (int i = 0; i < 72; i++) write_val<uint8_t>(f, 0);
@@ -87,6 +87,56 @@ struct ExtraByteInfo {
     int  point_id_off  = -1;
 };
 
+uint8_t base_point_format(uint8_t point_format) {
+    return point_format & 0x3F;
+}
+
+int las_base_point_size(uint8_t point_format) {
+    switch (point_format) {
+        case 0: return 20;
+        case 1: return 28;
+        case 2: return 26;
+        case 3: return 34;
+        case 4: return 57;
+        case 5: return 63;
+        case 6: return 30;
+        case 7: return 36;
+        case 8: return 38;
+        case 9: return 59;
+        case 10: return 67;
+        default: return -1;
+    }
+}
+
+bool format_has_rgb(uint8_t point_format) {
+    return point_format == 2 || point_format == 3 || point_format == 5 ||
+           point_format == 7 || point_format == 8 || point_format == 10;
+}
+
+int extra_data_type_size(uint8_t data_type) {
+    switch (data_type) {
+        case 1:  case 2:  return 1;
+        case 3:  case 4:  return 2;
+        case 5:  case 6:  return 4;
+        case 7:  case 8:  return 8;
+        case 9:           return 4;
+        case 10:          return 8;
+        case 11: case 12: return 2;
+        case 13: case 14: return 4;
+        case 15: case 16: return 8;
+        case 17: case 18: return 16;
+        case 19:          return 8;
+        case 20:          return 16;
+        case 21: case 22: return 3;
+        case 23: case 24: return 6;
+        case 25: case 26: return 12;
+        case 27: case 28: return 24;
+        case 29:          return 12;
+        case 30:          return 24;
+        default:          return 0;
+    }
+}
+
 // Read the Extra Bytes VLR and locate the offsets for normals and POINT_ID.
 ExtraByteInfo parse_extra_bytes_vlr(std::ifstream& f,
                                     uint32_t offset_to_data,
@@ -95,8 +145,8 @@ ExtraByteInfo parse_extra_bytes_vlr(std::ifstream& f,
                                     uint16_t point_length)
 {
     ExtraByteInfo info;
-    const int BASE_POINT_SIZE = 34;
-    int extra_size = (int)point_length - BASE_POINT_SIZE;
+    (void)offset_to_data;
+    (void)point_length;
 
     f.seekg(header_size);
     for (uint32_t v = 0; v < num_vlrs; ++v) {
@@ -123,9 +173,7 @@ ExtraByteInfo parse_extra_bytes_vlr(std::ifstream& f,
                 char rest[156]; f.read(rest, 156);
 
                 std::string field_name(name);
-                int field_size = 0;
-                if (data_type == 9) field_size = 4; // float
-                if (data_type == 6) field_size = 4; // uint32
+                int field_size = extra_data_type_size(data_type);
 
                 if (field_name == "NormalX") {
                     info.has_normal_x = true;
@@ -137,8 +185,10 @@ ExtraByteInfo parse_extra_bytes_vlr(std::ifstream& f,
                     info.has_normal_z = true;
                     info.normal_z_off = current_offset;
                 } else if (field_name == "POINT_ID") {
-                    info.has_point_id = true;
-                    info.point_id_off = current_offset;
+                    if (data_type == 5 || data_type == 6) {
+                        info.has_point_id = true;
+                        info.point_id_off = current_offset;
+                    }
                 }
                 current_offset += field_size;
             }
@@ -187,19 +237,28 @@ LasData read_las(const std::string& path) {
 
     data.scale_x = scale_x; data.scale_y = scale_y; data.scale_z = scale_z;
     data.off_x   = off_x;   data.off_y   = off_y;   data.off_z   = off_z;
-    data.point_format = point_format;
+    const uint8_t fmt_base = base_point_format(point_format);
+    const int base_point_size = las_base_point_size(fmt_base);
+    if (base_point_size < 0) {
+        throw std::runtime_error("Unsupported LAS point format: " + std::to_string((int)fmt_base));
+    }
+
+    data.point_format = fmt_base;
     data.point_length = point_length;
 
     // --- Analisi VLR per extra bytes ---
     ExtraByteInfo eb = parse_extra_bytes_vlr(f, offset_to_data, header_size, num_vlrs, point_length);
     data.has_normals  = eb.has_normal_x && eb.has_normal_y && eb.has_normal_z;
     data.has_point_id = eb.has_point_id;
-    data.has_colors   = true; // Format 3 ha sempre RGB
+    data.has_colors   = format_has_rgb(fmt_base);
 
-    int extra_size = (int)point_length - 34;
+    int extra_size = (int)point_length - base_point_size;
+    if (extra_size < 0) {
+        throw std::runtime_error("Invalid LAS point length for format " + std::to_string((int)fmt_base));
+    }
 
     std::cout << "  LAS: " << num_points << " points"
-              << "  format=" << (int)point_format
+              << "  format=" << (int)fmt_base
               << "  point_length=" << point_length
               << "  extra=" << extra_size
               << "  has_normals=" << data.has_normals
@@ -223,20 +282,56 @@ LasData read_las(const std::string& path) {
             iz * scale_z + off_z
         };
 
-        skip(f, 2); // intensity
-        skip(f, 1); // return bits
-        skip(f, 1); // classification
-        skip(f, 1); // scan angle
-        skip(f, 1); // user data
-        skip(f, 2); // point source ID
-        skip(f, 8); // GPS time
+        if (fmt_base <= 5) {
+            skip(f, 2); // intensity
+            skip(f, 1); // return bits
+            skip(f, 1); // classification
+            skip(f, 1); // scan angle
+            skip(f, 1); // user data
+            skip(f, 2); // point source ID
 
-        // RGB uint16 → [0,1]
-        uint16_t r = read_val<uint16_t>(f);
-        uint16_t g = read_val<uint16_t>(f);
-        uint16_t b = read_val<uint16_t>(f);
-        data.colors[i] = { r / 65535.0, g / 65535.0, b / 65535.0 };
-        
+            if (fmt_base == 1 || fmt_base == 3 || fmt_base == 4 || fmt_base == 5) {
+                skip(f, 8); // GPS time
+            }
+
+            if (format_has_rgb(fmt_base)) {
+                uint16_t r = read_val<uint16_t>(f);
+                uint16_t g = read_val<uint16_t>(f);
+                uint16_t b = read_val<uint16_t>(f);
+                data.colors[i] = { r / 65535.0, g / 65535.0, b / 65535.0 };
+            } else {
+                data.colors[i] = {0.0, 0.0, 0.0};
+            }
+
+            if (fmt_base == 4 || fmt_base == 5) {
+                skip(f, 29); // Wave packet descriptor
+            }
+        } else {
+            skip(f, 2); // intensity
+            skip(f, 1); // return flags
+            skip(f, 1); // classification flags
+            skip(f, 1); // classification
+            skip(f, 1); // user data
+            skip(f, 2); // scan angle
+            skip(f, 2); // point source ID
+            skip(f, 8); // GPS time
+
+            if (format_has_rgb(fmt_base)) {
+                uint16_t r = read_val<uint16_t>(f);
+                uint16_t g = read_val<uint16_t>(f);
+                uint16_t b = read_val<uint16_t>(f);
+                data.colors[i] = { r / 65535.0, g / 65535.0, b / 65535.0 };
+            } else {
+                data.colors[i] = {0.0, 0.0, 0.0};
+            }
+
+            if (fmt_base == 8 || fmt_base == 10) {
+                skip(f, 2); // NIR
+            }
+            if (fmt_base == 9 || fmt_base == 10) {
+                skip(f, 29); // Wave packet descriptor
+            }
+        }
 
         // Extra bytes
         if (extra_size > 0) {
@@ -385,11 +480,12 @@ std::string check_and_fix(const std::string& input_path,
     std::cout << "Reading: " << input_path << std::endl;
     LasData data = read_las(input_path);
 
-    bool needs_normals  = !data.has_normals;
-    bool needs_point_id = !data.has_point_id;
+    bool needs_normals   = !data.has_normals;
+    bool needs_point_id  = !data.has_point_id;
+    bool needs_canonical = !(data.point_format == 3 && data.point_length == 50);
 
-    if (!needs_normals && !needs_point_id) {
-        std::cout << "Normals and POINT_ID already present. No modification needed." << std::endl;
+    if (!needs_normals && !needs_point_id && !needs_canonical) {
+        std::cout << "Normals and POINT_ID already present with canonical format. No modification needed." << std::endl;
         return input_path;
     }
 
@@ -412,6 +508,10 @@ std::string check_and_fix(const std::string& input_path,
     if (needs_point_id) {
         std::cout << "Adding POINT_ID..." << std::endl;
         data.has_point_id = true;
+    }
+
+    if (needs_canonical) {
+        std::cout << "Rewriting LAS to canonical format (PointFormat=3 + NormalX/Y/Z + POINT_ID)..." << std::endl;
     }
 
     std::cout << "Saving..." << std::endl;

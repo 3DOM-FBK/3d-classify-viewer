@@ -40,12 +40,38 @@ void write_extra_bytes_record(std::ofstream& f, const char* name, const char* de
 }
 void write_extra_bytes_record_uint32(std::ofstream& f, const char* name, const char* description) {
     write_val<uint8_t>(f, 0); write_val<uint8_t>(f, 0);
-    write_val<uint8_t>(f, 6); write_val<uint8_t>(f, 0);
+    write_val<uint8_t>(f, 5); write_val<uint8_t>(f, 0);
     write_str(f, name, 32);
     for (int i = 0; i < 4;  i++) write_val<uint8_t>(f, 0);
     for (int i = 0; i < 72; i++) write_val<uint8_t>(f, 0);
     for (int i = 0; i < 48; i++) write_val<uint8_t>(f, 0);
     write_str(f, description, 32);
+}
+
+uint8_t base_point_format(uint8_t point_format) {
+    return point_format & 0x3F;
+}
+
+int las_base_point_size(uint8_t point_format) {
+    switch (point_format) {
+        case 0: return 20;
+        case 1: return 28;
+        case 2: return 26;
+        case 3: return 34;
+        case 4: return 57;
+        case 5: return 63;
+        case 6: return 30;
+        case 7: return 36;
+        case 8: return 38;
+        case 9: return 59;
+        case 10: return 67;
+        default: return -1;
+    }
+}
+
+bool format_has_rgb(uint8_t point_format) {
+    return point_format == 2 || point_format == 3 || point_format == 5 ||
+           point_format == 7 || point_format == 8 || point_format == 10;
 }
 
 // ============================================================
@@ -88,7 +114,7 @@ LasData read_las(const std::string& path) {
     uint16_t header_size    = read_val<uint16_t>(f); // 94
     uint32_t offset_to_data = read_val<uint32_t>(f); // 96
     skip(f, 4);  // num_vlrs                          // 100
-    uint8_t  point_format   = read_val<uint8_t>(f);  // 104
+    uint8_t  point_format_raw = read_val<uint8_t>(f); // 104
     uint16_t point_length   = read_val<uint16_t>(f); // 105
     uint32_t num_points     = read_val<uint32_t>(f); // 107
     skip(f, 20); // num_points_by_return (5*4)        // 111
@@ -103,18 +129,28 @@ LasData read_las(const std::string& path) {
     skip(f, 48);
     // offset 227 = fine header
 
-    // extra bytes = point_length - 34 (base format 3)
-    int extra_size = (int)point_length - 34;
-    // 12 (normali) + 4 (POINT_ID) = 16 → ha normali
-    // 4 (solo POINT_ID) → no normali
+    const uint8_t fmt_base = base_point_format(point_format_raw);
+    const int base_point_size = las_base_point_size(fmt_base);
+    if (base_point_size < 0) {
+        throw std::runtime_error("Unsupported LAS point format: " + std::to_string((int)fmt_base));
+    }
+
+    // extra bytes = point_length - base_size
+    int extra_size = (int)point_length - base_point_size;
+    if (extra_size < 0) {
+        throw std::runtime_error("Invalid LAS point length for format " + std::to_string((int)fmt_base));
+    }
+
+    // 12 (normali) + 4 (POINT_ID) = 16 -> has normals
+    // 4 (solo POINT_ID) -> no normals
     bool has_normals_in_file = (extra_size >= 16);
     bool has_point_id        = (extra_size >= 4);
 
-    data.has_colors  = true;
+    data.has_colors  = format_has_rgb(fmt_base);
     data.has_normals = has_normals_in_file;
 
     std::cout << "  LAS header: " << num_points << " points"
-              << "  format=" << (int)point_format
+              << "  format=" << (int)fmt_base
               << "  point_length=" << point_length
               << "  extra=" << extra_size
               << "  offset_to_data=" << offset_to_data
@@ -139,18 +175,57 @@ LasData read_las(const std::string& path) {
             iy * scale_y + off_y,
             iz * scale_z + off_z
         };
-        skip(f, 2); // intensity
-        skip(f, 1); // return bits
-        skip(f, 1); // classification
-        skip(f, 1); // scan angle
-        skip(f, 1); // user data
-        skip(f, 2); // point source ID
-        skip(f, 8); // GPS time
-        // RGB uint16 → [0,1]
-        uint16_t r = read_val<uint16_t>(f);
-        uint16_t g = read_val<uint16_t>(f);
-        uint16_t b = read_val<uint16_t>(f);
-        data.colors[i] = { r / 65535.0, g / 65535.0, b / 65535.0 };
+        if (fmt_base <= 5) {
+            skip(f, 2); // intensity
+            skip(f, 1); // return bits
+            skip(f, 1); // classification
+            skip(f, 1); // scan angle
+            skip(f, 1); // user data
+            skip(f, 2); // point source ID
+
+            if (fmt_base == 1 || fmt_base == 3 || fmt_base == 4 || fmt_base == 5) {
+                skip(f, 8); // GPS time
+            }
+
+            if (format_has_rgb(fmt_base)) {
+                uint16_t r = read_val<uint16_t>(f);
+                uint16_t g = read_val<uint16_t>(f);
+                uint16_t b = read_val<uint16_t>(f);
+                data.colors[i] = { r / 65535.0, g / 65535.0, b / 65535.0 };
+            } else {
+                data.colors[i] = {0.0, 0.0, 0.0};
+            }
+
+            if (fmt_base == 4 || fmt_base == 5) {
+                skip(f, 29); // Wave packet descriptor
+            }
+        } else {
+            skip(f, 2); // intensity
+            skip(f, 1); // return flags
+            skip(f, 1); // classification flags
+            skip(f, 1); // classification
+            skip(f, 1); // user data
+            skip(f, 2); // scan angle
+            skip(f, 2); // point source ID
+            skip(f, 8); // GPS time
+
+            if (format_has_rgb(fmt_base)) {
+                uint16_t r = read_val<uint16_t>(f);
+                uint16_t g = read_val<uint16_t>(f);
+                uint16_t b = read_val<uint16_t>(f);
+                data.colors[i] = { r / 65535.0, g / 65535.0, b / 65535.0 };
+            } else {
+                data.colors[i] = {0.0, 0.0, 0.0};
+            }
+
+            if (fmt_base == 8 || fmt_base == 10) {
+                skip(f, 2); // NIR
+            }
+            if (fmt_base == 9 || fmt_base == 10) {
+                skip(f, 29); // Wave packet descriptor
+            }
+        }
+
         // Extra bytes
         if (has_normals_in_file) {
             float nx = read_val<float>(f);
