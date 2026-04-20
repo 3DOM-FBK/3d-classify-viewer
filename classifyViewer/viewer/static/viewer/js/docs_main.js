@@ -15,6 +15,8 @@ const PAGES = [
     { id: 'export',     label: 'Export / Download',  icon: '⬆',  isSub: false, section: null },
     { id: 'tools',      label: 'Tools & Selection',  icon: '🛠',  isSub: false, section: null },
     { id: 'features',   label: 'Features',           icon: '✦',  isSub: false, section: null },
+    { id: 'shortcuts',  label: 'Keyboard Shortcuts', icon: '⌨',  isSub: false, section: null }
+
 ];
 
 // ─────────────────────────────────────────────
