@@ -782,4 +782,69 @@ kbd {
 }
 
 .schema-figure:hover .schema-expand-btn { opacity: 1; }
+
+/* ── Mouse icon (shortcuts page) ── */
+.mouse-icon {
+    width: 16px;
+    height: 22px;
+    border: 2px solid rgba(255, 255, 255, 0.4);
+    border-radius: 6px;
+    position: relative;
+    overflow: hidden;
+    display: inline-block;
+    vertical-align: middle;
+    margin-right: 6px;
+}
+
+.mouse-icon::before {
+    content: "";
+    position: absolute;
+    top: 4px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 2px;
+    height: 4px;
+    background: rgba(255, 255, 255, 0.4);
+    border-radius: 1px;
+    z-index: 2;
+}
+
+.mouse-icon.left::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 50%;
+    height: 45%;
+    background: var(--accent-blue);
+    border-bottom: 1.5px solid rgba(255, 255, 255, 0.2);
+    border-right: 1.5px solid rgba(255, 255, 255, 0.2);
+    z-index: 1;
+}
+
+.mouse-icon.right::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 50%;
+    height: 45%;
+    background: var(--accent-blue);
+    border-bottom: 1.5px solid rgba(255, 255, 255, 0.2);
+    border-left: 1.5px solid rgba(255, 255, 255, 0.2);
+    z-index: 1;
+}
+
+.mouse-icon.wheel::after {
+    content: "";
+    position: absolute;
+    top: 4px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 4px;
+    height: 6px;
+    background: var(--accent-blue);
+    border-radius: 2px;
+    z-index: 3;
+}
 .schema-expand-btn:hover { color: var(--text-primary); background: rgba(0, 0, 0, 0.75); }
