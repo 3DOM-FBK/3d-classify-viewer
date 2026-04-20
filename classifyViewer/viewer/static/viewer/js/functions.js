@@ -2084,7 +2084,7 @@ export function showLoadModal() {
                     if (extension === 'ply') {
                         let plyInputPath = inputPath;
                         if (subsampleEnabled) {
-                            console.log(`🔧 Step 3.1: Subsampling PLY (voxel ${voxelSize} m)...`);
+                            console.log(`🔧 Step 3: Subsampling PLY (voxel ${voxelSize} m)...`);
                             const plySubsamplePath = `viewer/static/viewer/data/working/features.ply`;
                             const subResponse = await fetch('/subsample_pc/', {
                                 method: 'POST',
@@ -2100,7 +2100,7 @@ export function showLoadModal() {
                                 throw new Error(errData.message || errData.error || 'PLY subsampling failed');
                             }
                             plyInputPath = plySubsamplePath;
-                            console.log('✅ Step 3.1: PLY subsampling completed');
+                            console.log('✅ Step 3: PLY subsampling completed');
                         }
 
                         console.log("🔄 Step 3: Converting PLY to LAS...");
@@ -2128,10 +2128,30 @@ export function showLoadModal() {
                             throw new Error(errData.message || errData.error || "Mesh sampling failed");
                         }
                         console.log(`✅ Mesh sampled to point cloud (${numPoints} points)`);
-                    } else if (extension === 'las' || extension === 'laz') {
+                    } else if (extension === 'las') {
+                        console.log('🔎 Step 3: Validating LAS input format...');
+                        const inspectResponse = await fetch('/inspect_las_input/', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
+                            body: JSON.stringify({ file_path: inputPath })
+                        });
+                        if (!inspectResponse.ok) {
+                            const errData = await inspectResponse.json().catch(() => ({}));
+                            throw new Error(errData.message || errData.error || 'LAS format inspection failed');
+                        }
+                        const inspectData = await inspectResponse.json();
+                        if (!inspectData.is_canonical) {
+                            throw new Error(
+                                `LAS input must be LAS 1.2 / Point Format 3.\n` +
+                                `Received LAS ${inspectData.version} / Point Format ${inspectData.point_format}. ` +
+                                `Please convert the input LAS to this format or import a ply or glb file.`
+                            );
+                        }
+                        console.log('✅ Input LAS format validated (LAS 1.2 / Point Format 3)');
+
                         let lasInputPath = inputPath;
                         if (subsampleEnabled) {
-                            console.log(`🔧 Step 3.1: Subsampling LAS (voxel ${voxelSize} m)...`);
+                            console.log(`🔧 Step 3: Subsampling LAS (voxel ${voxelSize} m)...`);
                             const lasSubsamplePath = `viewer/static/viewer/data/working/features.las`;
                             const subResponse = await fetch('/subsample_pc/', {
                                 method: 'POST',
@@ -2147,7 +2167,7 @@ export function showLoadModal() {
                                 throw new Error(errData.message || errData.error || 'LAS subsampling failed');
                             }
                             lasInputPath = lasSubsamplePath;
-                            console.log('✅ Step 3.1: LAS subsampling completed');
+                            console.log('✅ Step 3: LAS subsampling completed');
                         }
 
                         // Normalize/add POINT_ID into canonical output path used by next steps.

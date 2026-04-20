@@ -229,6 +229,26 @@ def check_point_id(in_path, out_path=None):
         return result.replace("Output: ", "").strip()
     return result
 
+
+def inspect_las_header(file_path):
+    """
+    Inspect LAS/LAZ header and report the version / point format.
+    Used for fail-fast validation before entering the canonical pipeline.
+    """
+    abs_input = os.path.abspath(os.path.join(settings.BASE_DIR, file_path))
+
+    with laspy.open(abs_input) as las_file:
+        header = las_file.header
+        version = f"{header.version.major}.{header.version.minor}"
+        point_format = int(header.point_format.id)
+
+    return {
+        "path": abs_input,
+        "version": version,
+        "point_format": point_format,
+        "is_canonical": version == "1.2" and point_format == 3,
+    }
+
 def feature_extraction(input_filepath, output_filepath, feature_list, radius_list, sampling=0, use_gpu=True):
     print(f"\n[FUNCTION] ---- FEATURE EXTRACTION ({'GPU' if use_gpu else 'CPU'}) -----")
 
