@@ -117,7 +117,28 @@ def read_txt_data(filepath, class_index):
 
 def train_model(X_train, Y_train, n_jobs, use_gpu=False,
                 n_estimators=200, max_depth=15, min_samples_split=20, max_features='sqrt'):
-    
+    ''' Train the Random Forest model with the specified parameters and return it.
+
+        Default parameters follow the RF200 configuration:
+            - 200 trees (n_estimators)
+            - maximum tree depth of d_max = 15
+            - minimum samples to split a node of n_min = 20
+            - number of features per split = sqrt(n_features)
+
+        Attributes:
+            X_train             :   numpy array with training features
+            Y_train             :   numpy array with training classes
+            n_jobs              :   number of threads used to train the model (CPU only)
+            use_gpu             :   whether to use GPU-accelerated training via cuML
+            n_estimators        :   number of trees in the forest (default: 200)
+            max_depth           :   maximum depth of each tree (default: 15)
+            min_samples_split   :   minimum samples required to split a node (default: 20)
+            max_features        :   number of features per split (default: 'sqrt')
+        
+        Return:
+            model           :   trained model
+            features lists:   list of feature importance values for each feature (in the same order as X_train columns)
+    '''
     if use_gpu and GPU_AVAILABLE:
         print(f"GPU requested and it is AVAILABLE, so use cuml for training.")
         Xg = cp.asarray(X_train, dtype=cp.float32)
