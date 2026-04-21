@@ -1822,6 +1822,9 @@ export function showLoadModal() {
                 const fileName = e.target.files[0]?.name;
                 if (fileName) {
                     fileCustom.innerHTML = `<b>Selected:</b> <span>${fileName}</span>`;
+                    if (subSection) {
+                        subSection.style.display = '';
+                    }
                     const ext = fileName.split('.').pop().toLowerCase();
                     if (meshPointsRow) {
                         meshPointsRow.style.display = ext === 'glb' ? "flex" : "none";
@@ -1834,6 +1837,14 @@ export function showLoadModal() {
                             subToggle.checked = false;
                             subSettingsEl.classList.remove('visible');
                         }
+                    }
+                } else {
+                    fileCustom.innerHTML = `
+                <b>Click to select file</b>
+                <span>Supports .ply, .las, .glb</span>
+            `;
+                    if (subSection) {
+                        subSection.style.display = 'none';
                     }
                 }
             };
@@ -1851,6 +1862,7 @@ export function showLoadModal() {
             // Section 2: Subsampling
             const subSection = document.createElement('div');
             subSection.classList.add('modal-section');
+            subSection.style.display = 'none';
 
             const subTitle = document.createElement('div');
             subTitle.classList.add('modal-section-title');
