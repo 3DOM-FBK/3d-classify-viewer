@@ -3804,7 +3804,7 @@ export function showTrainingModal(scene, onStart) {
                                 const lbl = line.slice(0, ci).trim()
                                     .replace('Loading time', 'Loading')
                                     .replace('Training time', 'Training')
-                                    .replace('Prediction + Metrics time', 'Prediction')
+                                    .replace('Prediction + Metrics time', 'Compute Metrics')
                                     .replace('Total time', 'Total');
                                 const val = line.slice(ci + 1).trim();
                                 const isTotal = lbl === 'Total';
