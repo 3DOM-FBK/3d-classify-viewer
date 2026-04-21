@@ -2727,7 +2727,7 @@ initToolbar();
         </div>
         <div class="command-item">
             <div class="mouse-icon left"></div>
-            <span style="font-size:0.75rem;color:var(--text-primary)">Double-click — close &amp; compute</span>
+            <span style="font-size:0.75rem;color:var(--text-primary)">Click to 1st point — close &amp; compute</span>
         </div>
         <div class="command-item">
             <div class="command-key-container"><span class="command-key">Esc</span></div>
