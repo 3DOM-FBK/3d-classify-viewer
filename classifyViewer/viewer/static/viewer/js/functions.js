@@ -174,7 +174,6 @@ function hexToRgbFloat(hex) {
  *     and tag those points.
  *
  * Class data is persisted in mesh.metadata:
- *   - classIds   : Int32Array   — classId per point (0 = unclassified)
  *   - classColors: Float32Array — RGBA per point, set when classId > 0
  */
 export function applyClassToSelection(scene, classId, hexColor) {
@@ -2402,7 +2401,7 @@ export async function showModelReportModal(modelName, reportPath, metaPath) {
                 const d = await r.json();
                 const meta = JSON.parse(d.content || '{}');
                 const entries = Object.entries(meta.classes || {}).sort((a, b) => Number(a[0]) - Number(b[0]));
-                classNames = ['Unclassified', ...entries.map(([, name]) => name)];
+                classNames = [ ...entries.map(([, name]) => name)];
             }
         } catch (_) { }
     }
@@ -3399,16 +3398,14 @@ export function showTrainingModal(scene, onStart) {
 
                     // ── Build class names from classMap (in-memory) ──
                     // classNames: ordered array matching report class indices 0,1,2,...
-                    let classNames = ['Unclassified'];  // Index 0 = unclassified
+                    let classNames = [];
                     try {
                         // Build sorted array of class names from classMap
                         const classIds = Object.keys(classMap).map(Number).sort((a, b) => a - b);
                         for (const id of classIds) {
-                            if (id !== 0 && classMap[id]) {  // Skip 0 (unclassified), already added
-                                classNames.push(classMap[id]);
-                            }
+                            classNames.push(classMap[id]);
                         }
-                        console.log('[Report] ordered classNames (with Unclassified at 0):', classNames);
+                        console.log('[Report] ordered classNames:', classNames);
                     } catch (e) { console.warn('[Report] Could not build class names:', e); }
 
                     // ── Read report text from first .txt found in modelDir ──
