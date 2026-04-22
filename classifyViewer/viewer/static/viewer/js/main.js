@@ -1424,6 +1424,9 @@ function _computePointCloudBounds() {
     let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
     let found = false;
 
+    const MAX_ABS_COORD = 1e9;
+    const MAX_EXTENT = 1e9;
+
     meshes.forEach((mesh) => {
         if (!mesh || mesh.isDisposed?.()) return;
         if (!mesh.isVisible || !mesh.isEnabled?.()) return;
@@ -1436,6 +1439,14 @@ function _computePointCloudBounds() {
         if (!mn || !mx) return;
         if (!Number.isFinite(mn.x) || !Number.isFinite(mn.y) || !Number.isFinite(mn.z)) return;
         if (!Number.isFinite(mx.x) || !Number.isFinite(mx.y) || !Number.isFinite(mx.z)) return;
+
+        const dx = mx.x - mn.x;
+        const dy = mx.y - mn.y;
+        const dz = mx.z - mn.z;
+        if (!Number.isFinite(dx) || !Number.isFinite(dy) || !Number.isFinite(dz)) return;
+        if (Math.abs(mn.x) > MAX_ABS_COORD || Math.abs(mn.y) > MAX_ABS_COORD || Math.abs(mn.z) > MAX_ABS_COORD) return;
+        if (Math.abs(mx.x) > MAX_ABS_COORD || Math.abs(mx.y) > MAX_ABS_COORD || Math.abs(mx.z) > MAX_ABS_COORD) return;
+        if (Math.abs(dx) > MAX_EXTENT || Math.abs(dy) > MAX_EXTENT || Math.abs(dz) > MAX_EXTENT) return;
 
         if (mn.x < minX) minX = mn.x;
         if (mn.y < minY) minY = mn.y;
@@ -1453,12 +1464,19 @@ function _computePointCloudBounds() {
         return null;
     }
 
+    const dx = maxX - minX;
+    const dy = maxY - minY;
+    const dz = maxZ - minZ;
     const center = new BABYLON.Vector3(
-        (minX + maxX) * 0.5,
-        (minY + maxY) * 0.5,
-        (minZ + maxZ) * 0.5
+        minX + dx * 0.5,
+        minY + dy * 0.5,
+        minZ + dz * 0.5
     );
-    const radius = new BABYLON.Vector3(maxX - minX, maxY - minY, maxZ - minZ).length() * 0.5;
+
+    let radius = Math.hypot(dx, dy, dz) * 0.5;
+    if (!Number.isFinite(radius) || radius < 0) {
+        radius = 0;
+    }
 
     return { center, radius };
 }
@@ -2417,12 +2435,28 @@ const CX = 60, CY = 60, ARM = 40, R_POS = 11, R_NEG = 7;
 scene.registerBeforeRender(() => {
     const m = camera.getViewMatrix().m;
 
+    for (let i = 0; i < 16; i++) {
+        if (!Number.isFinite(m[i])) {
+            gizmoSvg.innerHTML = '';
+            return;
+        }
+    }
+
     const projected = GIZMO_AXES.map(({ dir, color, label }) => {
         const vx = dir[0] * m[0] + dir[1] * m[4] + dir[2] * m[8];
         const vy = -(dir[0] * m[1] + dir[1] * m[5] + dir[2] * m[9]);
         const depth = -(dir[0] * m[2] + dir[1] * m[6] + dir[2] * m[10]);
         return { sx: CX + vx * ARM, sy: CY + vy * ARM, depth, color, label };
-    });
+    }).filter(({ sx, sy, depth }) =>
+        Number.isFinite(sx) &&
+        Number.isFinite(sy) &&
+        Number.isFinite(depth)
+    );
+
+    if (projected.length !== GIZMO_AXES.length) {
+        gizmoSvg.innerHTML = '';
+        return;
+    }
 
     projected.sort((a, b) => a.depth - b.depth);
 

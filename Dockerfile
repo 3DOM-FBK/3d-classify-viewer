@@ -181,6 +181,5 @@ WORKDIR /webapp/classifyViewer
 
 EXPOSE 8000
 
-# Gunicorn — modifica classifyViewer.wsgi se il modulo wsgi è diverso
-# CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "3", \
-#     "--timeout", "120", "classifyViewer.wsgi:application"]
+# Run Django development server
+ENTRYPOINT [ "python", "manage.py", "runserver", "0.0.0.0:8000" ]

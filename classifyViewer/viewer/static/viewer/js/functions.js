@@ -655,20 +655,40 @@ async function processSaveQueue() {
 
 // Centra camera sulla mesh
 export function frameCameraOnMesh(camera, node) {
-    if (!node) return;
+    if (!node || !camera) return;
     console.log("Centering camera on:", node.name);
 
     let min = null;
     let max = null;
+    let found = false;
 
     const meshes = node instanceof BABYLON.AbstractMesh ? [node] : node.getChildMeshes();
 
     if (meshes.length === 0) return;
 
+    const MAX_ABS_COORD = 1e9;
+    const MAX_EXTENT = 1e9;
+
     meshes.forEach(mesh => {
-        const bbox = mesh.getBoundingInfo().boundingBox;
+        if (!mesh || mesh.isDisposed?.()) return;
+        if (!mesh.isVisible || !mesh.isEnabled?.()) return;
+
+        const bbox = mesh.getBoundingInfo?.()?.boundingBox;
+        if (!bbox) return;
+
         const meshMin = bbox.minimumWorld;
         const meshMax = bbox.maximumWorld;
+        if (!meshMin || !meshMax) return;
+        if (!Number.isFinite(meshMin.x) || !Number.isFinite(meshMin.y) || !Number.isFinite(meshMin.z)) return;
+        if (!Number.isFinite(meshMax.x) || !Number.isFinite(meshMax.y) || !Number.isFinite(meshMax.z)) return;
+
+        const localDx = meshMax.x - meshMin.x;
+        const localDy = meshMax.y - meshMin.y;
+        const localDz = meshMax.z - meshMin.z;
+        if (!Number.isFinite(localDx) || !Number.isFinite(localDy) || !Number.isFinite(localDz)) return;
+        if (Math.abs(meshMin.x) > MAX_ABS_COORD || Math.abs(meshMin.y) > MAX_ABS_COORD || Math.abs(meshMin.z) > MAX_ABS_COORD) return;
+        if (Math.abs(meshMax.x) > MAX_ABS_COORD || Math.abs(meshMax.y) > MAX_ABS_COORD || Math.abs(meshMax.z) > MAX_ABS_COORD) return;
+        if (Math.abs(localDx) > MAX_EXTENT || Math.abs(localDy) > MAX_EXTENT || Math.abs(localDz) > MAX_EXTENT) return;
 
         if (!min) {
             min = meshMin.clone();
@@ -681,11 +701,50 @@ export function frameCameraOnMesh(camera, node) {
             max.y = Math.max(max.y, meshMax.y);
             max.z = Math.max(max.z, meshMax.z);
         }
+
+        found = true;
     });
 
-    const center = min.add(max).scale(0.5);
-    const size = max.subtract(min);
-    const radius = size.length() * 0.8;
+    if (!found || !min || !max) {
+        const fallbackTarget = node.getAbsolutePosition?.() || (typeof camera.getTarget === 'function' ? camera.getTarget() : null);
+        if (!fallbackTarget || !Number.isFinite(fallbackTarget.x) || !Number.isFinite(fallbackTarget.y) || !Number.isFinite(fallbackTarget.z)) {
+            console.warn("Frame Selection skipped: no valid visible bounds.");
+            return;
+        }
+        camera.setTarget(fallbackTarget);
+        if (camera.radius !== undefined) {
+            camera.radius = Math.max(Number.isFinite(camera.radius) ? camera.radius : 1, 1);
+        } else {
+            camera.position = fallbackTarget.add(new BABYLON.Vector3(0, 0, 1));
+        }
+        return;
+    }
+
+    const dx = max.x - min.x;
+    const dy = max.y - min.y;
+    const dz = max.z - min.z;
+    const center = new BABYLON.Vector3(
+        min.x + dx * 0.5,
+        min.y + dy * 0.5,
+        min.z + dz * 0.5
+    );
+
+    const diagonal = Math.hypot(dx, dy, dz);
+    let radius = diagonal * 0.8;
+    if (!Number.isFinite(radius) || radius <= 0) {
+        const target = typeof camera.getTarget === 'function' ? camera.getTarget() : null;
+        const fallback = target ? BABYLON.Vector3.Distance(target, center) : 0;
+        radius = Math.max(Number.isFinite(fallback) ? fallback : 0, camera.radius || 0, 1);
+    }
+
+    if (!Number.isFinite(center.x) || !Number.isFinite(center.y) || !Number.isFinite(center.z)) {
+        console.warn("Frame Selection aborted: computed center is invalid.");
+        return;
+    }
+    if (!Number.isFinite(radius) || radius <= 0) {
+        console.warn("Frame Selection aborted: computed radius is invalid.");
+        return;
+    }
 
     camera.setTarget(center);
 
