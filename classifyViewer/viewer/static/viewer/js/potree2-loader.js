@@ -2367,14 +2367,60 @@ export class Potree2Loader {
 
         if (anyPoints) {
             const margin = 0.05;
-            this.cutHistory.push({
-                segmentId,
-                visible: isVisible,
-                minX: minX - margin, minY: minY - margin, minZ: minZ - margin,
-                maxX: maxX + margin, maxY: maxY + margin, maxZ: maxZ + margin,
-                selections: this.selectionHistory.map(s => ({ ...s, transformMatrix: s.transformMatrix.clone() })),
-                deselections: this.deselectionHistory.map(d => ({ ...d, transformMatrix: d.transformMatrix.clone() }))
-            });
+            const cloneRegions = (regions) => regions.map(r => ({
+                ...r,
+                transformMatrix: r.transformMatrix?.clone ? r.transformMatrix.clone() : r.transformMatrix
+            }));
+
+            // segmentId 0 is the main cloud and must never be represented as a cutHistory entry.
+            // Instead, remove the moved area from all explicit cut segments via deselections.
+            if (segmentId === 0) {
+                this.cutHistory.forEach(entry => {
+                    if (!entry || entry.segmentId <= 0) return;
+                    if (!Array.isArray(entry.deselections)) entry.deselections = [];
+                    entry.deselections.push(...cloneRegions(this.selectionHistory));
+                    entry.deselections.push(...cloneRegions(this.deselectionHistory));
+                });
+            } else {
+                let targetEntry = this.cutHistory.find(c => c.segmentId === segmentId);
+                if (!targetEntry) {
+                    targetEntry = {
+                        segmentId,
+                        visible: isVisible,
+                        minX: Infinity,
+                        minY: Infinity,
+                        minZ: Infinity,
+                        maxX: -Infinity,
+                        maxY: -Infinity,
+                        maxZ: -Infinity,
+                        selections: [],
+                        deselections: []
+                    };
+                    this.cutHistory.push(targetEntry);
+                }
+
+                targetEntry.visible = isVisible;
+                if (!Array.isArray(targetEntry.selections)) targetEntry.selections = [];
+                if (!Array.isArray(targetEntry.deselections)) targetEntry.deselections = [];
+
+                targetEntry.minX = Math.min(targetEntry.minX ?? Infinity, minX - margin);
+                targetEntry.minY = Math.min(targetEntry.minY ?? Infinity, minY - margin);
+                targetEntry.minZ = Math.min(targetEntry.minZ ?? Infinity, minZ - margin);
+                targetEntry.maxX = Math.max(targetEntry.maxX ?? -Infinity, maxX + margin);
+                targetEntry.maxY = Math.max(targetEntry.maxY ?? -Infinity, maxY + margin);
+                targetEntry.maxZ = Math.max(targetEntry.maxZ ?? -Infinity, maxZ + margin);
+
+                targetEntry.selections.push(...cloneRegions(this.selectionHistory));
+                targetEntry.deselections.push(...cloneRegions(this.deselectionHistory));
+
+                // Prevent future LOD replay from assigning this moved area back to other segments.
+                this.cutHistory.forEach(entry => {
+                    if (!entry || entry.segmentId <= 0 || entry.segmentId === segmentId) return;
+                    if (!Array.isArray(entry.deselections)) entry.deselections = [];
+                    entry.deselections.push(...cloneRegions(this.selectionHistory));
+                    entry.deselections.push(...cloneRegions(this.deselectionHistory));
+                });
+            }
         }
 
         this.selectionHistory = [];
