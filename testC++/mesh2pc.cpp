@@ -183,6 +183,7 @@ struct GLBMesh {
     std::vector<std::array<float,3>> vertices;
     std::vector<std::array<int,3>>   faces;
     std::vector<std::array<float,2>> uvs;
+    bool has_uvs = false;
     std::vector<std::array<float,4>> vertex_colors;
     int texture_index = -1;
     std::array<float,3> base_color = {1.0f, 1.0f, 1.0f};
@@ -464,7 +465,23 @@ bool load_glb(const std::string& path,
                         static_cast<float>(mat.pbrMetallicRoughness.baseColorFactor[2])
                     };
                 }
-                int tex_idx = mat.pbrMetallicRoughness.baseColorTexture.index;
+                int tex_idx = -1;
+                int uv_set = 0;
+
+                // Preferred source for color in PBR workflow.
+                if (mat.pbrMetallicRoughness.baseColorTexture.index >= 0) {
+                    tex_idx = mat.pbrMetallicRoughness.baseColorTexture.index;
+                    uv_set = mat.pbrMetallicRoughness.baseColorTexture.texCoord;
+                } else if (mat.emissiveTexture.index >= 0) {
+                    // Fallback often used by some DCC exports.
+                    tex_idx = mat.emissiveTexture.index;
+                    uv_set = mat.emissiveTexture.texCoord;
+                } else if (model.textures.size() == 1) {
+                    // Last-resort fallback for files with a single texture but no explicit binding.
+                    tex_idx = 0;
+                    uv_set = 0;
+                }
+
                 if (tex_idx >= 0 && tex_idx < (int)model.textures.size()) {
                     const auto& tex = model.textures[tex_idx];
                     int img_idx = tex.source;
@@ -476,6 +493,37 @@ bool load_glb(const std::string& path,
                         const auto& s = model.samplers[tex.sampler];
                         if (s.wrapS != 0) m.wrap_s = s.wrapS;
                         if (s.wrapT != 0) m.wrap_t = s.wrapT;
+                    }
+
+                    std::string uv_attr = "TEXCOORD_" + std::to_string(uv_set);
+                    int uv_accessor_index = -1;
+                    if (prim.attributes.count(uv_attr)) {
+                        uv_accessor_index = prim.attributes.at(uv_attr);
+                    } else if (prim.attributes.count("TEXCOORD_0")) {
+                        uv_accessor_index = prim.attributes.at("TEXCOORD_0");
+                    } else if (prim.attributes.count("TEXCOORD_1")) {
+                        uv_accessor_index = prim.attributes.at("TEXCOORD_1");
+                    }
+
+                    m.uvs.resize(pa.count, {0.0f, 0.0f});
+                    m.has_uvs = false;
+                    if (uv_accessor_index >= 0) {
+                        auto& ua = model.accessors[uv_accessor_index];
+                        auto& ubv = model.bufferViews[ua.bufferView];
+                        int uv_comp_size = component_size_bytes(ua.componentType);
+                        int uv_stride = (ubv.byteStride > 0) ? ubv.byteStride : 2 * uv_comp_size;
+                        const uint8_t* ubase = model.buffers[ubv.buffer].data.data() + ubv.byteOffset + ua.byteOffset;
+                        size_t uv_count = std::min((size_t)ua.count, m.uvs.size());
+                        for (size_t i = 0; i < uv_count; ++i) {
+                            const uint8_t* uv_ptr = ubase + i * uv_stride;
+                            double u = read_component_as_double(uv_ptr, ua.componentType, ua.normalized);
+                            double v = read_component_as_double(uv_ptr + uv_comp_size, ua.componentType, ua.normalized);
+                            m.uvs[i] = {
+                                static_cast<float>(u),
+                                static_cast<float>(v)
+                            };
+                        }
+                        m.has_uvs = (uv_count > 0);
                     }
                 }
             }
@@ -506,41 +554,8 @@ bool load_glb(const std::string& path,
                     };
                 }
             }
-            // Read the UV set requested by the baseColorTexture (texCoord field).
-            // If unavailable, fallback to TEXCOORD_0, then TEXCOORD_1.
-            int uv_set = 0;
-            if (prim.material >= 0) {
-                auto& mat = model.materials[prim.material];
-                uv_set = mat.pbrMetallicRoughness.baseColorTexture.texCoord;
-            }
-            std::string uv_attr = "TEXCOORD_" + std::to_string(uv_set);
-            int uv_accessor_index = -1;
-            if (prim.attributes.count(uv_attr)) {
-                uv_accessor_index = prim.attributes.at(uv_attr);
-            } else if (prim.attributes.count("TEXCOORD_0")) {
-                uv_accessor_index = prim.attributes.at("TEXCOORD_0");
-            } else if (prim.attributes.count("TEXCOORD_1")) {
-                uv_accessor_index = prim.attributes.at("TEXCOORD_1");
-            }
-
-            m.uvs.resize(pa.count, {0.0f, 0.0f});
-            if (uv_accessor_index >= 0) {
-                auto& ua = model.accessors[uv_accessor_index];
-                auto& ubv = model.bufferViews[ua.bufferView];
-                int uv_comp_size = component_size_bytes(ua.componentType);
-                int uv_stride = (ubv.byteStride > 0) ? ubv.byteStride : 2 * uv_comp_size;
-                const uint8_t* ubase = model.buffers[ubv.buffer].data.data() + ubv.byteOffset + ua.byteOffset;
-                size_t uv_count = std::min((size_t)ua.count, m.uvs.size());
-                for (size_t i = 0; i < uv_count; ++i) {
-                    const uint8_t* uv_ptr = ubase + i * uv_stride;
-                    double u = read_component_as_double(uv_ptr, ua.componentType, ua.normalized);
-                    double v = read_component_as_double(uv_ptr + uv_comp_size, ua.componentType, ua.normalized);
-                    m.uvs[i] = {
-                        static_cast<float>(u),
-                        static_cast<float>(v)
-                    };
-                }
-
+            if (m.uvs.empty()) {
+                m.uvs.resize(pa.count, {0.0f, 0.0f});
             }
 
             meshes.push_back(std::move(m));
@@ -601,7 +616,7 @@ SubMeshResult process_submesh(
     result.points.resize(n);
     result.colors.resize(n);
 
-    bool has_texture = mesh.texture_index >= 0 && mesh.texture_index < (int)textures.size();
+    bool has_texture = mesh.texture_index >= 0 && mesh.texture_index < (int)textures.size() && mesh.has_uvs;
     bool has_vertex_colors = !mesh.vertex_colors.empty();
     const std::vector<uint8_t>* tex_ptr = nullptr;
     int tw = 0, th = 0, channels = 0;
