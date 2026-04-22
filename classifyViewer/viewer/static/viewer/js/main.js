@@ -1900,14 +1900,15 @@ function updateMeasureLabelPosition() {
 // ---------------------------------------------------------------------------
 const _PICK_CULL_RADII_PX = [96, 192, 320, 512];
 const _PICK_COARSE_STRIDE = 8;
-const _PICK_REFINE_TOP_NODES = 3;
+const _PICK_COARSE_MIN_SAMPLES = 200;
+const _PICK_REFINE_TOP_NODES = 6;
 
 const _gpuPickerState = {
     enabled: false,
     initialized: false
 };
 
-function _collectPickCandidates(loader, m, screenX, screenY, cullRadiusPx) {
+function _collectPickCandidates(loader, mWtoS, screenX, screenY, cullRadiusPx) {
     const cullR2 = cullRadiusPx * cullRadiusPx;
     const candidates = [];
 
@@ -1927,11 +1928,11 @@ function _collectPickCandidates(loader, m, screenX, screenY, cullRadiusPx) {
             continue;
         }
 
-        const cw = c.x * m[3] + c.y * m[7] + c.z * m[11] + m[15];
+        const cw = c.x * mWtoS[3] + c.y * mWtoS[7] + c.z * mWtoS[11] + mWtoS[15];
         if (!Number.isFinite(cw) || cw <= 0) continue;
 
-        const cx = (c.x * m[0] + c.y * m[4] + c.z * m[8] + m[12]) / cw;
-        const cy = (c.x * m[1] + c.y * m[5] + c.z * m[9] + m[13]) / cw;
+        const cx = (c.x * mWtoS[0] + c.y * mWtoS[4] + c.z * mWtoS[8] + mWtoS[12]) / cw;
+        const cy = (c.x * mWtoS[1] + c.y * mWtoS[5] + c.z * mWtoS[9] + mWtoS[13]) / cw;
         if (!Number.isFinite(cx) || !Number.isFinite(cy)) continue;
 
         const screenR = (radiusWorld / cw) * 0.5 * Math.max(1, engine.getRenderWidth());
@@ -1959,7 +1960,10 @@ function _scanMeshPick(mesh, m, wm, screenX, screenY, stride = 1, bestDist2 = In
     let bestZ = 0;
 
     const n = Math.floor(positions.length / 3);
-    const step = Math.max(1, stride | 0);
+    const effectiveStride = (stride <= 1)
+        ? 1
+        : Math.max(1, Math.min(stride | 0, Math.ceil(n / _PICK_COARSE_MIN_SAMPLES)));
+    const step = effectiveStride;
     for (let i = 0; i < n; i += step) {
         const lx = positions[i * 3];
         const ly = positions[i * 3 + 1];
@@ -2011,6 +2015,7 @@ function _pickClosestPointInCloudCPU(screenX, screenY) {
         vp.x + vp.width / 2, vp.y + vp.height / 2, 0, 1
     );
     const m = worldMatrix.multiply(scene.getTransformMatrix()).multiply(vpScale).m;
+    const mWtoS = scene.getTransformMatrix().multiply(vpScale).m;
     const wm = worldMatrix.m;
 
     // Per-call cache avoids stale references across geometry mutations.
@@ -2019,7 +2024,7 @@ function _pickClosestPointInCloudCPU(screenX, screenY) {
     // Progressive candidate expansion improves robustness while keeping average cost low.
     let candidates = [];
     for (const radiusPx of _PICK_CULL_RADII_PX) {
-        candidates = _collectPickCandidates(loader, m, screenX, screenY, radiusPx);
+        candidates = _collectPickCandidates(loader, mWtoS, screenX, screenY, radiusPx);
         if (candidates.length > 0) break;
     }
     if (candidates.length === 0) return null;
@@ -2050,7 +2055,7 @@ function _pickClosestPointInCloudCPU(screenX, screenY) {
 
     for (let idx = 0; idx < topN; idx++) {
         const { mesh, minD2 } = ranked[idx];
-        if (minD2 >= bestDist2) continue;  // entire node is farther than current best
+        if (minD2 > bestDist2 * 4) continue;  // entire node is farther than current best
         const refine = _scanMeshPick(mesh, m, wm, screenX, screenY, 1, bestDist2, posCache.get(mesh));
         if (!refine.found) continue;
         bestDist2 = refine.bestDist2;
