@@ -11,10 +11,10 @@ const PAGES = [
     { id: 'home',       label: 'Overview',          icon: '⌂',  isSub: false, section: null },
     { id: 'load-data',  label: 'Loading Data',       icon: '📂', isSub: false, section: 'SECTIONS' },
     { id: 'training',   label: 'Training Mode',      icon: '🎯', isSub: false, section: null },
-    { id: 'classify',   label: 'Classify Mode',      icon: '🔬', isSub: false, section: null },
-    { id: 'export',     label: 'Export / Download',  icon: '⬆',  isSub: false, section: null },
     { id: 'tools',      label: 'Tools & Selection',  icon: '🛠',  isSub: false, section: null },
     { id: 'features',   label: 'Features',           icon: '✦',  isSub: false, section: null },
+    { id: 'classify',   label: 'Classify Mode',      icon: '🔬', isSub: false, section: null },
+    { id: 'export',     label: 'Export / Download',  icon: '⬆',  isSub: false, section: null },
     { id: 'shortcuts',  label: 'Keyboard Shortcuts', icon: '⌨',  isSub: false, section: null }
 
 ];

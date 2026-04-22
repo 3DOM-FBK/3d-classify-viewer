@@ -68,29 +68,29 @@
                     <div class="overview-schemas">
                         <figure class="schema-figure" >
                             <figcaption>Loading Data</figcaption>
-                            <div class="schema-img-wrap">
-                                <img src="{% static 'viewer/schemas/Input_schema.png' %}" alt="Loading data schema">
+                            <div class="schema-img-wrap" style="height: 250px;">
+                                <img src="{% static 'viewer/images/Input_schema.png' %}" alt="Loading data schema">
                             </div>
                         </figure>
 
                         <figure class="schema-figure" >
                             <figcaption>Training</figcaption>
-                            <div class="schema-img-wrap">
-                                <img src="{% static 'viewer/schemas/Train_schema.png' %}" alt="Training schema">
+                            <div class="schema-img-wrap" style="height: 250px;">
+                                <img src="{% static 'viewer/images/Train_schema.png' %}" alt="Training schema">
                             </div>
                         </figure>
 
                         <figure class="schema-figure" >
                             <figcaption>Classify</figcaption>
-                            <div class="schema-img-wrap">
-                                <img src="{% static 'viewer/schemas/Classify_schema.png' %}" alt="Classify schema">
+                            <div class="schema-img-wrap" style="height: 250px;">
+                                <img src="{% static 'viewer/images/Classify_schema.png' %}" alt="Classify schema">
                             </div>
                         </figure>
 
                         <figure class="schema-figure" >
                             <figcaption>Export / Download</figcaption>
-                            <div class="schema-img-wrap">
-                                    <img src="{% static 'viewer/schemas/Download_schema.png' %}" alt="Export schema">
+                            <div class="schema-img-wrap" style="height: 250px;">
+                                    <img src="{% static 'viewer/images/Download_schema.png' %}" alt="Export schema">
                             </div>
                         </figure>
                     </div>
@@ -116,7 +116,7 @@
                         <div class="doc-card" onclick="navigateTo('export')">
                             <div class="card-icon">⬆</div>
                             <div class="card-title">Export / Download</div>
-                            <div class="card-desc">Save your classified or annotated point clouds.</div>
+                            <div class="card-desc">Save your the prediction point cloud and trained models.</div>
                         </div>
                         <div class="doc-card" onclick="navigateTo('tools')">
                             <div class="card-icon">🛠</div>
@@ -128,14 +128,22 @@
                             <div class="card-title">Features</div>
                             <div class="card-desc">Geometric features and the feature matrix explained.</div>
                         </div>
+                        <div class="doc-card" onclick="navigateTo('shortcuts')">
+                            <div class="card-icon">⌨</div>
+                            <div class="card-title">Shortcuts</div>
+                            <div class="card-desc">Keyboard shortcuts for efficient navigation and interaction.</div>
+                        </div>
                     </div>
 
                     <h2 id="what-is-3dom">What is 3DOM Classify?</h2>
                     <p>
-                        3DOM Classify Viewer is an in-browser tool built on <strong>BabylonJS</strong> that lets you
-                        load point clouds or models (ply, las, glb), visually inspect and label them, train a
-                        Random-Forest classifier and then apply the trained model to new data — all without
-                        leaving the browser tab.
+                        3DOM Classify Viewer is a local in-browser tool built on <strong>BabylonJS</strong> and <strong>Potree</strong> that lets you:
+                        <ul>
+                            <li>load point clouds or models (ply, las, glb);</li>
+                            <li>visually inspect and label them;</li>
+                            <li>train a Random-Forest classifier;</li>
+                            <li>run inference on new, unlabelled data;</li>
+                        </ul>
                     </p>
                     <p>
                         The application is served by a Django backend that handles file I/O and model training,
@@ -143,8 +151,8 @@
                     </p>
 
                     <!-- Intro video placeholder -->
+                     <h2 id="introduction-video-example">Introduction Video</h2>
                     <div class="video-block">
-                        <div class="video-block-label">Introduction Video</div>
                         <div class="video-wrapper">
                              <!-- Ricordarsi mettere /preview e non /view -->
                             <iframe 
@@ -168,42 +176,57 @@
                     <h1>Loading Data</h1>
                     <p class="page-subtitle">How to load your point cloud dataset into the viewer.</p>
 
+                    <div class="overview-schemas" style="margin-bottom: 32px;">
+                        <figure class="schema-figure" style="cursor:default; max-width: 400px;">
+                            <figcaption>Load Data</figcaption>
+                            <div class="schema-img-wrap">
+                                <img src="{% static 'viewer/images/Input_schema.png' %}" alt="Input schema">
+                            </div>
+                        </figure>
+                    </div>
+
                     <!-- ─── WRITE YOUR CONTENT BELOW ─── -->
 
                     <h2 id="supported-formats">Supported Formats</h2>
-                    <p><!-- Add supported formats description here --></p>
+                    <p>These are these supported formats for the viewer:</p>
                     <ul>
-                        <li><code>.ply</code> — PLY Point Cloud </li>
-                        <li><code>.glb</code> — GLB Model </li>
-                        <li><code>.las</code> — LAS Point Cloud</li>
+                        <li><code>.ply</code> — PLY Point Cloud;  </li>
+                        <li><code>.glb</code> — GLB Model;  </li>
+                        <li><code>.las</code> — LAS version 1.2 Format 3 Point Cloud; </li>
                     </ul>
 
                     <h2 id="how-to-load">How to Load a File</h2>
-                    <p><!-- Describe the step-by-step process here --></p>
-                    <p>File -> Load Data -> Click to select file. </p>
-
-                    <h2 id="loading-pipeline">Loading Pipeline</h2>
-                    <p>The file will be converted in LAS -> Potree -> Viewer</p>
-
-                    <div class="callout">
-                        <span class="callout-icon">ℹ️</span>
-                        <!-- Add any important notes or tips here -->
-                        Files larger than 50 M points may take several minutes to load and require at least 8 GB RAM.
+                    <p>In the top left corner, click to <strong>File</strong> and then <strong>Load Data</strong> button. 
+                        There will be a section like shown below: </p>
+                    
+                    <div class="overview-schemas" style="margin-bottom: 32px;">
+                        <figure class="schema-figure" style="cursor:default; max-width: 300px;">
+                            <div class="schema-img-wrap">
+                                <img src="{% static 'viewer/images/Load_data.png' %}" alt="Load data">
+                            </div>
+                        </figure>
                     </div>
 
-                    <!-- Video placeholder -->
+                    <p>Here it is possible to load from local a file and decide also to subsample the point cloud, in case of a PLY or LAS file.
+                        For the GLB format, it is possible to decide the target points of the point cloud. </p>
+                    
+                    <h2 id="loading-pipeline">Loading Pipeline</h2>
+                    <p> For semplicity and compatibility of the Potree library, the files are converted to a LAS version 1.2 Format 3 Point Cloud. 
+                        Potree has the main task to prepare the point cloud data for BabylonJS. </p>
+                    <p> Once ready the point cloud will be available for viewing and annotation. </p>
+
+                    
+                    <h2 id="loading-video-example">Loading Data Video Example</h2>
                     <div class="video-block">
-                        <div class="video-block-label">Load Data Walkthrough</div>
                         <div class="video-wrapper">
-                            <!--
-                                <video src="{% static 'viewer/videos/load-data.mp4' %}" controls></video>
-                            -->
-                            <div class="video-placeholder">
-                                <div class="play-icon">▶</div>
-                                <span>Add your load data video here</span>
-                            </div>
+                             <!-- Ricordarsi mettere /preview e non /view -->
+                            <iframe 
+                                src="https://drive.google.com/file/d/1mMrOOYJgS8kpnkBxrpRgWSIWuS3TqlY-/preview" 
+                                frameborder="0" 
+                                allow="autoplay"
+                                allowfullscreen>
+                            </iframe>
                         </div>
-                        <div class="video-caption"><!-- Add video caption --></div>
                     </div>
 
                 </article>
@@ -215,149 +238,110 @@
                 <article class="doc-page" id="page-training">
                     <div class="page-eyebrow">🎯 Training Mode</div>
                     <h1>Training Mode</h1>
-                    <p class="page-subtitle">Annotate point cloud data and train a Random Forest classifier.</p>
+                    <p class="page-subtitle">Annotate point cloud data and train a model classifier.</p>
 
-                    <!-- ─── WRITE YOUR CONTENT BELOW ─── -->
-
-                    <h2 id="classes">Managing Classes</h2>
-                    <p>Selection and cut mode</p>
-                    <p>Assign to class</p>
-                    
-                    <h2 id="calculate-feature">Calculate Features</h2>
-                    <p>Calculate the features to use for the dataset</p>
-
-                    <h2 id="divide-dataset">Divide the dataset</h2>
-                    <p>Segment the dataset into training and validation sets</p>
-                    
-                    <h2 id="running-training">Training configuration</h2>
-                    <p>Choose the two point cloud data, previously segmented</p>
-                    <p>Choose which features to be used to train the RF model (also if include RGB)</p>
-                    <p>Decide the values of the parameters to give in input to the RF model.</p>
-                    <p>Those parameters are:</p>
-                    <p> - n of jobs (default: 12) </p>   
-                    <p> - n of estimators (default: 200) </p> 
-                    <p> - max depths (default: 15) </p> 
-                    <p> - min samples split (default: 20) </p> 
-                    <p> - max features (default: "sqrt") </p> 
-                    <p> - use gpu (default: "off") </p>
-                    
-                    <h2 id="training-results">Training results</h2>
-                    <p> After training the model trained and report will be given as output.</p>
-                    <p> The viewer will explain the report with sections: </p>
-                    <p> - metrics accuracy </p>   
-                    <p> - metrics accuracy per class </p> 
-                    <p> - sorted feature importance </p> 
-                    <p> - different processing time for each steps (loading, training, computing metrics, and overall time) </p> 
-
-                    <!-- Video placeholder -->
-                    <div class="video-block">
-                        <div class="video-block-label">Training Mode Tutorial</div>
-                        <div class="video-wrapper">
-                            <!--
-                                <video src="{% static 'viewer/videos/training.mp4' %}" controls></video>
-                            -->
-                            <div class="video-placeholder">
-                                <div class="play-icon">▶</div>
-                                <span>Add your training mode video here</span>
-                            </div>
-                        </div>
-                        <div class="video-caption"><!-- Add video caption --></div>
-                    </div>
-
-                </article>
-
-
-                <!-- ════════════════════════════════
-                     PAGE: CLASSIFY MODE
-                ════════════════════════════════ -->
-                <article class="doc-page" id="page-classify">
-                    <div class="page-eyebrow">🔬 Classify Mode</div>
-                    <h1>Classify Mode</h1>
-                    <p class="page-subtitle">Apply a trained model to new, unlabelled point cloud data.</p>
-
-                    <!-- ─── WRITE YOUR CONTENT BELOW ─── -->
-
-                    <h2 id="run-classification">Classification Configuration</h2>
-                    <p> Decide which point cloud to classify (in case segment the zone) </p>
-                    <p> Select a pre-trained model or use the one trained before </p>
-                    <p> Decide to use or now the gpu also in that case </p>
-
-                    <h2 id="review-results">Classification results</h2>
-                    <p>At the end will be shown in the  viewer the chosen point cloud with the different classes predicted </p>
-
-                    <!-- Video placeholder -->
-                    <div class="video-block">
-                        <div class="video-block-label">Classify Mode Demo</div>
-                        <div class="video-wrapper">
-                            <!--
-                                <video src="{% static 'viewer/videos/classify.mp4' %}" controls></video>
-                            -->
-                            <div class="video-placeholder">
-                                <div class="play-icon">▶</div>
-                                <span>Add your classify mode video here</span>
-                            </div>
-                        </div>
-                        <div class="video-caption"><!-- Add video caption --></div>
-                    </div>
-
-                </article>
-
-
-                <!-- ════════════════════════════════
-                     PAGE: EXPORT / DOWNLOAD
-                ════════════════════════════════ -->
-                <article class="doc-page" id="page-export">
-                    <div class="page-eyebrow">⬆ Export</div>
-                    <h1>Export / Download Dataset</h1>
-                    <p class="page-subtitle">Save your classified or annotated point clouds to disk.</p>
-
-                    <!-- Schema image for export workflow -->
                     <div class="overview-schemas" style="margin-bottom: 32px;">
-                        <figure class="schema-figure" style="cursor:default; max-width: 500px;">
-                            <figcaption>Export Workflow</figcaption>
+                        <figure class="schema-figure" style="cursor:default; max-width: 400px;">
+                            <figcaption>Training Mode</figcaption>
                             <div class="schema-img-wrap">
-                                <img src="{% static 'viewer/schemas/Download_schema.png' %}" alt="Export schema">
+                                <img src="{% static 'viewer/images/Train_schema.png' %}" alt="Train schema">
                             </div>
                         </figure>
                     </div>
 
                     <!-- ─── WRITE YOUR CONTENT BELOW ─── -->
 
-                    <h2 id="export-formats">Export Formats</h2>
-                    <p><!-- Describe available export formats --></p>
-                    <ul>
-                        <li><code>.las</code> — point cloud format </li>
-                        <li><code>.pkl</code> — trained model format </li>
-                    </ul>
+                    <h2 id="classes">Managing Classes</h2>
+                    <p>Now that the point cloud data is loaded, you can manage the classes for annotation.
+                        It is possible to translate and rotate the point cloud to help for the annotation process.</p>
+                    <p> There are different type of point cloud selection methods available. They can be found in the <a href="#" onclick="navigateTo('tools')" style="color: #fff;">Tools</a> section.</p>
 
-                    <h2 id="how-to-export">How to Export</h2>
-                    <p>File -> Download Data -> Choose which point cloud to include and trained models. </p>
+                    <p>When you select the point cloud to be annotated, you can assign it to a specific class with the right mouse button <a class="mouse-icon right"></a>.</p>
 
-                    <div class="callout warning">
-                        <span class="callout-icon">⚠️</span>
-                        <!-- Add any warnings or tips here -->
-                        Exporting very large files may take a moment. Do not close the browser tab while the download is in progress.
-                    </div>
-
-                    <!-- Video placeholder -->
-                    <div class="video-block">
-                        <div class="video-block-label">Export Walkthrough</div>
-                        <div class="video-wrapper">
-                            <!--
-                                <video src="{% static 'viewer/videos/export.mp4' %}" controls></video>
-                            -->
-                            <div class="video-placeholder">
-                                <div class="play-icon">▶</div>
-                                <span>Add your export video here</span>
+                    <div class="overview-schemas" style="margin-bottom: 32px;">
+                        <figure class="schema-figure" style="cursor:default; max-width: 300px;">
+                            <div class="schema-img-wrap">
+                                <img src="{% static 'viewer/images/Assign_class.png' %}" alt="Assign class">
                             </div>
-                        </div>
-                        <div class="video-caption"><!-- Add video caption --></div>
+                        </figure>
                     </div>
+
+                    <p>It is possible to change view from <strong>Color</strong> to <strong>Classification View</strong> to see the annotated classes.</p>
+
+                    <h2 id="calculate-feature">Calculate Features</h2>
+                    <p>Later, you can calculate the features for your dataset. A detailed explanation can be found in the <a href="#" onclick="navigateTo('features')" style="color: #fff;">Features</a> section</p>
+                    <p>It is possible to decide from a list of available features and specify the radii to use for each feature. </p>
+
+                    <h2 id="divide-dataset">Divide the dataset</h2>
+                    <p>Next step is to segment the dataset into training and validation sets. You can use the selection and the cut mode to divide the dataset.</p>
+                    <p> Training sets must be around 70% of the total, while validation sets should be around 30%.</p>
+
+                    <h2 id="running-training">Training configuration</h2>
+
+                    <div class="overview-schemas" style="margin-bottom: 32px;">
+                        <figure class="schema-figure">
+                            <div class="schema-img-wrap">
+                                <img src="{% static 'viewer/images/Training_configuration.png' %}" alt="Training configuration">
+                            </div>
+                        </figure>
+                    </div>
+
+                    <p> In the training configuration, you can decide the model name and the data split 
+                        of the two sets as showned in the picture. </p>
+                    
+                    <p> In addition, it is possible to choose which features to select during the training (<code>RGB</code>  can be included using the button below)</p>
+                    <p> Morever, you can decide the parameters values for RF model, which are:</p>
+                    <ul>
+                        <li>n of estimators: number of trees in the forest (<code>default: 200</code>); </li>
+                        <li>max depths: maximum depth of each tree (<code>default: 15</code>);</li>
+                        <li>min samples split: minimum number of samples required to be at a split node (<code>default: 20</code>); </li>
+                        <li>n of jobs: number of threads used to train the model (used only with CPU, <code>default: 12</code>);</li>
+                        <li>use gpu: whether to use <code>GPU</code>  for training you can flag the button (<code>default: "off"</code>); </li>
+
+                    </ul>
+                   
+                    <h2 id="training-results">Training results</h2>
+                    <p> After training the model, a report will be given as output, as shown in the example below.</p>
+
+                    <div class="overview-schemas" style="margin-bottom: 32px;">
+                        <figure class="schema-figure">
+                            <div class="schema-img-wrap">
+                                <img src="{% static 'viewer/images/Training_results.png' %}" alt="Training results">
+                            </div>
+                        </figure>
+                    </div>
+
+                    <p> This viewer window explain the report with different sections: </p>
+                    <ul>
+                        <li>metrics accuracy: overall accuracy of the model, precision, recall, F1-score, and IoU;</li>
+                        <li>metrics accuracy per class: all metrics accuracy for each class</li>
+                        <li>sorted feature importance: features ranked by their importance in the model; 
+                            the sum of all the features should equal to 1.0. For instance, if you have 5 features, each feature will have a value 
+                            between 0 and 1 (that represent the percentage of importance of that feature), and the sum of all 5 features will be 1.0.
+                            For simplicity, the report will visualize the most important features arriving to 0.91 and the other will be hidden, 
+                            but the overall sum remain 1.0;</li>
+                        <li>different processing time for each steps: loading data, training the model, computing metrics, and overall time;</li>
+                    </ul>
+                   
+                    <!-- Video placeholder -->
+                    <h2 id="training-video-example">Training Mode Video Example</h2>
+                    <div class="video-block">
+                        <div class="video-wrapper">
+                             <!-- Ricordarsi mettere /preview e non /view -->
+                            <iframe 
+                                src="https://drive.google.com/file/d/1PxMVBNR5qqZMe54nxW5EjqQBrnezXD_t/preview" 
+                                frameborder="0" 
+                                allow="autoplay"
+                                allowfullscreen>
+                            </iframe>
+                        </div>
+                    </div>
+
+                    
 
                 </article>
 
-
-                <!-- ════════════════════════════════
+                 <!-- ════════════════════════════════
                      PAGE: TOOLS & SELECTION
                 ════════════════════════════════ -->
                 <article class="doc-page" id="page-tools">
@@ -368,56 +352,141 @@
                     <!-- ─── WRITE YOUR CONTENT BELOW ─── -->
 
                     <h2 id="restore-reset">Restore or reset settings</h2>
-                    <h3 id="backuop-mode">Restore Point Cloud Backup</h3>
-                    <p>Possibility to restore previous point cloud in case of errors</p>
 
-                    <h3 id="restore-mode">Restore Deleted Points</h3>
-                    <p>Possibility to restore deleted points</p>
+                    <div class="overview-schemas" style="margin-bottom: 32px;">
+                        <figure class="schema-figure" style="cursor:default; max-width: 184px; max-height: 226px;">                            
+                            <div class="schema-img-wrap">
+                                <img src="{% static 'viewer/images/File_options.png' %}" alt="File options">
+                            </div>
+                        </figure>
+                    </div>
+                    <p>During the process, in case of some errors, there is the possibility to:</p>
+                    <ul>
+                        <li>Restore the previous point cloud: a backup point cloud will always be available;</li>
+                        <li>Restore deleted points: in case you delete points with <code>CANC</code>, a backup of the deleted points will always be available;</li>
+                        <li>Reset the viewport scene: this allow to reset the scene to its initial state, be careful because the working directory will be cleaned;</li>
+                    </ul>
 
-                    <h3 id="reset-mode">Reset Scene</h3>
-                    <p>Possibility to reset the viewport scene</p>
-
-                    <h2 id="view-mode">Different view modes</h2>
-                    <p>Describe the different modes also color and classification modes</p>
+                    <h2 id="view-mode">Different view modes  
+                        <img src="/static/viewer/icons/camera_prosp.png" alt="Perspective view" style="width:17px; height:17px;"> 
+                        <img src="/static/viewer/icons/camera_ortho.png" alt="Orthographic view" style="width:17px; height:17px;"> 
+                        <img src="/static/viewer/icons/camera_top.png" alt="Top view" style="width:17px; height:17px;"> 
+                        <img src="/static/viewer/icons/camera_right.png" alt="Right view" style="width:17px; height:17px;"> 
+                        <img src="/static/viewer/icons/camera_front.png" alt="Front view" style="width:17px; height:17px;"> 
+                        <img src="/static/viewer/icons/camera_left.png" alt="Left view" style="width:17px; height:17px;"> 
+                    </h2>
+                    <p>There are different view modes available:</p>
+                    <ul>
+                        <li>Perspective view: shows the point cloud with a perspective projection, simulating how the human eye perceives depth;</li>
+                        <li>Orthographic view: shows the point cloud with an orthographic projection, where all lines remain parallel;</li>
+                        <li>Top view (<code>1 / Numpad 1</code>): shows the point cloud from a top-down perspective;</li>
+                        <li>Right view (<code>2 / Numpad 2</code>): shows the point cloud from a right-side perspective;</li>
+                        <li>Front view (<code>3 / Numpad 3</code>): shows the point cloud from a front-facing perspective;</li>
+                        <li>Left view (<code>4 / Numpad 4</code>): shows the point cloud from a left-side perspective;</li>
+                        <li>Color view: displays the point cloud with colors based on intensity or other attributes;</li>
+                        <li>Classification view: shows the point cloud with colors based on classification labels;</li>
+                        <li>Scalar field view: displays the point cloud with colors based on scalar field values;</li>
+                    </ul>
 
                     <h2 id="tools">Tools</h2>
-                    <h3 id="default-mode">Default mode</h3>
-                    <p>Default mode, allow to move the point cloud view</p>
+                    <h3 id="default-mode">Default mode
+                        <img src="/static/viewer/icons/cursor.png" alt="Default mode" style="width:17px; height:17px;">
+                    </h3>
+                    <p>The default mode allows you to rotate, pan, and zoom the point cloud view using the mouse:</p>
+                    <ul>
+                        <li><div class="mouse-icon left"></div> — Rotate </li>
+                        <li><div class="mouse-icon right"></div> — Pan </li>
+                        <li><div class="mouse-icon wheel"></div> — Zoom </li>
+                    </ul>
 
-                    <h3 id="rect-lasso-pol-tool">Rectangle, Lasso and Polygon Selection</h3>
-                    <p>Describe the rectangle, lasso and polygon selection tool</p>
+                    <h3 id="rect-lasso-pol-tool">Rectangle
+                        <img src="/static/viewer/icons/rec_select.png" alt="Rectangle selection" style="width:17px; height:17px;">
+                        , Lasso
+                        <img src="/static/viewer/icons/lasso-select.png" alt="Lasso selection" style="width:17px; height:17px;">
+                        and Polygon
+                        <img src="/static/viewer/icons/poly_select.png" alt="Polygon selection" style="width:17px; height:17px;">
+                        Selection</h3>
+                    <p> Rectangle is a selection tool that allows you to select points within a rectangular area. </p>
+                    <p> On the other hand, lasso selection allows you to draw a freeform shape to select points within that shape.  </p>
+                    <p> Instead, polygon selection allows you to create a polygon by clicking to add vertices, and then close the shape to select points within it.</p>
 
-                    <h3 id="cut-frame-tool">Cut and Frame to PCD</h3>
-                    <p>Describe the cut mode and frame to pcd</p>
+                    <p> During the selection process, you can use the mouse and the keyboard to manipulate the selected points:  </p>
+                    <ul>
+                        <li><div class="mouse-icon left"></div> — for selecting points </li>
+                        <li><code>CTRL</code> + <div class="mouse-icon left"></div>  — to deselect points</li>
+                        <li>Hold <code>SHIFT</code> — to select multiple areas</li>
+                        <li><code>CANC</code> — to delete selected points </li>
+                        <li><code>I</code> — to invert selection </li>
+                        <li><code>Esc</code> — to deselect all </li>
+                        <li><div class="mouse-icon left"></div> / <code>ENTER</code> — polygon: add vertices and close </li>
+                        <li><div class="mouse-icon right"></div> — to assign to a class available in the classes list on the left</li>
+                    </ul>
 
-                    <h3 id="trasl-rotat-tool">Translation and Rotation</h3>
-                    <p>Describe the translation and rotation tools</p>
-
-                    <h3 id="measure-tool">Measure Tool</h3>
-                    <p>Describe the measure tool (distance and areas) </p>
-
-                    <h3 id="gizmo-tool">Gizmo Tool</h3>
-                    <p>Describe the gizmo tool rotate the view </p>
-
-                    <h3 id="mouse-tool">Mouse Tool</h3>
-                    <p>Describe the mouse tool </p>
+                    <h3 id="cut-frame-tool">Cut  
+                        <img src="/static/viewer/icons/scissor.png" alt="Cut mode" style="width:17px; height:17px;"> 
+                        , Frame Selection 
+                        <img src="/static/viewer/icons/frame-to-pcd.png" alt="Frame Selection" style="width:17px; height:17px;">
+                        and Merge
+                    </h3>
+                    <p>The cut mode is useful to isolate specific parts of the point cloud for detailed inspection or editing. 
+                        After selecting a region with the frame tool, you can use the keyboard shortcut <code>C</code> to remove the selected points.</p>
+                    <p> The frame selection tool allows you to move the camera view towards to the selected region. 
+                        The keyboard shortcut <code>F</code> can be used for this purpose.</p>
+                    <p> If you want to merge multiple segments in the outline sections (on the left panel), 
+                        firstly hold <code>SHIFT</code> and click on the segments you want to merge, 
+                        then with the right mouse button <a class="mouse-icon right"></a> will appear the merge option. </p>
+                               
+                    <h3 id="trasl-rotat-tool">Translation 
+                        <img src="/static/viewer/icons/move.png" alt="Move" style="width:17px; height:17px;">
+                        and Rotation
+                        <img src="/static/viewer/icons/rotate.png" alt="Rotate" style="width:17px; height:17px;">
+                    </h3>
+                    <p>If the point cloud is imported in wrong way, you can translate or rotate it to the correct position. 
+                        Gizmo reference is showned in bottom left corner to understand the orientation of the axis. </p>
+                    <p> To translate the point cloud, you can use the keyboard shortcut <code>T</code>. 
+                        To rotate the point cloud, you can use the keyboard shortcut <code>R</code>, then if you want to snap the rotation to 10 degree 
+                        increments, you can hold <code>SHIFT</code> and the left mouse button <a class="mouse-icon left"></a>.  </p>
+                    
+                    <h3 id="measure-tool">Measure Tool 
+                        <img src="/static/viewer/icons/measure.png" alt="measure" style="width:17px; height:17px;">
+                         and Area Measurement
+                        <img src="/static/viewer/icons/measure-area.png" alt="measure area" style="width:17px; height:17px;">
+                    </h3>
+                    <p>Two measurement modes are available: distance measurement and area measurement. 
+                        In the first, you can first click <a class="mouse-icon left"></a> the point A and then second click <a class="mouse-icon left"></a> the point B to measure the distance between them. </p>
+                    <p> For area measurement, you can click <a class="mouse-icon left"></a> on multiple points to define the area and to calculate the total area 
+                        just click again <a class="mouse-icon left"></a> to the first point for closing the shape. </p>
 
                     <h2 id="viewport-settings">Viewport settings</h2>
-                    <p>Describe the Viewport settings </p>
 
-                    <!-- Video placeholder -->
-                    <div class="video-block">
-                        <div class="video-block-label">Tools Overview</div>
-                        <div class="video-wrapper">
-                            <!--
-                                <video src="{% static 'viewer/videos/tools.mp4' %}" controls></video>
-                            -->
-                            <div class="video-placeholder">
-                                <div class="play-icon">▶</div>
-                                <span>Add your tools video here</span>
+                    <div class="overview-schemas" style="margin-bottom: 32px;">
+                        <figure class="schema-figure" style="cursor:default; max-width: 300px;">                            
+                            <div class="schema-img-wrap">
+                                <img src="{% static 'viewer/images/Viewport_settings.png' %}" alt="Viewport settings">
                             </div>
+                        </figure>
+                    </div>
+
+                    <p>On the right panel you can adjust the viewport settings:
+                        <ul>
+                            <li>Show Grid: toggle the visibility of the grid on the ground plane (<code>default ON</code>);</li>
+                            <li>Light Background: toggle the light background color (<code>default OFF</code>);</li>
+                            <li>Point Size: adjust the size of the points in the point cloud;</li>
+                           </ul>
+                    </p>
+
+                    <h2 id="tools-selection-video-example">Tools and Selection Video Example</h2>
+
+                    <div class="video-block">
+                        <div class="video-wrapper">
+                             <!-- Ricordarsi mettere /preview e non /view -->
+                            <iframe 
+                                src="https://drive.google.com/file/d/1mnCzBtoZkbdQxmgYVhniE5RdKastslzj/preview" 
+                                frameborder="0" 
+                                allow="autoplay"
+                                allowfullscreen>
+                            </iframe>
                         </div>
-                        <div class="video-caption"><!-- Add video caption --></div>
                     </div>
 
                 </article>
@@ -434,31 +503,200 @@
                     <!-- ─── WRITE YOUR CONTENT BELOW ─── -->
 
                     <h2 id="what-are-features">What Are Features?</h2>
-                    <p>Explain what geometric features are and why they matter</p>
+                    <p>Geometric features are quantitative measures that describe the shape and structure of point cloud data. 
+                        They capture local geometric properties of the point cloud, such as curvature, density, and spatial distribution. 
+                        These features are used by machine learning algorithms to classify points into different categories based on their geometric characteristics.
+                        During the training phase, the viewer computes a feature matrix for the annotated points, which is then used to train the Random Forest classifier.
+                        The features helps the model to learn patterns and relationships in the data, enabling it to make accurate predictions on new, 
+                        unlabelled point clouds during the classification phase.
+                    </p>
 
                     <h2 id="available-features">Available Features</h2>
-                    <p>List and describe each available feature (e.g. Omnivariance, Planarity, Linearity …)</p>
+                    <p>For each feature, provide a brief description of what it represents and how it is computed:</p>
+
+                    <ul>
+                        <li><strong>Anisotropy:</strong> Measures the degree to which the point cloud is elongated along one axis.</li>
+                        <li><strong>Omnivariance:</strong> A measure of the overall variance in all directions.</li>
+                        <li><strong>Sphericity:</strong> Indicates how spherical the point cloud is.</li>
+                        <li><strong>Planarity:</strong> Reflects the extent to which the point cloud lies on a plane.</li>
+                        <li><strong>Linearity:</strong> Measures the extent to which the point cloud is aligned along a line.</li>
+                        <li><strong>Verticality:</strong> Indicates the degree to which the point cloud is oriented vertically.</li>
+                        <li><strong>Surface Variation:</strong> Captures changes in surface orientation within the point cloud.</li>
+                        <li><strong>Neighbours:</strong> The number of neighbouring points considered in feature computation.</li>
+                        <li><strong>Vertical Range:</strong> The difference in height between the highest and lowest points in the neighbourhood.</li>
+                        <li><strong>Height Above:</strong> The average height of points above a reference plane.</li>
+                        <li><strong>Height Below:</strong> The average height of points below a reference plane.</li>
+                        <li><strong>Height:</strong> The absolute height of each point relative to a reference plane.</li>
+                    </ul>
 
                     <h2 id="decide-radii">Decide the Radii</h2>
-                    <p>Explain what neighbourhood radius means and how to choose it</p>
+                    <p> During the feature calculation phase, the choice of neighbourhood radius is crucial for capturing relevant geometric properties. 
+                        A smaller radius may miss broader patterns, while a larger radius can smooth out important details.
+                        It is recommended to experiment with different radius values to find the optimal balance for your specific dataset and classification task.
+                        In the viewer panel there is the possibility to specify 1 to 5 seaching radii in meters (e.g., 0.5, 1.0, 2.0) for the features. 
+                        The viewer will compute the features for each radius and then the model will decide which one to use 
+                        during the training phase based on the feature list.
+                    </p>
 
-                    <h2 id="feature-tips">Tips &amp; Best Practices</h2>
-                    <p><!-- Add recommendations on which features to use for different datasets --></p>
+                    <h2 id="calculate-features">Calculate Features</h2>
+                    <p> When you click the <code>Calculate Features</code> button, you will see a panel like the one below. 
+                        You can decide which features to compute (using the flags) and specify the neighbourhood radii.
+                        The viewer will compute all selected features for each point in the point cloud using the specified neighbourhood radii.
+                        In the option there is the possibility to use the GPU for accelerate the process. 
+                    </p>
+                    
+                     <div class="overview-schemas" style="margin-bottom: 32px;">
+                        <figure class="schema-figure" style="cursor:default; max-width: 300px;">                            
+                            <div class="schema-img-wrap">
+                                <img src="{% static 'viewer/images/Calculate_features.png' %}" alt="Calculate features">
+                            </div>
+                        </figure>
+                    </div>
+
+                    <h2 class="features-video-example">Features Video Example</h2>
+
+                    <div class="video-block">
+                        <div class="video-wrapper">
+                             <!-- Ricordarsi mettere /preview e non /view -->
+                            <iframe 
+                                src="https://drive.google.com/file/d/1x3oBCwW4blnTjaFz9tR1uOxwvWM6YsL1/preview" 
+                                frameborder="0" 
+                                allow="autoplay"
+                                allowfullscreen>
+                            </iframe>
+                        </div>
+                    </div>
+
+                    
+
+                </article>
+
+                <!-- ════════════════════════════════
+                     PAGE: CLASSIFY MODE
+                ════════════════════════════════ -->
+                <article class="doc-page" id="page-classify">
+                    <div class="page-eyebrow">🔬 Classify Mode</div>
+                    <h1>Classify Mode</h1>
+                    <p class="page-subtitle">Apply a trained model to new, unlabelled point cloud data.</p>
+
+                    <div class="overview-schemas" style="margin-bottom: 32px;">
+                        <figure class="schema-figure" style="cursor:default; max-width: 400px;">
+                            <figcaption>Classify Mode</figcaption>
+                            <div class="schema-img-wrap">
+                                <img src="{% static 'viewer/images/Classify_schema.png' %}" alt="Classify schema">
+                            </div>
+                        </figure>
+                    </div>
+
+                    <!-- ─── WRITE YOUR CONTENT BELOW ─── -->
+
+                    <h2 id="run-classification">Classification Configuration</h2>
+                    <p> For the classification mode, you have to click the <code>Classify</code> button on the top left. 
+                        In this panel you have the possibility to load another dataset point cloud from local storage or use the previous one from training. 
+                        In case if you have a model downloaded in local you can uploade it. 
+                        <strong>N.B.</strong> the model zip that you want to upload must contain <strong>report.txt, model.pkl, and metadata.json files</strong>, 
+                        like the one you can download from viewer after training, otherwise it won't be accepted.</p>
+                    <p> Once you upload the test dataset, you can click to <code>Start Classify</code> button and you will have a panel like the one below. </p>
+                    
+                    <div class="overview-schemas" style="margin-bottom: 32px;">
+                        <figure class="schema-figure" style="cursor:default; max-width: 400px;">
+                            <div class="schema-img-wrap">
+                                <img src="{% static 'viewer/images/Classify_configuration.png' %}" alt="Classify configuration">
+                            </div>
+                        </figure>
+                    </div>
+
+                    <p> Here you can select which input point cloud and which pre-trained model to use for the classification. 
+                        You can also decide to use the <code>GPU</code> to accelerate the classification process.
+                        When you start the classification, the viewer will compute the features for the new point cloud and 
+                        then it will apply the trained model to predict the classes for each point.
+                    </p>
+
+
+                    <h2 id="review-results">Classification results</h2>
+                    <p> Once the classification step is completed, you can visualize the results using the <code>prediction</code> view. </p>
+
+                    <div class="overview-schemas" style="margin-bottom: 32px;">
+                        <figure class="schema-figure">
+                            <div class="schema-img-wrap">
+                                <img src="{% static 'viewer/images/Classify_results.png' %}" alt="Classify results">
+                            </div>
+                        </figure>
+                    </div>
+
+                    <h2 id="classify-video-example">Classify Mode Video Example</h2>
+                    <div class="video-block">
+                        <div class="video-wrapper">
+                             <!-- Ricordarsi mettere /preview e non /view -->
+                            <iframe 
+                                src="https://drive.google.com/file/d/1nM6OLSssfIMBrzF5A9x_rlKEjwZTM-cY/preview" 
+                                frameborder="0" 
+                                allow="autoplay"
+                                allowfullscreen>
+                            </iframe>
+                        </div>
+                    </div>
+
+                    
+
+                </article>
+
+
+                <!-- ════════════════════════════════
+                     PAGE: EXPORT / DOWNLOAD
+                ════════════════════════════════ -->
+                <article class="doc-page" id="page-export">
+                    <div class="page-eyebrow">⬆ Export</div>
+                    <h1>Export / Download Dataset</h1>
+                    <p class="page-subtitle">Save your classified or annotated point clouds to disk.</p>
+
+                    <div class="overview-schemas" style="margin-bottom: 32px;">
+                        <figure class="schema-figure" style="cursor:default; max-width: 400px;">
+                            <figcaption>Download</figcaption>
+                            <div class="schema-img-wrap">
+                                <img src="{% static 'viewer/images/Download_schema.png' %}" alt="Download schema">
+                            </div>
+                        </figure>
+                    </div>
+
+                    <!-- ─── WRITE YOUR CONTENT BELOW ─── -->
+
+                    <h2 id="export-formats">Exported File Formats</h2>
+                    <p>These are the exported files when you decide to download the zip package:</p>
+                    <ul>
+                        <li><code>.las</code> — LAS version 1.2 Format 3 Point Cloud; </li>
+                        <li><code>.pkl</code> — trained model format;</li>
+                    </ul>
+
+                    <h2 id="how-to-export">How to Export</h2>
+                    <p>In the top left corner, click to <strong>File</strong> and then <strong>Download Data</strong> button. 
+                        There will be a section like shown below: </p>
+                    
+                    <div class="overview-schemas" style="margin-bottom: 32px;">
+                        <figure class="schema-figure" style="cursor:default; max-width: 300px;">
+                            <div class="schema-img-wrap">
+                                <img src="{% static 'viewer/images/Download_data.png' %}" alt="Download data">
+                            </div>
+                        </figure>
+                    </div>
+
+                    <p> Here it is possible to choose which predicted point cloud and which trained model to include. </p>
 
                     <!-- Video placeholder -->
+                    <h2 id="Download-video-example">Download Video Example</h2>
                     <div class="video-block">
-                        <div class="video-block-label">Features Explained</div>
                         <div class="video-wrapper">
-                            <!--
-                                <video src="{% static 'viewer/videos/features.mp4' %}" controls></video>
-                            -->
-                            <div class="video-placeholder">
-                                <div class="play-icon">▶</div>
-                                <span>Add your features explanation video here</span>
-                            </div>
+                             <!-- Ricordarsi mettere /preview e non /view -->
+                            <iframe 
+                                src="https://drive.google.com/file/d/1M03bQ3DTtUsbbwi_KEOOYO9nh33FI25q/preview" 
+                                frameborder="0" 
+                                allow="autoplay"
+                                allowfullscreen>
+                            </iframe>
                         </div>
-                        <div class="video-caption"><!-- Add video caption --></div>
                     </div>
+
+                    
 
                 </article>
 
@@ -487,14 +725,16 @@
                         <li><code>I</code> — Invert selection </li>
                         <li><code>Esc</code> — Deselect all </li>
                         <li><div class="mouse-icon left"></div> / <code>ENTER</code> — Polygon: add vertices and close </li>
+                        <li><div class="mouse-icon right"></div> — Assign to a class available in the classes list on the left</li>
                     </ul>
 
                     <h2 id="tools-shortcuts">Tools shortcuts</h2>
                     <ul>
                         <li><code>T</code> — Translate point cloud</li>
-                        <li><code>R</code> — Rotate point cloud</li>
+                        <li><code>R</code> — Rotate point cloud. Hold <code>SHIFT</code> + <div class="mouse-icon left"></div> for snap rotation of 10 degree</li>
                         <li><code>F</code> — Frame Selection</li>
                         <li><code>C</code> — Cut selected points</li>
+                        <li>Hold <code>SHIFT</code> + <div class="mouse-icon right"></div> — Merge multiple segments in the outline sections</li>
                     </ul>
 
                     <h2 id="view-modes-shortcuts">View modes shortcuts</h2>
