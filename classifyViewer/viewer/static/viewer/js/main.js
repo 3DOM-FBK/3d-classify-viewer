@@ -1894,30 +1894,110 @@ function updateMeasureLabelPosition() {
 
 // Find the 3-D point in the loaded point cloud closest to a screen-space click
 // ---------------------------------------------------------------------------
-// PICKING CACHE
-// Caches raw Float32Array of positions per mesh so getVerticesData() is only
-// called once per loaded node instead of on every click.
+// HYBRID PICKING (GPU-ready with robust CPU implementation)
+// Current phase: optimized CPU picker with progressive culling + coarse/refine scan.
+// The wrapper keeps the entry point stable for future GPU picking integration.
 // ---------------------------------------------------------------------------
-const _pickPosCache = new Map();   // mesh -> Float32Array
+const _PICK_CULL_RADII_PX = [96, 192, 320, 512];
+const _PICK_COARSE_STRIDE = 8;
+const _PICK_REFINE_TOP_NODES = 3;
 
-function _getPickCache(mesh) {
-    if (_pickPosCache.has(mesh)) return _pickPosCache.get(mesh);
-    const pos = mesh.getVerticesData(BABYLON.VertexBuffer.PositionKind);
-    if (pos) _pickPosCache.set(mesh, pos);
-    return pos || null;
-}
+const _gpuPickerState = {
+    enabled: false,
+    initialized: false
+};
 
-function _evictPickCache() {
-    for (const mesh of _pickPosCache.keys()) {
-        if (!mesh._scene || mesh.isDisposed()) _pickPosCache.delete(mesh);
+function _collectPickCandidates(loader, m, screenX, screenY, cullRadiusPx) {
+    const cullR2 = cullRadiusPx * cullRadiusPx;
+    const candidates = [];
+
+    for (const mesh of loader.loadedNodes.values()) {
+        if (!mesh || mesh.isDisposed?.()) continue;
+        if (!mesh.isVisible || !mesh.isEnabled?.()) continue;
+
+        const bb = mesh.getBoundingInfo?.();
+        if (!bb?.boundingSphere) {
+            candidates.push({ mesh, minD2: 0 });
+            continue;
+        }
+
+        const c = bb.boundingSphere.centerWorld;
+        const radiusWorld = bb.boundingSphere.radiusWorld;
+        if (!c || !Number.isFinite(c.x) || !Number.isFinite(c.y) || !Number.isFinite(c.z) || !Number.isFinite(radiusWorld)) {
+            continue;
+        }
+
+        const cw = c.x * m[3] + c.y * m[7] + c.z * m[11] + m[15];
+        if (!Number.isFinite(cw) || cw <= 0) continue;
+
+        const cx = (c.x * m[0] + c.y * m[4] + c.z * m[8] + m[12]) / cw;
+        const cy = (c.x * m[1] + c.y * m[5] + c.z * m[9] + m[13]) / cw;
+        if (!Number.isFinite(cx) || !Number.isFinite(cy)) continue;
+
+        const screenR = (radiusWorld / cw) * 0.5 * Math.max(1, engine.getRenderWidth());
+        const ddx = cx - screenX;
+        const ddy = cy - screenY;
+        const distCenter = Math.sqrt(ddx * ddx + ddy * ddy);
+        const minD = Math.max(0, distCenter - Math.max(0, screenR));
+        const minD2 = minD * minD;
+        if (minD2 > cullR2) continue;
+
+        candidates.push({ mesh, minD2 });
     }
+
+    candidates.sort((a, b) => a.minD2 - b.minD2);
+    return candidates;
 }
 
-function pickClosestPointInCloud(screenX, screenY) {
+function _scanMeshPick(mesh, m, wm, screenX, screenY, stride = 1, bestDist2 = Infinity, posCache = null) {
+    const positions = posCache || mesh.getVerticesData(BABYLON.VertexBuffer.PositionKind);
+    if (!positions) return { found: false, bestDist2 };
+
+    let found = false;
+    let bestX = 0;
+    let bestY = 0;
+    let bestZ = 0;
+
+    const n = Math.floor(positions.length / 3);
+    const step = Math.max(1, stride | 0);
+    for (let i = 0; i < n; i += step) {
+        const lx = positions[i * 3];
+        const ly = positions[i * 3 + 1];
+        const lz = positions[i * 3 + 2];
+
+        // NaN-masked or invalid points are hidden and must not be pickable.
+        if (!Number.isFinite(lx) || !Number.isFinite(ly) || !Number.isFinite(lz)) continue;
+
+        const w = lx * m[3] + ly * m[7] + lz * m[11] + m[15];
+        if (!Number.isFinite(w) || w <= 0) continue;
+
+        const sx = (lx * m[0] + ly * m[4] + lz * m[8] + m[12]) / w;
+        const sy = (lx * m[1] + ly * m[5] + lz * m[9] + m[13]) / w;
+        if (!Number.isFinite(sx) || !Number.isFinite(sy)) continue;
+
+        const dx = sx - screenX;
+        const dy = sy - screenY;
+        const d2 = dx * dx + dy * dy;
+        if (d2 >= bestDist2) continue;
+
+        const ww = lx * wm[3] + ly * wm[7] + lz * wm[11] + wm[15];
+        if (!Number.isFinite(ww) || ww === 0) continue;
+
+        bestDist2 = d2;
+        bestX = (lx * wm[0] + ly * wm[4] + lz * wm[8] + wm[12]) / ww;
+        bestY = (lx * wm[1] + ly * wm[5] + lz * wm[9] + wm[13]) / ww;
+        bestZ = (lx * wm[2] + ly * wm[6] + lz * wm[10] + wm[14]) / ww;
+        found = true;
+    }
+
+    return found
+        ? { found: true, bestDist2, world: new BABYLON.Vector3(bestX, bestY, bestZ) }
+        : { found: false, bestDist2 };
+}
+
+function _pickClosestPointInCloudCPU(screenX, screenY) {
     const loader = scene.potree2Loader;
     if (!loader || !loader.loadedNodes || loader.loadedNodes.size === 0) return null;
-
-    _evictPickCache();
 
     const worldMatrix = loader.rootTransform
         ? loader.rootTransform.getWorldMatrix()
@@ -1933,58 +2013,66 @@ function pickClosestPointInCloud(screenX, screenY) {
     const m = worldMatrix.multiply(scene.getTransformMatrix()).multiply(vpScale).m;
     const wm = worldMatrix.m;
 
-    // PHASE 1: cull nodes whose screen bounding sphere is far from the click
-    const CULL_R2 = 200 * 200;  // 200 px radius
-    const candidates = [];
-    for (const mesh of loader.loadedNodes.values()) {
-        if (!mesh.isVisible) continue;
-        const bb = mesh.getBoundingInfo();
-        if (!bb) { candidates.push({ mesh, minD2: 0 }); continue; }
-        const c = bb.boundingSphere.centerWorld;
-        const cw = c.x * m[3] + c.y * m[7] + c.z * m[11] + m[15];
-        if (cw <= 0) continue;
-        const cx = (c.x * m[0] + c.y * m[4] + c.z * m[8] + m[12]) / cw;
-        const cy = (c.x * m[1] + c.y * m[5] + c.z * m[9] + m[13]) / cw;
-        const screenR = (bb.boundingSphere.radiusWorld / cw) * (vp.width / 2);
-        const ddx = cx - screenX, ddy = cy - screenY;
-        const distCenter = Math.sqrt(ddx * ddx + ddy * ddy);
-        const minD = Math.max(0, distCenter - screenR);
-        if (minD * minD > CULL_R2) continue;
-        candidates.push({ mesh, minD2: minD * minD });
+    // Per-call cache avoids stale references across geometry mutations.
+    const posCache = new Map(); // mesh -> positions Float32Array
+
+    // Progressive candidate expansion improves robustness while keeping average cost low.
+    let candidates = [];
+    for (const radiusPx of _PICK_CULL_RADII_PX) {
+        candidates = _collectPickCandidates(loader, m, screenX, screenY, radiusPx);
+        if (candidates.length > 0) break;
     }
+    if (candidates.length === 0) return null;
 
-    // Sort closer nodes first so bestDist2 tightens quickly
-    candidates.sort((a, b) => a.minD2 - b.minD2);
-
-    // PHASE 2: iterate points only in candidate nodes
-    let bestDist2 = Infinity;
-    let bestX = 0, bestY = 0, bestZ = 0;
-    let found = false;
-
+    // Coarse pass on all candidates with stride.
+    const ranked = [];
     for (const { mesh, minD2 } of candidates) {
-        if (minD2 >= bestDist2) continue;  // entire node is farther than current best
-        const pos = _getPickCache(mesh);
-        if (!pos) continue;
-        const n = pos.length / 3;
-        for (let i = 0; i < n; i++) {
-            const lx = pos[i * 3], ly = pos[i * 3 + 1], lz = pos[i * 3 + 2];
-            const w = lx * m[3] + ly * m[7] + lz * m[11] + m[15];
-            if (w <= 0) continue;
-            const sx = (lx * m[0] + ly * m[4] + lz * m[8] + m[12]) / w;
-            const sy = (lx * m[1] + ly * m[5] + lz * m[9] + m[13]) / w;
-            const dx = sx - screenX, dy = sy - screenY;
-            const d2 = dx * dx + dy * dy;
-            if (d2 < bestDist2) {
-                bestDist2 = d2;
-                const ww = lx * wm[3] + ly * wm[7] + lz * wm[11] + wm[15];
-                bestX = (lx * wm[0] + ly * wm[4] + lz * wm[8] + wm[12]) / ww;
-                bestY = (lx * wm[1] + ly * wm[5] + lz * wm[9] + wm[13]) / ww;
-                bestZ = (lx * wm[2] + ly * wm[6] + lz * wm[10] + wm[14]) / ww;
-                found = true;
-            }
-        }
+        const positions = mesh.getVerticesData(BABYLON.VertexBuffer.PositionKind);
+        if (!positions) continue;
+        posCache.set(mesh, positions);
+
+        const coarse = _scanMeshPick(mesh, m, wm, screenX, screenY, _PICK_COARSE_STRIDE, Infinity, positions);
+        if (!coarse.found) continue;
+        ranked.push({ mesh, minD2, coarseD2: coarse.bestDist2, coarseWorld: coarse.world });
     }
-    return found ? new BABYLON.Vector3(bestX, bestY, bestZ) : null;
+    if (ranked.length === 0) return null;
+
+    ranked.sort((a, b) => {
+        const ad = Number.isFinite(a.coarseD2) ? a.coarseD2 : a.minD2;
+        const bd = Number.isFinite(b.coarseD2) ? b.coarseD2 : b.minD2;
+        return ad - bd;
+    });
+
+    // Refine pass on top nodes at full resolution.
+    let bestDist2 = Infinity;
+    let bestWorld = null;
+    const topN = Math.min(_PICK_REFINE_TOP_NODES, ranked.length);
+
+    for (let idx = 0; idx < topN; idx++) {
+        const { mesh, minD2 } = ranked[idx];
+        if (minD2 >= bestDist2) continue;  // entire node is farther than current best
+        const refine = _scanMeshPick(mesh, m, wm, screenX, screenY, 1, bestDist2, posCache.get(mesh));
+        if (!refine.found) continue;
+        bestDist2 = refine.bestDist2;
+        bestWorld = refine.world;
+    }
+
+    // If refine misses (rare), return best coarse point to avoid intermittent null hits.
+    if (!bestWorld) bestWorld = ranked[0].coarseWorld || null;
+    return bestWorld;
+}
+
+function _pickClosestPointInCloudGPU(_screenX, _screenY) {
+    // GPU picking implementation will be plugged here in the next phase.
+    // Returning null gracefully triggers robust CPU fallback.
+    if (!_gpuPickerState.enabled || !_gpuPickerState.initialized) return null;
+    return null;
+}
+
+function pickClosestPointInCloud(screenX, screenY) {
+    const gpuHit = _pickClosestPointInCloudGPU(screenX, screenY);
+    if (gpuHit) return gpuHit;
+    return _pickClosestPointInCloudCPU(screenX, screenY);
 }
 
 // Pointer observer for the measure tool

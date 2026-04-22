@@ -1920,9 +1920,7 @@ export class Potree2Loader {
             total += assigned;
 
             if (assigned > 0) {
-                mesh.setVerticesData(BABYLON.VertexBuffer.PositionKind, positions);
-                if (mesh.refreshBoundingInfo) mesh.refreshBoundingInfo();
-                mesh.computeWorldMatrix(true);
+                this._setMeshPositionsAndNotify(mesh, positions);
             }
 
             // Restore colors (remove red highlight), keep classification colors
@@ -1961,6 +1959,16 @@ export class Potree2Loader {
 
         // console.log(`✂️ Cut segment ${segmentId}: ${total.toLocaleString()} points assigned.`);
         return anyAssigned ? { segmentId, count: total } : null;
+    }
+
+    _setMeshPositionsAndNotify(mesh, positions) {
+        mesh.setVerticesData(BABYLON.VertexBuffer.PositionKind, positions);
+        if (mesh.refreshBoundingInfo) mesh.refreshBoundingInfo();
+        mesh.computeWorldMatrix(true);
+
+        if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+            window.dispatchEvent(new CustomEvent('pointcloud-positions-updated'));
+        }
     }
 
     /**
@@ -2011,9 +2019,7 @@ export class Potree2Loader {
             }
 
             if (modified) {
-                mesh.setVerticesData(BABYLON.VertexBuffer.PositionKind, positions);
-                if (mesh.refreshBoundingInfo) mesh.refreshBoundingInfo();
-                mesh.computeWorldMatrix(true);
+                this._setMeshPositionsAndNotify(mesh, positions);
             }
 
             // Keep mesh.isVisible in sync: hide entirely only when nothing is visible,
@@ -2068,9 +2074,7 @@ export class Potree2Loader {
         }
 
         if (modified) {
-            mesh.setVerticesData(BABYLON.VertexBuffer.PositionKind, positions);
-            if (mesh.refreshBoundingInfo) mesh.refreshBoundingInfo();
-            mesh.computeWorldMatrix(true);
+            this._setMeshPositionsAndNotify(mesh, positions);
         }
     }
 
@@ -2356,7 +2360,7 @@ export class Potree2Loader {
                 }
             }
             if (modified) {
-                mesh.setVerticesData(BABYLON.VertexBuffer.PositionKind, positions);
+                this._setMeshPositionsAndNotify(mesh, positions);
                 this._resetSelectionColors(mesh);
             }
         });
@@ -2669,7 +2673,7 @@ export class Potree2Loader {
                 }
             }
             if (modified) {
-                mesh.setVerticesData(BABYLON.VertexBuffer.PositionKind, positions);
+                this._setMeshPositionsAndNotify(mesh, positions);
                 this._resetSelectionColors(mesh);
             }
         });
@@ -2714,7 +2718,7 @@ export class Potree2Loader {
                     }
                 }
             }
-            if (modified) mesh.setVerticesData(BABYLON.VertexBuffer.PositionKind, positions);
+            if (modified) this._setMeshPositionsAndNotify(mesh, positions);
         });
     }
 
@@ -2771,7 +2775,7 @@ export class Potree2Loader {
             }
 
             if (anyAssigned) {
-                mesh.setVerticesData(BABYLON.VertexBuffer.PositionKind, positions);
+                this._setMeshPositionsAndNotify(mesh, positions);
             }
 
             this._resetSelectionColors(mesh);
@@ -2834,7 +2838,7 @@ export class Potree2Loader {
             }
 
             if (modified) {
-                mesh.setVerticesData(BABYLON.VertexBuffer.PositionKind, positions);
+                this._setMeshPositionsAndNotify(mesh, positions);
                 this._resetSelectionColors(mesh);
             }
         });

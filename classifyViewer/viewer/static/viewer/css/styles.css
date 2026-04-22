@@ -2250,28 +2250,10 @@ input[type="number"].property-input::-webkit-outer-spin-button:active {
     transition: opacity 0.15s ease;
 }
 
-.measure-label::before {
-    content: '';
-    position: absolute;
-    left: -5px;
-    top: 50%;
-    transform: translateY(-50%);
-    width: 8px;
-    height: 8px;
-    background: var(--accent-blue);
-    border-radius: 50%;
-    box-shadow: 0 0 6px rgba(59, 130, 246, 0.8);
-}
-
 /* Area label — same pill as measure-label but cyan accent */
 .area-label {
     border-color: #22d3ee;
     box-shadow: 0 2px 12px rgba(34, 211, 238, 0.35);
-}
-
-.area-label::before {
-    background: #22d3ee;
-    box-shadow: 0 0 6px rgba(34, 211, 238, 0.8);
 }
 
 /* Area tool: SVG polygon fill */
