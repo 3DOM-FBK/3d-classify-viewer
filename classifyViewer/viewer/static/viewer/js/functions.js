@@ -1761,8 +1761,39 @@ export function showDownloadModal() {
                     window.URL.revokeObjectURL(url);
                     a.remove();
 
-                    overlay.classList.remove('active');
-                    setTimeout(() => overlay.remove(), 300);
+                    // Success message - don't close automatically
+                    const modalBody = overlay.querySelector('.modal-body');
+                    const modalFooter = overlay.querySelector('.modal-footer');
+                    
+                    modalBody.innerHTML = '';
+                    const successMsg = document.createElement('div');
+                    successMsg.style.cssText = "display:flex;align-items:flex-start;gap:12px;margin:0;";
+
+                    const icon = document.createElement('div');
+                    icon.innerHTML = `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0;margin-top:2px;">
+                        <path d="M20 6L9 17l-5-5" stroke="#10b981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>`;
+
+                    const msg = document.createElement('div');
+                    msg.style.cssText = "font-size:0.85rem;line-height:1.6;color:var(--text-primary);";
+                    msg.innerHTML = `<strong style="display:block;margin-bottom:4px;">Download started!</strong>
+                        Your package has been prepared and the download should begin automatically.
+                        <br><br><span style="opacity:0.75;">File: <code style="background:var(--bg-input,#1e1e22);padding:2px 6px;border-radius:4px;font-size:0.75rem;">${filename}</code></span>`;
+
+                    successMsg.appendChild(icon);
+                    successMsg.appendChild(msg);
+                    modalBody.appendChild(successMsg);
+
+                    // Update footer with Close button
+                    modalFooter.innerHTML = '';
+                    const closeBtn = document.createElement('button');
+                    closeBtn.classList.add('btn');
+                    closeBtn.textContent = "Close";
+                    closeBtn.onclick = () => {
+                        overlay.classList.remove('active');
+                        setTimeout(() => overlay.remove(), 300);
+                    };
+                    modalFooter.appendChild(closeBtn);
 
                 } catch (err) {
                     console.error('Download error:', err);
