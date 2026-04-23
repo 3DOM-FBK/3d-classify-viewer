@@ -1315,7 +1315,7 @@ const viewportContent = viewportSection.content;
 
 const gridToggle = createCheckbox("Show Grid", true, viewportContent);
 const lightModeToggle = createCheckbox("Light Background", false, viewportContent);
-const pointSizeSlider = createSlider("Point Size", 0.1, 3.0, 1.0, 0.05, viewportContent);
+const pointSizeSlider = createSlider("Point Size", 0.1, 5.0, 1.0, 0.05, viewportContent);
 
 // Rotation controls moved to toolbar gizmo tool (tool-7).
 
