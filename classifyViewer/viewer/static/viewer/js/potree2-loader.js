@@ -146,6 +146,15 @@ export class Potree2Loader {
         this._deletedSegmentId = -1;
         this.mainCloudVisible = true;
 
+        // Canonical class color lookup (classId → {r,g,b}) used by applyClassToLoadedNodes,
+        // updateClassColor, removeClass, clearClassifications.
+        // MUST be initialized here — without it, _classColorLUT.set() throws a TypeError,
+        // which aborts applyClassToLoadedNodes before classificationHistory.push() runs,
+        // leaving classificationHistory empty and causing all future LOD nodes to be unclassified.
+        this._classColorLUT = new Map();
+        this._pointClassMap = null;
+        this._pointSegmentMap = null;
+
         // Runtime handles that must be cleaned on dispose() to avoid stale callbacks
         // after Reset Scene / re-import.
         this._cameraForObserver = null;
@@ -557,10 +566,10 @@ export class Potree2Loader {
         if (magic !== 'PCBN') throw new Error("Invalid .pcbin magic: " + magic);
 
         const version = dv.getUint8(4);
-        const bpf     = (version === 2) ? dv.getUint8(5) : 4;  // bytes per feature
+        const bpf = (version === 2) ? dv.getUint8(5) : 4;  // bytes per feature
         if (version !== 1 && version !== 2)
             throw new Error("Unsupported .pcbin version: " + version);
-        const N = dv.getUint32(8,  true);   // point_count
+        const N = dv.getUint32(8, true);   // point_count
         const F = dv.getUint32(12, true);   // feature_count
 
         let offset = 16;
@@ -578,9 +587,9 @@ export class Potree2Loader {
 
         // ── Records ─────────────────────────────────────────────────────────
         const recSize = F * bpf + 8;  // features + annotation tail
-        const segIds     = new Uint8Array(N);
-        const classIds   = new Uint8Array(N);
-        const predIds    = new Uint8Array(N);
+        const segIds = new Uint8Array(N);
+        const classIds = new Uint8Array(N);
+        const predIds = new Uint8Array(N);
         const confidence = new Float32Array(N);
 
         // Only scan the annotation tail per record (4 reads × N) — skip features.
@@ -589,9 +598,9 @@ export class Potree2Loader {
         const annotOff = F * bpf;  // byte offset within a record to annotation tail
         for (let pid = 0; pid < N; pid++) {
             const recOff = offset + pid * recSize;
-            segIds[pid]     = dv.getUint8(recOff + annotOff);
-            classIds[pid]   = dv.getUint8(recOff + annotOff + 1);
-            predIds[pid]    = dv.getUint8(recOff + annotOff + 2);
+            segIds[pid] = dv.getUint8(recOff + annotOff);
+            classIds[pid] = dv.getUint8(recOff + annotOff + 1);
+            predIds[pid] = dv.getUint8(recOff + annotOff + 2);
             confidence[pid] = dv.getFloat32(recOff + annotOff + 4, true);
         }
 
@@ -616,25 +625,17 @@ export class Potree2Loader {
 
     _writeBlendedClassColor(colors, pointIndex, originalColors, classColors) {
         const o = pointIndex * 4;
-        const baseR = originalColors ? originalColors[o] : 1.0;
-        const baseG = originalColors ? originalColors[o + 1] : 1.0;
-        const baseB = originalColors ? originalColors[o + 2] : 1.0;
-
-        colors[o] = this._blendClassChannel(baseR, classColors[o]);
-        colors[o + 1] = this._blendClassChannel(baseG, classColors[o + 1]);
-        colors[o + 2] = this._blendClassChannel(baseB, classColors[o + 2]);
+        colors[o]     = classColors[o];
+        colors[o + 1] = classColors[o + 1];
+        colors[o + 2] = classColors[o + 2];
         colors[o + 3] = 1.0;
     }
 
     _writeBlendedClassColorFromRGB(colors, pointIndex, originalColors, r, g, b) {
         const o = pointIndex * 4;
-        const baseR = originalColors ? originalColors[o] : 1.0;
-        const baseG = originalColors ? originalColors[o + 1] : 1.0;
-        const baseB = originalColors ? originalColors[o + 2] : 1.0;
-
-        colors[o] = this._blendClassChannel(baseR, r);
-        colors[o + 1] = this._blendClassChannel(baseG, g);
-        colors[o + 2] = this._blendClassChannel(baseB, b);
+        colors[o]     = r;
+        colors[o + 1] = g;
+        colors[o + 2] = b;
         colors[o + 3] = 1.0;
     }
 
@@ -1155,7 +1156,7 @@ export class Potree2Loader {
         }
 
         shaderMat.setInt('colormap', this._colormapId);
-    shaderMat.setInt('predictionDiscrete', isPredictionFeature ? 1 : 0);
+        shaderMat.setInt('predictionDiscrete', isPredictionFeature ? 1 : 0);
         shaderMat.setFloat('pointSize', this.pointSize);
         for (const mesh of this.loadedNodes.values()) {
             if (enable) {
@@ -1631,6 +1632,11 @@ export class Potree2Loader {
                 );
 
                 if (isInside) {
+                    const pid = mesh.metadata.pointIds ? mesh.metadata.pointIds[i] : -1;
+                    if (this._pointClassMap && pid >= 0 && pid < this._pointClassMap.length) {
+                        this._pointClassMap[pid] = classId;
+                    }
+
                     mesh.metadata.classIds[i] = classId;
                     mesh.metadata.classColors[i * 4] = r;
                     mesh.metadata.classColors[i * 4 + 1] = g;
@@ -1672,9 +1678,10 @@ export class Potree2Loader {
             }
         });
 
-        // 2. Save the classification logic (regions + camera + AABB) for future LOD nodes.
-        //    Include the current selections and deselections in the history entry.
+        // 2. Update canonical color LUT and save the classification logic for future LOD nodes.
         if (anyClassified) {
+            this._classColorLUT.set(classId, { r, g, b });
+
             const visibleSegmentIds = [];
             if (this.mainCloudVisible) visibleSegmentIds.push(0);
             this.cutHistory.forEach(c => {
@@ -1775,7 +1782,9 @@ export class Potree2Loader {
         const g = parseInt(h.slice(2, 4), 16) / 255;
         const b = parseInt(h.slice(4, 6), 16) / 255;
 
-        // 2. Update Classification History (for future LOD nodes)
+        // 2. Update canonical color LUT and Classification History
+        this._classColorLUT.set(classId, { r, g, b });
+
         this.classificationHistory.forEach(entry => {
             if (entry.classId === classId) {
                 entry.r = r; entry.g = g; entry.b = b;
@@ -1820,6 +1829,16 @@ export class Potree2Loader {
     removeClass(classId) {
         // Remove all events of this class from history (also affects future LOD nodes).
         this.classificationHistory = this.classificationHistory.filter(entry => entry.classId !== classId);
+        this._classColorLUT.delete(classId);
+
+        // Update canonical map: points assigned to this class must be reset or recomputed.
+        if (this._pointClassMap) {
+            for (let pid = 0; pid < this._pointClassMap.length; pid++) {
+                if (this._pointClassMap[pid] === classId) {
+                    this._pointClassMap[pid] = 0; // Reset to unclassified, fallback to recomputation on next load if history exists
+                }
+            }
+        }
 
         let affected = 0;
 
@@ -1852,6 +1871,12 @@ export class Potree2Loader {
                     newClassColors[i * 4 + 1] = cls.g;
                     newClassColors[i * 4 + 2] = cls.b;
                     newClassColors[i * 4 + 3] = 1.0;
+
+                    // Sync to canonical map
+                    const pid = mesh.metadata.pointIds ? mesh.metadata.pointIds[i] : -1;
+                    if (this._pointClassMap && pid >= 0 && pid < this._pointClassMap.length) {
+                        this._pointClassMap[pid] = cls.classId;
+                    }
                 }
 
                 const hadRemovedClass = mesh.metadata.classIds && mesh.metadata.classIds[i] === classId;
@@ -1924,6 +1949,11 @@ export class Potree2Loader {
                 );
 
                 if (isInside) {
+                    const pid = mesh.metadata.pointIds ? mesh.metadata.pointIds[i] : -1;
+                    if (this._pointSegmentMap && pid >= 0 && pid < this._pointSegmentMap.length) {
+                        this._pointSegmentMap[pid] = segmentId;
+                    }
+
                     segmentIds[i] = segmentId;
                     assigned++;
                     const px = positions[i * 3], py = positions[i * 3 + 1], pz = positions[i * 3 + 2];
@@ -2072,11 +2102,30 @@ export class Potree2Loader {
         let modified = false;
 
         for (let i = 0; i < numPoints; i++) {
-            const pointSeg = segmentIds[i] || 0;
+            const pid = mesh.metadata?.pointIds ? mesh.metadata.pointIds[i] : -1;
+            let pointSeg = 0;
+            let resolved = false;
+
+            // 1. Canonical map lookup
+            if (this._pointSegmentMap && pid >= 0 && pid < this._pointSegmentMap.length) {
+                const stored = this._pointSegmentMap[pid];
+                if (stored !== 0xFF) {
+                    pointSeg = (stored === 0xFE) ? this._deletedSegmentId : stored;
+                    resolved = true;
+                }
+            }
+
+            // 2. Fallback to mesh metadata
+            if (!resolved && segmentIds) {
+                pointSeg = segmentIds[i] || 0;
+            }
+
             let shouldHide;
 
             if (pointSeg === 0) {
                 shouldHide = !this.mainCloudVisible;
+            } else if (pointSeg === this._deletedSegmentId) {
+                shouldHide = true;
             } else {
                 const entry = this.cutHistory.find(e => e.segmentId === pointSeg);
                 shouldHide = entry ? !entry.visible : false;
@@ -2292,6 +2341,9 @@ export class Potree2Loader {
      */
     clearClassifications() {
         this.classificationHistory = [];
+        this._classColorLUT.clear();
+        if (this._pointClassMap) this._pointClassMap.fill(0);
+
         this.loadedNodes.forEach((mesh) => {
             if (!mesh.metadata) return;
             const numPoints = mesh.metadata.classIds?.length || 0;
@@ -2364,6 +2416,11 @@ export class Potree2Loader {
                 }
 
                 if (isInside) {
+                    const pid = mesh.metadata.pointIds ? mesh.metadata.pointIds[i] : -1;
+                    if (this._pointSegmentMap && pid >= 0 && pid < this._pointSegmentMap.length) {
+                        this._pointSegmentMap[pid] = (segmentId === this._deletedSegmentId) ? 0xFE : segmentId;
+                    }
+
                     segmentIds[i] = segmentId;
                     totalAssigned++;
                     modified = true;
@@ -2521,24 +2578,50 @@ export class Potree2Loader {
                     const points = this._parsePointsFromBufferDirect(node, nodeBuffer);
                     for (const p of points) {
                         totalProcessed++;
-                        if (p.id === -1 || p.id >= totalPoints) {
+                        const pid = p.id;
+                        if (pid === -1 || pid >= totalPoints) {
                             skippedNoId++;
                             continue;
                         }
-                        if (seenIds.has(p.id)) {
+                        if (seenIds.has(pid)) {
                             duplicates++;
                             continue;
                         }
 
-                        const seg = this._getPointSegment(p.pos);
-                        const finalSegId = seg ? seg.segmentId : 0;
+                        let finalSegId = 0;
+                        let finalClassId = 0;
+
+                        // Use canonical maps if available
+                        if (this._pointSegmentMap && pid < this._pointSegmentMap.length) {
+                            const stored = this._pointSegmentMap[pid];
+                            if (stored !== 0xFF) {
+                                finalSegId = (stored === 0xFE) ? this._deletedSegmentId : stored;
+                            } else {
+                                // Fallback to projection if not yet evaluated
+                                const seg = this._getPointSegment(p.pos);
+                                finalSegId = seg ? seg.segmentId : 0;
+                                // Cache it
+                                this._pointSegmentMap[pid] = (finalSegId === this._deletedSegmentId) ? 0xFE : finalSegId;
+                            }
+                        }
+
+                        if (this._pointClassMap && pid < this._pointClassMap.length) {
+                            const stored = this._pointClassMap[pid];
+                            if (stored !== 0 && stored !== 0xFF) {
+                                finalClassId = stored;
+                            } else {
+                                // Fallback
+                                const cls = this._getPointClassification(p.pos);
+                                finalClassId = cls ? cls.classId : 0;
+                                // Cache it
+                                if (finalClassId > 0) this._pointClassMap[pid] = finalClassId;
+                            }
+                        }
 
                         if (segmentNameMap[finalSegId] !== undefined) {
-                            seenIds.add(p.id);
-                            buffer[p.id * 2] = finalSegId + 1;  // +1 so 0 stays "unannotated"
-
-                            const cls = this._getPointClassification(p.pos);
-                            buffer[p.id * 2 + 1] = cls ? cls.classId : 0;
+                            seenIds.add(pid);
+                            buffer[pid * 2] = finalSegId + 1; // +1 so 0 stays "unannotated"
+                            buffer[pid * 2 + 1] = finalClassId;
                         }
                     }
                 }
@@ -2728,6 +2811,11 @@ export class Potree2Loader {
                 }
 
                 if (isInside) {
+                    const pid = mesh.metadata.pointIds ? mesh.metadata.pointIds[i] : -1;
+                    if (this._pointSegmentMap && pid >= 0 && pid < this._pointSegmentMap.length) {
+                        this._pointSegmentMap[pid] = 0;
+                    }
+
                     segmentIds[i] = 0;
                     totalRemoved++;
                     modified = true;
@@ -2765,6 +2853,14 @@ export class Potree2Loader {
         if (segmentId === 0) return;
 
         this.cutHistory = this.cutHistory.filter(c => c.segmentId !== segmentId);
+
+        if (this._pointSegmentMap) {
+            for (let pid = 0; pid < this._pointSegmentMap.length; pid++) {
+                if (this._pointSegmentMap[pid] === segmentId) {
+                    this._pointSegmentMap[pid] = 0;
+                }
+            }
+        }
 
         this.loadedNodes.forEach(mesh => {
             const segmentIds = mesh.metadata.segmentIds;
@@ -2828,6 +2924,11 @@ export class Potree2Loader {
 
                 if (!isInside) continue;
 
+                const pid = mesh.metadata.pointIds ? mesh.metadata.pointIds[i] : -1;
+                if (this._pointSegmentMap && pid >= 0 && pid < this._pointSegmentMap.length) {
+                    this._pointSegmentMap[pid] = 0xFE;
+                }
+
                 segmentIds[i] = deletedSegmentId;
                 total++;
 
@@ -2876,13 +2977,21 @@ export class Potree2Loader {
      */
     restoreDeletedPoints() {
         const deletedSegmentId = this._deletedSegmentId;
-        const deletedEntry = this.cutHistory.find(entry => entry.segmentId === deletedSegmentId);
-        if (!deletedEntry) return 0;
+        this.cutHistory = this.cutHistory.filter(entry => entry.segmentId !== deletedSegmentId);
+
+        if (this._pointSegmentMap) {
+            for (let pid = 0; pid < this._pointSegmentMap.length; pid++) {
+                if (this._pointSegmentMap[pid] === 0xFE) {
+                    this._pointSegmentMap[pid] = 0;
+                }
+            }
+        }
 
         let restored = 0;
 
         this.loadedNodes.forEach((mesh) => {
             const segmentIds = mesh.metadata?.segmentIds;
+            const pointIds = mesh.metadata?.pointIds;
             const positions = mesh.getVerticesData(BABYLON.VertexBuffer.PositionKind);
             const originalPositions = mesh.metadata?.originalPositions;
             if (!segmentIds || !positions || !originalPositions) return;
@@ -2911,8 +3020,6 @@ export class Potree2Loader {
                 this._resetSelectionColors(mesh);
             }
         });
-
-        this.cutHistory = this.cutHistory.filter(entry => entry.segmentId !== deletedSegmentId);
         return restored;
     }
 
@@ -2931,6 +3038,19 @@ export class Potree2Loader {
         if (sources.length === 0) return { movedPoints: 0, mergedSegments: 0 };
 
         const sourceSet = new Set(sources);
+        const storeTarget = (targetSegmentId === this._deletedSegmentId) ? 0xFE : targetSegmentId;
+
+        if (this._pointSegmentMap) {
+            for (let pid = 0; pid < this._pointSegmentMap.length; pid++) {
+                const stored = this._pointSegmentMap[pid];
+                // Treat 0xFE as deletedSegmentId
+                const actualStored = (stored === 0xFE) ? this._deletedSegmentId : stored;
+                if (sourceSet.has(actualStored)) {
+                    this._pointSegmentMap[pid] = storeTarget;
+                }
+            }
+        }
+
         let movedPoints = 0;
 
         // Reassign segment ids on already loaded points.
@@ -3017,6 +3137,21 @@ export class Potree2Loader {
             }
         }
         if (mod) mesh.setVerticesData(BABYLON.VertexBuffer.ColorKind, colors);
+    }
+
+    dispose() {
+        if (this._cameraViewObserver && this._cameraForObserver) {
+            this._cameraForObserver.onViewMatrixChangedObservable.remove(this._cameraViewObserver);
+        }
+        if (this._cleanupIntervalId) {
+            window.clearInterval(this._cleanupIntervalId);
+        }
+        this._pointSegmentMap = null;
+        this._pointClassMap = null;
+        this._classColorLUT?.clear();
+        this.loadedNodes.clear();
+        this.activeNodes.clear();
+        this.rootTransform.dispose();
     }
 
 } // END class Potree2Loader
