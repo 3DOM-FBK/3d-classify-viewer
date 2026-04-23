@@ -377,7 +377,12 @@ void write_las(const std::string& out_file,
         min_z = std::min(min_z, p[2]); max_z = std::max(max_z, p[2]);
     }
 
-    double scale_xyz = (data.scale_x != 0.0) ? data.scale_x : 0.0001;
+    const double scale_x = (data.scale_x != 0.0) ? data.scale_x : 0.0001;
+    const double scale_y = (data.scale_y != 0.0) ? data.scale_y : 0.0001;
+    const double scale_z = (data.scale_z != 0.0) ? data.scale_z : 0.0001;
+    const double off_x   = data.off_x;
+    const double off_y   = data.off_y;
+    const double off_z   = data.off_z;
 
     // Extra Bytes VLR: normals (if present) + POINT_ID.
     uint32_t extra_bytes_payload = 0;
@@ -409,8 +414,8 @@ void write_las(const std::string& out_file,
     write_val<uint32_t>(f, n);     // Number of point records
     write_val<uint32_t>(f, n);     // Points by return[0]
     for (int i = 0; i < 4; i++) write_val<uint32_t>(f, 0); // Points by return[1-4]
-    write_val<double>(f, scale_xyz); write_val<double>(f, scale_xyz); write_val<double>(f, scale_xyz);
-    write_val<double>(f, 0.0); write_val<double>(f, 0.0); write_val<double>(f, 0.0);
+    write_val<double>(f, scale_x); write_val<double>(f, scale_y); write_val<double>(f, scale_z);
+    write_val<double>(f, off_x); write_val<double>(f, off_y); write_val<double>(f, off_z);
     write_val<double>(f, max_x); write_val<double>(f, min_x);
     write_val<double>(f, max_y); write_val<double>(f, min_y);
     write_val<double>(f, max_z); write_val<double>(f, min_z);
@@ -432,9 +437,9 @@ void write_las(const std::string& out_file,
     // ---- Point records ----
     for (uint32_t i = 0; i < n; ++i) {
         // 1. COORDINATE (12 byte totali)
-        write_val<int32_t>(f, (int32_t)std::round(points[i][0] / scale_xyz)); // X
-        write_val<int32_t>(f, (int32_t)std::round(points[i][1] / scale_xyz)); // Y
-        write_val<int32_t>(f, (int32_t)std::round(points[i][2] / scale_xyz)); // Z
+        write_val<int32_t>(f, (int32_t)std::round((points[i][0] - off_x) / scale_x)); // X
+        write_val<int32_t>(f, (int32_t)std::round((points[i][1] - off_y) / scale_y)); // Y
+        write_val<int32_t>(f, (int32_t)std::round((points[i][2] - off_z) / scale_z)); // Z
 
         // 2. ATTRIBUTI STANDARD (8 byte totali)
         write_val<uint16_t>(f, 0); // Intensity (2 byte)

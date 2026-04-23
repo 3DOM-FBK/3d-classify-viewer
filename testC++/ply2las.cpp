@@ -76,6 +76,8 @@ void write_las(const std::string& out_file,
     }
 
     double scale_xyz = 0.0001;
+    // Use data-driven offsets to keep encoded int32 coordinates in range.
+    double offset_x = min_x, offset_y = min_y, offset_z = min_z;
 
     // Extra bytes: normals (se presenti) + POINT_ID (sempre)
     uint32_t extra_bytes_payload = 0;
@@ -116,9 +118,9 @@ void write_las(const std::string& out_file,
     write_val<double>(f, scale_xyz);
     write_val<double>(f, scale_xyz);
     write_val<double>(f, scale_xyz);
-    write_val<double>(f, 0.0);
-    write_val<double>(f, 0.0);
-    write_val<double>(f, 0.0);
+    write_val<double>(f, offset_x);
+    write_val<double>(f, offset_y);
+    write_val<double>(f, offset_z);
     write_val<double>(f, max_x); write_val<double>(f, min_x);
     write_val<double>(f, max_y); write_val<double>(f, min_y);
     write_val<double>(f, max_z); write_val<double>(f, min_z);
@@ -139,9 +141,9 @@ void write_las(const std::string& out_file,
 
     // --- Point records ---
     for (uint32_t i = 0; i < n; ++i) {
-        int32_t ix = (int32_t)std::round(points[i][0] / scale_xyz);
-        int32_t iy = (int32_t)std::round(points[i][1] / scale_xyz);
-        int32_t iz = (int32_t)std::round(points[i][2] / scale_xyz);
+        int32_t ix = (int32_t)std::round((points[i][0] - offset_x) / scale_xyz);
+        int32_t iy = (int32_t)std::round((points[i][1] - offset_y) / scale_xyz);
+        int32_t iz = (int32_t)std::round((points[i][2] - offset_z) / scale_xyz);
         write_val<int32_t>(f, ix);
         write_val<int32_t>(f, iy);
         write_val<int32_t>(f, iz);
