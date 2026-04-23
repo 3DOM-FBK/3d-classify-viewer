@@ -142,6 +142,7 @@ export class Potree2Loader {
         // entry: { segmentId, visible, selections, deselections, minX..maxZ }
         this.cutHistory = [];
         this._segmentIdCounter = 1;
+        this._cutCreationCounter = 0;
         this._deletedSegmentId = -1;
         this.mainCloudVisible = true;
 
@@ -1516,8 +1517,26 @@ export class Potree2Loader {
 
         // Iterate from oldest to newest (later entries override earlier ones)
         for (const entry of this.classificationHistory) {
-            // New visibility constraint: skip classification if point was hidden when this class was assigned
-            if (entry.visibleSegmentIds && !entry.visibleSegmentIds.includes(pointSegId)) continue;
+            // Visibility constraint: skip if point's segment was hidden at classification time,
+            // BUT only if the segment existed before classification (CASE A).
+            // If the segment was created after classification (CASE B), the point was in an ancestor
+            // segment that was visible — apply classification if segment 0 was visible then.
+            if (entry.visibleSegmentIds && !entry.visibleSegmentIds.includes(pointSegId)) {
+                if (pointSegId > 0) {
+                    const cutEntry = this.cutHistory.find(c => c.segmentId === pointSegId);
+                    const orderAtClass = entry.cutCreationOrderAtClassification ?? 0;
+                    // CASE A: segment existed before classification but was hidden → correct skip
+                    if (cutEntry && cutEntry.creationOrder !== undefined && cutEntry.creationOrder < orderAtClass) {
+                        continue;
+                    }
+                    // CASE B: segment created at/after classification → point was in a visible ancestor.
+                    // Apply only if segment 0 was visible when the class was assigned.
+                    if (!entry.visibleSegmentIds.includes(0)) continue;
+                    // else: fall through and apply classification
+                } else {
+                    continue; // segment 0 was not visible → skip
+                }
+            }
 
             // 1. Fast AABB pruning
             if (x < entry.minX || x > entry.maxX ||
@@ -1667,6 +1686,7 @@ export class Potree2Loader {
                 classId, r, g, b,
                 inverted: this.selectionInverted,
                 visibleSegmentIds,
+                cutCreationOrderAtClassification: this._cutCreationCounter,
                 minX: minX - margin, minY: minY - margin, minZ: minZ - margin,
                 maxX: maxX + margin, maxY: maxY + margin, maxZ: maxZ + margin,
                 // Copy current histories. Clone BABYLON matrices accurately.
@@ -1947,6 +1967,7 @@ export class Potree2Loader {
                 segmentId,
                 visible: false, // Hidden by default upon cut
                 inverted: this.selectionInverted,
+                creationOrder: this._cutCreationCounter++,
                 minX: minX - margin, minY: minY - margin, minZ: minZ - margin,
                 maxX: maxX + margin, maxY: maxY + margin, maxZ: maxZ + margin,
                 selections: this.selectionHistory.map(s => ({ ...s, transformMatrix: s.transformMatrix.clone() })),
@@ -2387,6 +2408,7 @@ export class Potree2Loader {
                     targetEntry = {
                         segmentId,
                         visible: isVisible,
+                        creationOrder: this._cutCreationCounter++,
                         minX: Infinity,
                         minY: Infinity,
                         minZ: Infinity,
@@ -2833,6 +2855,7 @@ export class Potree2Loader {
                 segmentId: deletedSegmentId,
                 visible: false,
                 inverted: this.selectionInverted,
+                creationOrder: this._cutCreationCounter++,
                 minX: minX - margin, minY: minY - margin, minZ: minZ - margin,
                 maxX: maxX + margin, maxY: maxY + margin, maxZ: maxZ + margin,
                 selections: this.selectionHistory.map(s => ({ ...s, transformMatrix: s.transformMatrix.clone() })),
@@ -2938,6 +2961,7 @@ export class Potree2Loader {
                     targetEntry = {
                         segmentId: targetSegmentId,
                         visible: true,
+                        creationOrder: Math.min(...sourceEntries.map(e => e.creationOrder ?? Infinity)),
                         selections: [],
                         deselections: [],
                         minX: Infinity,
