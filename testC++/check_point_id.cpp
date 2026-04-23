@@ -383,6 +383,19 @@ void write_las(const std::string& out_file,
     const double off_x   = data.off_x;
     const double off_y   = data.off_y;
     const double off_z   = data.off_z;
+    double qmin_x = 1e18, qmin_y = 1e18, qmin_z = 1e18;
+    double qmax_x = -1e18, qmax_y = -1e18, qmax_z = -1e18;
+    for (const auto& point : points) {
+        int32_t ix = (int32_t)std::round((point[0] - off_x) / scale_x);
+        int32_t iy = (int32_t)std::round((point[1] - off_y) / scale_y);
+        int32_t iz = (int32_t)std::round((point[2] - off_z) / scale_z);
+        double qx = ix * scale_x + off_x;
+        double qy = iy * scale_y + off_y;
+        double qz = iz * scale_z + off_z;
+        qmin_x = std::min(qmin_x, qx); qmax_x = std::max(qmax_x, qx);
+        qmin_y = std::min(qmin_y, qy); qmax_y = std::max(qmax_y, qy);
+        qmin_z = std::min(qmin_z, qz); qmax_z = std::max(qmax_z, qz);
+    }
 
     // Extra Bytes VLR: normals (if present) + POINT_ID.
     uint32_t extra_bytes_payload = 0;
@@ -416,9 +429,9 @@ void write_las(const std::string& out_file,
     for (int i = 0; i < 4; i++) write_val<uint32_t>(f, 0); // Points by return[1-4]
     write_val<double>(f, scale_x); write_val<double>(f, scale_y); write_val<double>(f, scale_z);
     write_val<double>(f, off_x); write_val<double>(f, off_y); write_val<double>(f, off_z);
-    write_val<double>(f, max_x); write_val<double>(f, min_x);
-    write_val<double>(f, max_y); write_val<double>(f, min_y);
-    write_val<double>(f, max_z); write_val<double>(f, min_z);
+    write_val<double>(f, qmax_x); write_val<double>(f, qmin_x);
+    write_val<double>(f, qmax_y); write_val<double>(f, qmin_y);
+    write_val<double>(f, qmax_z); write_val<double>(f, qmin_z);
 
     // ---- VLR: normali (se presenti) + POINT_ID ----
     write_val<uint16_t>(f, 0);
