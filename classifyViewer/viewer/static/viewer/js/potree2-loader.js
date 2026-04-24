@@ -625,17 +625,21 @@ export class Potree2Loader {
 
     _writeBlendedClassColor(colors, pointIndex, originalColors, classColors) {
         const o = pointIndex * 4;
-        colors[o]     = classColors[o];
-        colors[o + 1] = classColors[o + 1];
-        colors[o + 2] = classColors[o + 2];
+        const s = this.classColorBlendStrength;
+        const inv = 1.0 - s;
+        colors[o]     = classColors[o]     * s + originalColors[o]     * inv;
+        colors[o + 1] = classColors[o + 1] * s + originalColors[o + 1] * inv;
+        colors[o + 2] = classColors[o + 2] * s + originalColors[o + 2] * inv;
         colors[o + 3] = 1.0;
     }
 
     _writeBlendedClassColorFromRGB(colors, pointIndex, originalColors, r, g, b) {
         const o = pointIndex * 4;
-        colors[o]     = r;
-        colors[o + 1] = g;
-        colors[o + 2] = b;
+        const s = this.classColorBlendStrength;
+        const inv = 1.0 - s;
+        colors[o]     = r * s + originalColors[o]     * inv;
+        colors[o + 1] = g * s + originalColors[o + 1] * inv;
+        colors[o + 2] = b * s + originalColors[o + 2] * inv;
         colors[o + 3] = 1.0;
     }
 
