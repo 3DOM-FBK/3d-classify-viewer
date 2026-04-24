@@ -61,6 +61,7 @@ let _predictionLegendContainer = null;
 let _predictionLegendModelLabel = null;
 let _predictionLegendList = null;
 let _predictionLegendHasEntries = false;
+let _classifyFocusedSegmentId = null;
 
 function _isPredictionColorModeActive() {
     return typeof currentColorMode === 'string' && currentColorMode.toLowerCase() === 'feature:prediction';
@@ -70,6 +71,41 @@ function _updatePredictionLegendVisibility() {
     if (!_predictionLegendContainer) return;
     const shouldShow = _predictionLegendHasEntries && _isPredictionColorModeActive();
     _predictionLegendContainer.style.display = shouldShow ? 'block' : 'none';
+}
+
+function _setOutlineRowVisibilityButton(row, isVisible) {
+    const btn = row.querySelector('.outline-visibility-btn');
+    const icon = row.querySelector('.outline-visibility-icon');
+    if (!btn || !icon) return;
+
+    btn.classList.toggle('off', !isVisible);
+    icon.src = `${iconBase}${isVisible ? 'visibility-on.png' : 'visibility-off.png'}`;
+}
+
+function _syncClassifyFocusedSegmentState() {
+    const predictionActive = _isPredictionColorModeActive();
+    const targetSegId = Number(_classifyFocusedSegmentId);
+    const hasFocusedSegment = Number.isFinite(targetSegId);
+    const ldr = scene?.potree2Loader;
+
+    outlineContent.querySelectorAll('.outline-item[data-segment-id]').forEach(row => {
+        const segId = parseInt(row.dataset.segmentId, 10);
+        if (Number.isNaN(segId)) return;
+
+        const shouldIsolate = predictionActive && hasFocusedSegment;
+        const isTarget = segId === targetSegId;
+
+        row.style.display = shouldIsolate && !isTarget ? 'none' : '';
+
+        if (shouldIsolate) {
+            if (ldr) ldr.setSegmentVisible(segId, isTarget);
+            _setOutlineRowVisibilityButton(row, isTarget);
+            row.classList.toggle('segment-selected', isTarget);
+            return;
+        }
+
+        row.classList.remove('segment-selected');
+    });
 }
 
 function _toPosixPath(path = '') {
@@ -728,6 +764,7 @@ document.addEventListener('click', closeAllDropdowns);
 function switchColorMode(mode) {
     currentColorMode = mode;
     _updatePredictionLegendVisibility();
+    _syncClassifyFocusedSegmentState();
 
     // Shared logic for each mesh:
     // - "color":          originalColors for all points
@@ -3247,6 +3284,16 @@ function showAllSegmentsExceptDeleted() {
     });
 }
 
+function showOnlySegmentInOutline(segmentId) {
+    const targetSegId = Number(segmentId);
+    if (!Number.isFinite(targetSegId)) return;
+
+    _classifyFocusedSegmentId = targetSegId;
+    _syncClassifyFocusedSegmentState();
+}
+
+window.__showOnlyOutlineSegment = showOnlySegmentInOutline;
+
 // --- Training Logic ---
 if (startTrainingButton) {
     startTrainingButton.addEventListener("click", () => {
@@ -3372,6 +3419,7 @@ window.addEventListener('scene-reset', () => {
 
     // 4. Color mode: back to default
     currentColorMode = 'classification';
+    _classifyFocusedSegmentId = null;
 
     // 5. Feature range slider: hide and reset
     if (featureRangeControl) {

@@ -5051,6 +5051,13 @@ export async function showClassifyModal(scene) {
                     }
                     completeStep(currentStepIdx);
 
+                    if (needsSplit) {
+                        const selectedSegId = parseInt(splitValue, 10);
+                        if (Number.isFinite(selectedSegId) && typeof window.__showOnlyOutlineSegment === 'function') {
+                            window.__showOnlyOutlineSegment(selectedSegId);
+                        }
+                    }
+
                     // Success
                     if (modalCloseBtn) modalCloseBtn.style.display = '';
                     footer.innerHTML = '';
