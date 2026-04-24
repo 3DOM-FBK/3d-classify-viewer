@@ -54,6 +54,9 @@ function createChildAABB(parentBB, childIndex) {
     return { min, max };
 }
 
+const FEATURE_MISSING_SENTINEL = -1e38;
+const FEATURE_MISSING_COLOR = 0.8;
+
 
 /**
  * Potree 2.0 Loader for BabylonJS
@@ -681,7 +684,7 @@ export class Potree2Loader {
             // 1. Apply base color
             if (isFeatureMode && featureBin && featureIdx >= 0 && pointIds) {
                 const pid = pointIds[i];
-                let r = 0.3, g = 0.3, b = 0.3;
+                let r = FEATURE_MISSING_COLOR, g = FEATURE_MISSING_COLOR, b = FEATURE_MISSING_COLOR;
                 if (pid >= 0 && pid < featureBin.N) {
                     // On-demand feature lookup from raw Uint8Array / Float32Array.
                     const recOff = featureBin.offset + pid * featureBin.recSize;
@@ -693,7 +696,7 @@ export class Potree2Loader {
                     } else {
                         val = featureBin.dvFloat[(recOff + featureIdx * 4) / 4];
                     }
-                    if (!isNaN(val)) {
+                    if (Number.isFinite(val)) {
                         let t;
                         if (isPredictionFeature) {
                             // Snap to integer class, normalize by fmax for palette consistency
@@ -1060,7 +1063,10 @@ export class Potree2Loader {
         }
 
         void main() {
-            if (vFeature < -1e37) { gl_FragColor = vec4(0.3, 0.3, 0.3, 1.0); return; }
+            if (vFeature < ${FEATURE_MISSING_SENTINEL / 10.0}) {
+                gl_FragColor = vec4(${FEATURE_MISSING_COLOR}, ${FEATURE_MISSING_COLOR}, ${FEATURE_MISSING_COLOR}, 1.0);
+                return;
+            }
 
             if (discreteFilterEnabled == 1) {
                 float iv = floor(vFeature + 0.5);
@@ -1124,14 +1130,15 @@ export class Potree2Loader {
         const { bpf, dvFloat, dvUint8, offset, recSize, F, N, vmin, vmax } = this.featureBin;
         for (let i = 0; i < numPoints; i++) {
             const pid = pointIds[i];
-            if (pid < 0 || pid >= N) { featureValues[i] = -1e38; continue; }
+            if (pid < 0 || pid >= N) { featureValues[i] = FEATURE_MISSING_SENTINEL; continue; }
             const recOff = offset + pid * recSize;
             if (bpf === 1) {
                 const q = dvUint8[recOff + featureIdx];
-                featureValues[i] = (q === 255) ? NaN
+                featureValues[i] = (q === 255) ? FEATURE_MISSING_SENTINEL
                     : vmin[featureIdx] + (q / 254) * (vmax[featureIdx] - vmin[featureIdx]);
             } else {
-                featureValues[i] = dvFloat[(recOff + featureIdx * 4) / 4];
+                const val = dvFloat[(recOff + featureIdx * 4) / 4];
+                featureValues[i] = Number.isFinite(val) ? val : FEATURE_MISSING_SENTINEL;
             }
         }
         const buf = new BABYLON.VertexBuffer(
