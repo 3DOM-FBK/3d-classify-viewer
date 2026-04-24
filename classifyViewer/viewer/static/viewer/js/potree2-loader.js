@@ -1355,21 +1355,55 @@ export class Potree2Loader {
         const segmentIds = new Int32Array(numPoints); // 0 = main cloud
         if (this.cutHistory.length > 0 || !this.mainCloudVisible) {
             for (let j = 0; j < numPoints; j++) {
-                tmpVec.set(positions[3 * j], positions[3 * j + 1], positions[3 * j + 2]);
-                const seg = this._getPointSegment(tmpVec);
-                if (seg !== null) {
-                    segmentIds[j] = seg.segmentId;
-                    if (!seg.visible) {
+                const pid = pointIds[j];
+                let resolvedSegId = -1; // -1 = not resolved yet
+
+                // 1. Canonical map lookup (source of truth for points seen at cut time).
+                //    Preserved across LOD unload/reload cycles — prevents the geometry-
+                //    based fallback from re-assigning overlap points to a newer segment.
+                if (this._pointSegmentMap && pid >= 0 && pid < this._pointSegmentMap.length) {
+                    const stored = this._pointSegmentMap[pid];
+                    if (stored !== 0xFF) {
+                        resolvedSegId = (stored === 0xFE) ? this._deletedSegmentId : stored;
+                    }
+                }
+
+                if (resolvedSegId !== -1) {
+                    segmentIds[j] = resolvedSegId;
+                    let shouldHide;
+                    if (resolvedSegId === 0) {
+                        shouldHide = !this.mainCloudVisible;
+                    } else if (resolvedSegId === this._deletedSegmentId) {
+                        shouldHide = true;
+                    } else {
+                        const entry = this.cutHistory.find(e => e.segmentId === resolvedSegId);
+                        shouldHide = entry ? !entry.visible : false;
+                    }
+                    if (shouldHide) {
                         positions[3 * j] = NaN;
                         positions[3 * j + 1] = NaN;
                         positions[3 * j + 2] = NaN;
                     }
                 } else {
-                    segmentIds[j] = 0;
-                    if (!this.mainCloudVisible) {
-                        positions[3 * j] = NaN;
-                        positions[3 * j + 1] = NaN;
-                        positions[3 * j + 2] = NaN;
+                    // 2. Geometry fallback for points not loaded at cut time.
+                    //    Oldest-first so the earlier cut wins on geometric overlaps,
+                    //    consistent with cutSelection() NaN-guard behaviour.
+                    tmpVec.set(positions[3 * j], positions[3 * j + 1], positions[3 * j + 2]);
+                    const seg = this._getPointSegmentOldestFirst(tmpVec);
+                    if (seg !== null) {
+                        segmentIds[j] = seg.segmentId;
+                        if (!seg.visible) {
+                            positions[3 * j] = NaN;
+                            positions[3 * j + 1] = NaN;
+                            positions[3 * j + 2] = NaN;
+                        }
+                    } else {
+                        segmentIds[j] = 0;
+                        if (!this.mainCloudVisible) {
+                            positions[3 * j] = NaN;
+                            positions[3 * j + 1] = NaN;
+                            positions[3 * j + 2] = NaN;
+                        }
                     }
                 }
             }
@@ -2150,12 +2184,37 @@ export class Potree2Loader {
 
     /**
      * Returns { segmentId, visible } for the cut segment a point belongs to, or null.
+     * Iterates newest-to-oldest (used when the canonical map is available).
      */
     _getPointSegment(localVector) {
         if (this.cutHistory.length === 0) return null;
         const x = localVector.x, y = localVector.y, z = localVector.z;
 
         for (let c = this.cutHistory.length - 1; c >= 0; c--) {
+            const entry = this.cutHistory[c];
+            if (x < entry.minX || x > entry.maxX ||
+                y < entry.minY || y > entry.maxY ||
+                z < entry.minZ || z > entry.maxZ) continue;
+
+            if (this._matchesSelectionEntry(localVector, entry.selections, entry.deselections, entry.inverted)) {
+                return { segmentId: entry.segmentId, visible: entry.visible };
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Returns { segmentId, visible } iterating oldest-to-newest.
+     * Used as geometry fallback in _createMeshFromBuffer for points that had no
+     * canonical _pointSegmentMap entry (i.e. the LOD node was not in memory when
+     * the cut happened). Oldest-first ensures the earlier cut wins on overlapping
+     * areas, matching the NaN-guard behaviour of cutSelection().
+     */
+    _getPointSegmentOldestFirst(localVector) {
+        if (this.cutHistory.length === 0) return null;
+        const x = localVector.x, y = localVector.y, z = localVector.z;
+
+        for (let c = 0; c < this.cutHistory.length; c++) {
             const entry = this.cutHistory[c];
             if (x < entry.minX || x > entry.maxX ||
                 y < entry.minY || y > entry.maxY ||
