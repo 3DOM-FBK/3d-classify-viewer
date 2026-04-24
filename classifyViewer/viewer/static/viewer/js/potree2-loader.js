@@ -2847,46 +2847,6 @@ export class Potree2Loader {
     }
 
     /**
-     * Delete a segment and move all its points back to the main cloud (segment 0).
-     */
-    deleteSegment(segmentId) {
-        if (segmentId === 0) return;
-
-        this.cutHistory = this.cutHistory.filter(c => c.segmentId !== segmentId);
-
-        if (this._pointSegmentMap) {
-            for (let pid = 0; pid < this._pointSegmentMap.length; pid++) {
-                if (this._pointSegmentMap[pid] === segmentId) {
-                    this._pointSegmentMap[pid] = 0;
-                }
-            }
-        }
-
-        this.loadedNodes.forEach(mesh => {
-            const segmentIds = mesh.metadata.segmentIds;
-            const positions = mesh.getVerticesData(BABYLON.VertexBuffer.PositionKind);
-            const originalPositions = mesh.metadata.originalPositions;
-            if (!segmentIds || !positions || !originalPositions) return;
-
-            let modified = false;
-            for (let i = 0; i < segmentIds.length; i++) {
-                if (segmentIds[i] === segmentId) {
-                    segmentIds[i] = 0;
-                    modified = true;
-                    if (this.mainCloudVisible) {
-                        positions[i * 3] = originalPositions[i * 3];
-                        positions[i * 3 + 1] = originalPositions[i * 3 + 1];
-                        positions[i * 3 + 2] = originalPositions[i * 3 + 2];
-                    } else {
-                        positions[i * 3] = NaN; positions[i * 3 + 1] = NaN; positions[i * 3 + 2] = NaN;
-                    }
-                }
-            }
-            if (modified) this._setMeshPositionsAndNotify(mesh, positions);
-        });
-    }
-
-    /**
      * Move the current selection into an internal hidden "deleted" segment.
      * The segment is never exposed in the outline and remains always invisible.
      * @returns {number} number of points moved

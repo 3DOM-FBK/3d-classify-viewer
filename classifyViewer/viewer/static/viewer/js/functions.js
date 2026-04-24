@@ -1055,23 +1055,6 @@ export function createOutlineItem(name, iconSrc, parent, segmentId, onVisibility
             });
         }
 
-        if (segmentId !== 0) {
-            options.push({
-                label: `Delete segment "${nameInput.value}"`,
-                icon: `${iconBase}trash.png`,
-                action: () => {
-                    if (confirm(`Are you sure you want to delete segment "${nameInput.value}"?`)) {
-                        const scene = window.__babylonScene;
-                        if (scene && scene.potree2Loader) {
-                            scene.potree2Loader.deleteSegment(segmentId);
-                            row.remove();
-                            selectedSegmentIds.delete(segmentId);
-                        }
-                    }
-                }
-            });
-        }
-
         showContextMenu(e.clientX, e.clientY, options);
     });
 
