@@ -91,6 +91,67 @@
             </div>
             <div id="right-toolbar" class="toolbar-container">
                 <!-- Buttons injected by JS -->
+                <div id="command-guide" class="command-guide">
+                    <div id="command-guide-title" class="command-guide-title"></div>
+                    <!-- Navigation (Default Mode) -->
+                    <div id="guide-nav" class="guide-group">
+                        <div class="command-item">
+                            <div class="command-key-container">
+                                <div class="mouse-icon left"></div>
+                            </div>
+                            <span class="command-label">Rotate</span>
+                        </div>
+                        <div class="command-item">
+                            <div class="command-key-container">
+                                <div class="mouse-icon right"></div>
+                            </div>
+                            <span class="command-label">Pan</span>
+                        </div>
+                        <div class="command-item">
+                            <div class="command-key-container">
+                                <div class="mouse-icon wheel"></div>
+                            </div>
+                            <span class="command-label">Zoom</span>
+                        </div>
+                    </div>
+                    <!-- Selection (Rect/Lasso Mode) -->
+                    <div id="guide-selection" class="guide-group" style="display: none;">
+                        <div class="command-item">
+                            <div class="command-key-container">
+                                <div class="mouse-icon left"></div>
+                            </div>
+                            <span class="command-label">Select</span>
+                        </div>
+                        <div class="command-item">
+                            <div class="command-key-container">
+                                <div class="command-key">CTRL</div>
+                                <span class="command-separator">+</span>
+                                <div class="mouse-icon left"></div>
+                            </div>
+                            <span class="command-label">Deselect</span>
+                        </div>
+                        <div class="command-item">
+                            <div class="command-key-container">
+                                <div class="command-key">I</div>
+                            </div>
+                            <span class="command-label">Invert Selection</span>
+                        </div>
+                        <div class="command-item">
+                            <div class="command-key-container">
+                                <div class="command-key">ESC</div>
+                            </div>
+                            <span class="command-label">Deselect All</span>
+                        </div>
+                        <div class="command-item">
+                            <div class="command-key-container">
+                                <div class="mouse-icon left"></div>
+                                <span class="command-separator">/</span>
+                                <div class="command-key">ENTER</div>
+                            </div>
+                            <span class="command-label">Polygon: add vertices and close</span>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <!-- Feature Range Slider (Floating) -->
@@ -163,69 +224,6 @@
                 <div class="range-values">
                     <span id="val-min" class="range-val">0.00</span>
                     <span id="val-max" class="range-val">1.00</span>
-                </div>
-            </div>
-
-            <!-- Command Guide Overlay -->
-            <div id="command-guide" class="command-guide">
-                <!-- Navigation (Default Mode) -->
-                <div id="guide-nav" class="guide-group">
-                    <div class="command-item">
-                        <div class="command-key-container">
-                            <div class="mouse-icon left"></div>
-                        </div>
-                        <span class="command-label">Rotate</span>
-                    </div>
-                    <div class="command-item">
-                        <div class="command-key-container">
-                            <div class="mouse-icon right"></div>
-                        </div>
-                        <span class="command-label">Pan</span>
-                    </div>
-                    <div class="command-item">
-                        <div class="command-key-container">
-                            <div class="mouse-icon wheel"></div>
-                        </div>
-                        <span class="command-label">Zoom</span>
-                    </div>
-                </div>
-
-                <!-- Selection (Rect/Lasso Mode) -->
-                <div id="guide-selection" class="guide-group" style="display: none;">
-                    <div class="command-item">
-                        <div class="command-key-container">
-                            <div class="mouse-icon left"></div>
-                        </div>
-                        <span class="command-label">Select</span>
-                    </div>
-                    <div class="command-item">
-                        <div class="command-key-container">
-                            <div class="command-key">CTRL</div>
-                            <span class="command-separator">+</span>
-                            <div class="mouse-icon left"></div>
-                        </div>
-                        <span class="command-label">Deselect</span>
-                    </div>
-                    <div class="command-item">
-                        <div class="command-key-container">
-                            <div class="command-key">I</div>
-                        </div>
-                        <span class="command-label">Invert Selection</span>
-                    </div>
-                    <div class="command-item">
-                        <div class="command-key-container">
-                            <div class="command-key">ESC</div>
-                        </div>
-                        <span class="command-label">Deselect All</span>
-                    </div>
-                    <div class="command-item">
-                        <div class="command-key-container">
-                            <div class="mouse-icon left"></div>
-                            <span class="command-separator">/</span>
-                            <div class="command-key">ENTER</div>
-                        </div>
-                        <span class="command-label">Polygon: add vertices and close</span>
-                    </div>
                 </div>
             </div>
 

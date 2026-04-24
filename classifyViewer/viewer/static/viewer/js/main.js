@@ -991,9 +991,97 @@ function initToolbar() {
 
     console.log("Toolbar buttons created.");
 
-    // Initialize guide for tool-1
+    // Initialize guide content for tool-1 (nav group visible)
     const guide = document.getElementById('command-guide');
     if (guide) guide.classList.add('visible');
+
+    // ── Command Guide: show as tooltip on each toolbar button hover ──
+    const guideTitle = document.getElementById('command-guide-title');
+    let guideHideTimer = null;
+    let guideStage1Timer = null;
+    let guideStage2Timer = null;
+
+    function cancelGuideTimers() {
+        clearTimeout(guideHideTimer);
+        clearTimeout(guideStage1Timer);
+        clearTimeout(guideStage2Timer);
+    }
+
+    // Helper: show the right guide group for a given tool id, without changing activeTool
+    function showGuideGroupForTool(toolId) {
+        const navGroup       = document.getElementById('guide-nav');
+        const selectionGroup = document.getElementById('guide-selection');
+        const rotateGroup    = document.getElementById('guide-rotate');
+        const measureGroup   = document.getElementById('guide-measure');
+        const areaGroup      = document.getElementById('guide-area');
+
+        // Hide all groups first
+        [navGroup, selectionGroup, rotateGroup, measureGroup, areaGroup].forEach(g => {
+            if (g) g.style.display = 'none';
+        });
+
+        // Show the relevant group
+        if (toolId === 'tool-1') {
+            if (navGroup) navGroup.style.display = 'block';
+        } else if (toolId === 'tool-2' || toolId === 'tool-3' || toolId === 'tool-4') {
+            if (selectionGroup) selectionGroup.style.display = 'block';
+        } else if (toolId === 'tool-7') {
+            if (rotateGroup) rotateGroup.style.display = 'block';
+        } else if (toolId === 'tool-9') {
+            if (measureGroup) measureGroup.style.display = 'block';
+        } else if (toolId === 'tool-10') {
+            if (areaGroup) areaGroup.style.display = 'block';
+        }
+        // tool-5 (Cut), tool-6 (Move), tool-8 (Frame): no commands, only title shown
+    }
+
+    // After hover ends, restore guide groups to match the currently active tool
+    function restoreGuideGroupToActive() {
+        showGuideGroupForTool(activeTool);
+    }
+
+    rightToolbar.querySelectorAll('.tool-btn').forEach(btn => {
+        btn.addEventListener('mouseenter', () => {
+            cancelGuideTimers();
+            if (!guide) return;
+
+            // Stage 1 after 0.5s: show title only (hide all command groups)
+            guideStage1Timer = setTimeout(() => {
+                guide.style.top = (btn.offsetTop + btn.offsetHeight / 2) + 'px';
+                if (guideTitle) guideTitle.textContent = btn.getAttribute('data-tooltip') || '';
+                // Hide command groups — title only
+                ['guide-nav','guide-selection','guide-rotate','guide-measure','guide-area'].forEach(id => {
+                    const el = document.getElementById(id);
+                    if (el) el.style.display = 'none';
+                });
+                guide.classList.add('hovering');
+
+                // Stage 2 after additional 0.5s: reveal commands for this tool
+                guideStage2Timer = setTimeout(() => {
+                    showGuideGroupForTool(btn.id);
+                }, 1000);
+            }, 500);
+        });
+
+        btn.addEventListener('mouseleave', () => {
+            cancelGuideTimers();
+            guideHideTimer = setTimeout(() => {
+                if (guide) guide.classList.remove('hovering');
+                restoreGuideGroupToActive();
+            }, 80);
+        });
+    });
+
+    // Keep visible when mouse moves from button into the guide panel
+    if (guide) {
+        guide.addEventListener('mouseenter', () => cancelGuideTimers());
+        guide.addEventListener('mouseleave', () => {
+            guideHideTimer = setTimeout(() => {
+                guide.classList.remove('hovering');
+                restoreGuideGroupToActive();
+            }, 80);
+        });
+    }
 }
 
 // --- Sidebar Left: Accordion Sections ---

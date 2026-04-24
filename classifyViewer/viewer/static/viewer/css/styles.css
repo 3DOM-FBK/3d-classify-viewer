@@ -9,6 +9,30 @@
     --header-height: 40px;
     --grid-lines: #8d8d99;
     --grid-lines-light: #d1d1d6;
+
+    /* UI Scaling Variables (Base for 1080p) */
+    --ui-scale: 1;
+    --font-scale: 1;
+    --side-panel-width: 22dvw;
+    --toolbar-btn-size: 38px;
+    --toolbar-icon-size: 20px;
+    --nav-logo-height: 24px;
+
+    /* Gaps and Paddings */
+    --spacing-xs: 4px;
+    --spacing-sm: 8px;
+    --spacing-md: 12px;
+    --spacing-lg: 16px;
+
+    /* Specific Components Base Sizes */
+    --property-row-height: 28px;
+    --outline-icon-size: 16px;
+    --switch-width: 34px;
+    --switch-height: 18px;
+
+    /* Dynamic viewport units (conservative use) */
+    --gizmo-size-dynamic: clamp(50px, 6dvh, 70px);
+    --command-guide-max-height: 70dvh;
 }
 
 /* Scrollbar Minimalista */
@@ -86,7 +110,7 @@ textarea,
 }
 
 .nav-logo {
-    height: 32px;
+    height: var(--nav-logo-height);
     object-fit: contain;
 }
 
@@ -215,12 +239,12 @@ textarea,
 }
 
 #sidebar-left {
-    width: 250px;
+    width: calc(var(--side-panel-width) - 50px);
     border-right: 1px solid var(--border-color);
 }
 
 #sidebar-right {
-    width: 300px;
+    width: var(--side-panel-width);
     border-left: 1px solid var(--border-color);
 }
 
@@ -555,7 +579,7 @@ textarea,
     right: 10px;
     transform: translateY(-50%);
     background-color: var(--panel-bg);
-    padding: 8px;
+    padding: 6px;
     border-radius: 12px;
     display: flex;
     flex-direction: column;
@@ -565,6 +589,7 @@ textarea,
     z-index: 1000;
     pointer-events: auto;
     justify-content: center;
+    overflow: visible;
     /* min-width: 44px; */
     /* Ensure visibility even if content is weird */
 }
@@ -609,8 +634,8 @@ textarea,
 }
 
 .tool-btn {
-    width: 34px;
-    height: 34px;
+    width: 30px;
+    height: 30px;
     background-color: rgba(255, 255, 255, 0.05);
     border: 1px solid var(--border-color);
     border-radius: 10px;
@@ -634,8 +659,8 @@ textarea,
 }
 
 .tool-btn img {
-    width: 20px;
-    height: 20px;
+    width: 16px;
+    height: 16px;
     opacity: 0.8;
     filter: brightness(0) invert(1);
     /* Rende le icone bianche */
@@ -686,16 +711,14 @@ textarea,
     /* Appare solo se il mouse si ferma per 0.6s */
 }
 
-/* Tooltip adjustment for right-side vertical toolbar */
+/* Tooltip adjustment for right-side vertical toolbar:
+   replaced by #command-guide hover logic — no ::after tooltip on toolbar buttons */
 .toolbar-container .tool-btn::after {
-    top: 50%;
-    left: auto;
-    right: calc(100% + 12px);
-    transform: translateX(-10px) translateY(-50%);
+    display: none;
 }
 
 .toolbar-container .tool-btn:hover::after {
-    transform: translateX(0) translateY(-50%);
+    display: none;
 }
 
 /* Sezioni Accordion */
@@ -706,13 +729,13 @@ textarea,
 }
 
 .accordion-header {
-    padding: 8px 15px;
+    padding: calc(var(--spacing-sm) * var(--ui-scale)) calc(var(--spacing-lg) * var(--ui-scale));
     /* Leggermente più compatto verticalmente */
     background-color: rgba(255, 255, 255, 0.02);
     display: flex;
     align-items: center;
     cursor: pointer;
-    font-size: 0.7rem;
+    font-size: calc(0.7rem * var(--font-scale));
     font-weight: 600;
     color: var(--text-muted);
     text-transform: uppercase;
@@ -720,7 +743,7 @@ textarea,
     transition: background-color 0.2s;
     border: none;
     text-align: left;
-    min-height: 22px;
+    min-height: calc(22px * var(--ui-scale));
 }
 
 .accordion-header span:first-child {
@@ -800,11 +823,12 @@ textarea,
     display: flex;
     justify-content: space-between;
     align-items: center;
-    font-size: 0.85rem;
+    font-size: calc(0.85rem * var(--font-scale));
 }
 
 .property-label {
     color: var(--text-muted);
+    font-size: calc(0.78rem * var(--font-scale));
 }
 
 .property-value {
@@ -817,9 +841,9 @@ textarea,
     border: 1px solid var(--border-color);
     border-radius: 4px;
     color: var(--text-primary);
-    padding: 6px 10px;
-    font-size: 0.8rem;
-    width: 100px;
+    padding: calc(6px * var(--ui-scale)) calc(10px * var(--ui-scale));
+    font-size: calc(0.8rem * var(--font-scale));
+    width: calc(100px * var(--ui-scale));
     text-align: left;
     outline: none;
     transition: all 0.2s;
@@ -992,10 +1016,10 @@ select.property-input option {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
+    gap: calc(var(--spacing-md) * var(--ui-scale));
     /* margin-left: 10px; */
     padding-right: 0px;
-    padding: 6px 8px;
+    padding: calc(6px * var(--ui-scale)) calc(8px * var(--ui-scale));
     border-radius: 6px;
     transition: background-color 0.2s;
 }
@@ -1077,8 +1101,8 @@ select.property-input option {
 }
 
 .outline-icon {
-    width: 16px;
-    height: 16px;
+    width: var(--outline-icon-size);
+    height: var(--outline-icon-size);
     opacity: 0.7;
     /* filter: brightness(0) invert(1); */
     /* Rende l'icona bianca */
@@ -1679,30 +1703,49 @@ select.property-input option {
     z-index: 1999;
 }
 
-/* Command Guide Overlay */
+/* Command Guide — Tooltip appare a sinistra del bottone hoverato nella toolbar */
 .command-guide {
     position: absolute;
-    bottom: 50px;
-    right: 20px;
-    background-color: rgba(30, 30, 32, 0.7);
-    backdrop-filter: blur(12px);
+    top: 0; /* Overridden per-button by JS */
+    right: calc(100% + 10px);
+    transform: translateY(-50%) translateX(8px);
+    background-color: rgba(22, 22, 24, 0.96);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
     border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 10px;
-    padding: 12px 16px;
+    padding: 8px 12px;
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 6px;
     z-index: 1005;
     pointer-events: none;
     opacity: 0;
-    transform: translateY(10px);
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    transition: opacity 0.15s ease, transform 0.15s ease;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+    white-space: nowrap;
 }
 
-.command-guide.visible {
-    opacity: 0.85;
-    transform: translateY(0);
+.command-guide.hovering {
+    opacity: 0.95;
+    transform: translateY(-50%) translateX(0);
+    pointer-events: auto;
+}
+
+.command-guide-title {
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    letter-spacing: 0.04rem;
+    text-transform: uppercase;
+    padding-bottom: 2px;
+    margin-bottom: 2px;
+}
+
+/* Hide title divider when there are no commands below */
+.command-guide:not(.visible) .command-guide-title {
+    padding-bottom: 0;
+    margin-bottom: 0;
 }
 
 .command-item {
@@ -1733,9 +1776,9 @@ select.property-input option {
 }
 
 .mouse-icon {
-    width: 16px;
-    height: 22px;
-    border: 2px solid rgba(255, 255, 255, 0.4);
+    width: 14px;
+    height: 19px;
+    border: 1.5px solid rgba(255, 255, 255, 0.4);
     border-radius: 6px;
     position: relative;
     overflow: hidden;
@@ -1803,7 +1846,7 @@ select.property-input option {
 
 
 .command-label {
-    font-size: 0.8rem;
+    font-size: 0.75rem;
     font-weight: 500;
     color: var(--text-primary);
     opacity: 0.9;
@@ -2061,8 +2104,8 @@ input[type="number"].property-input::-webkit-outer-spin-button:active {
 
 /* SVG ring — static, rotated so arc starts at top */
 .step-svg {
-    width: 28px;
-    height: 28px;
+    width: calc(28px * var(--ui-scale));
+    height: calc(28px * var(--ui-scale));
     display: block;
 }
 
@@ -2268,8 +2311,8 @@ input[type="number"].property-input::-webkit-outer-spin-button:active {
     position: absolute;
     bottom: 16px;
     left: 16px;
-    width: 100px;
-    height: 100px;
+    width: 70px;
+    height: 70px;
     pointer-events: none;
     z-index: 10;
 }
@@ -2506,4 +2549,61 @@ input[type="number"].property-input::-webkit-outer-spin-button:active {
     border-radius: 3px;
     flex-shrink: 0;
     border: 1px solid rgba(255, 255, 255, 0.08);
+}
+/* --- Responsiveness for Lower Resolutions --- */
+
+@media screen and (max-width: 1400px) {
+    :root {
+        --ui-scale: 0.85;
+        --font-scale: 0.9;
+        --side-panel-width: 260px;
+        --toolbar-btn-size: 32px;
+        --toolbar-icon-size: 17px;
+        --nav-logo-height: 20px;
+        --outline-icon-size: 14px;
+    }
+}
+
+@media screen and (max-width: 900px) {
+    :root {
+        --ui-scale: 0.75;
+        --font-scale: 0.85;
+        --side-panel-width: 220px;
+        --toolbar-btn-size: 28px;
+        --toolbar-icon-size: 15px;
+        --nav-logo-height: 18px;
+        --header-height: 36px;
+        --outline-icon-size: 13px;
+    }
+
+    .top-navbar {
+        height: var(--header-height);
+        padding: 0 8px;
+        gap: calc(12px * var(--ui-scale));
+    }
+
+    .nav-btn {
+        padding: 4px 8px;
+        font-size: 0.8rem;
+    }
+
+    .nav-doc-btn {
+        font-size: 0.75rem;
+    }
+
+    #sidebar-left {
+        width: 180px !important;
+    }
+
+    .feature-range-container {
+        width: 280px;
+        padding: 8px 12px;
+        bottom: 40px;
+    }
+
+    .toolbar-container {
+        padding: 6px;
+        gap: 6px;
+        right: 8px;
+    }
 }
