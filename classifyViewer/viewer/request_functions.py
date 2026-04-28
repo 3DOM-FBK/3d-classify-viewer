@@ -19,14 +19,25 @@ from .functions import extract_segment_las
 
 
 def _get_working_dir():
-    return os.path.join(
-        os.path.dirname(os.path.abspath(__file__)),
-        'static', 'viewer', 'data', 'working'
-    )
+    working = settings.RUNTIME_DATA_ROOT / 'working'
+    working.mkdir(parents=True, exist_ok=True)
+    return str(working)
 
 
 def _get_working_file(*parts):
     return os.path.join(_get_working_dir(), *parts)
+
+
+def _get_models_dir():
+    models = settings.RUNTIME_DATA_ROOT / 'models'
+    models.mkdir(parents=True, exist_ok=True)
+    return str(models)
+
+
+def _runtime_relative_path(*parts):
+    """Return path relative to BASE_DIR, e.g. runtime_data/working/features.las"""
+    base = settings.RUNTIME_DATA_ROOT.relative_to(settings.BASE_DIR).as_posix()
+    return '/'.join([base, *parts])
 
 @csrf_exempt
 def launch_RF_training(request):
@@ -382,10 +393,10 @@ def las_to_feature_bin_view(request):
     return JsonResponse({'status': 'error', 'message': 'Method not allowed'}, status=405)
 
 def models_list(request):
-    """Return a list of all trained models found in viewer/static/viewer/data/models/."""
+    """Return a list of all trained models found in runtime_data/models/."""
     if request.method == 'GET':
         try:
-            models_root = os.path.join(settings.BASE_DIR, 'viewer', 'static', 'viewer', 'data', 'models')
+            models_root = _get_models_dir()
             result = []
 
             if os.path.isdir(models_root):
@@ -399,7 +410,7 @@ def models_list(request):
                     size_mb = round(stat.st_size / (1024 * 1024), 2)
                     result.append({
                         'name': name,
-                        'path': f'viewer/static/viewer/data/models/{name}/model.pkl',
+                        'path': _runtime_relative_path('models', name, 'model.pkl'),
                         'created': created,
                         'size_mb': size_mb,
                     })
@@ -415,14 +426,14 @@ def models_list(request):
 
 
 def model_exists(request):
-    """Check whether a model folder already exists under /data/models/{name}/."""
+    """Check whether a model folder already exists under runtime_data/models/{name}/."""
     if request.method == 'GET':
         try:
             name = request.GET.get('name', '').strip()
             if not name:
                 return JsonResponse({'exists': False})
 
-            model_dir = os.path.join(settings.BASE_DIR, 'viewer', 'static', 'viewer', 'data', 'models', name)
+            model_dir = os.path.join(_get_models_dir(), name)
             exists = os.path.isdir(model_dir) and os.path.isfile(os.path.join(model_dir, 'model.pkl'))
 
             return JsonResponse({'exists': exists})
@@ -436,7 +447,7 @@ def model_exists(request):
 
 @csrf_exempt
 def delete_model(request):
-    """Delete a trained model folder from /data/models/{name}/."""
+    """Delete a trained model folder from runtime_data/models/{name}/."""
     if request.method == 'POST':
         try:
             data = json.loads(request.body)
@@ -449,9 +460,7 @@ def delete_model(request):
             if '/' in name or '\\' in name or '..' in name:
                 return JsonResponse({'status': 'error', 'message': 'Invalid model name'}, status=400)
 
-            model_dir = os.path.join(
-                settings.BASE_DIR, 'viewer', 'static', 'viewer', 'data', 'models', name
-            )
+            model_dir = os.path.join(_get_models_dir(), name)
 
             if not os.path.isdir(model_dir):
                 return JsonResponse({'status': 'error', 'message': 'Model not found'}, status=404)
@@ -555,10 +564,7 @@ def serve_range_file(request, filepath):
     """
     # Security: restrict to specific binary files in the data directory
     ALLOWED_EXTENSIONS = ('.bin', '.json', '.pcbin')
-    BASE_DATA_DIR = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)),
-        'static', 'viewer', 'data'
-    )
+    BASE_DATA_DIR = str(settings.RUNTIME_DATA_ROOT)
 
     # Normalize and validate path
     # We lstrip('/') to ensure os.path.join doesn't treat it as an absolute path
@@ -648,6 +654,35 @@ def serve_range_file(request, filepath):
 
     response['Content-Length'] = file_size
     response['Accept-Ranges'] = 'bytes'
+    response['Access-Control-Allow-Origin'] = '*'
+    return response
+
+
+def serve_runtime_file(request, filepath):
+    """Serve runtime data files (LAS, pcbin, JSON) without Range support."""
+    ALLOWED_EXTENSIONS = ('.las', '.bin', '.json', '.pcbin', '.txt')
+    BASE_DATA_DIR = str(settings.RUNTIME_DATA_ROOT)
+
+    full_path = os.path.normpath(os.path.join(BASE_DATA_DIR, filepath.lstrip('/')))
+
+    if not full_path.startswith(os.path.normpath(BASE_DATA_DIR)):
+        raise Http404("Access denied")
+
+    if not os.path.isfile(full_path):
+        raise Http404(f"File not found: {filepath}")
+
+    _, ext = os.path.splitext(full_path)
+    if ext.lower() not in ALLOWED_EXTENSIONS:
+        raise Http404("File type not allowed")
+
+    content_type = 'application/octet-stream'
+    if ext.lower() == '.json':
+        content_type = 'application/json'
+    elif ext.lower() == '.txt':
+        content_type = 'text/plain'
+
+    with open(full_path, 'rb') as f:
+        response = HttpResponse(f.read(), content_type=content_type)
     response['Access-Control-Allow-Origin'] = '*'
     return response
 
@@ -750,7 +785,7 @@ def backup_pointcloud(request):
             return JsonResponse({
                 "status": "success",
                 "message": "Point cloud backup created",
-                "backup_path": 'viewer/static/viewer/data/working/pointcloud_backup.las'
+                "backup_path": _runtime_relative_path('working', 'pointcloud_backup.las')
             }, status=200)
         except Exception as e:
             print("\n[REQUEST FUNCTION] BACKUP POINT CLOUD ERROR " + str(e))
@@ -781,15 +816,15 @@ def restore_pointcloud_backup(request):
                 os.remove(features_pcbin)
 
             las_to_feature_bin(
-                'viewer/static/viewer/data/working/features.las',
-                'viewer/static/viewer/data/working/features.pcbin'
+                _runtime_relative_path('working', 'features.las'),
+                _runtime_relative_path('working', 'features.pcbin')
             )
 
             return JsonResponse({
                 "status": "success",
                 "message": "Point cloud restored from backup",
-                "las_path": 'viewer/static/viewer/data/working/features.las',
-                "pcbin_path": 'viewer/static/viewer/data/working/features.pcbin'
+                "las_path": _runtime_relative_path('working', 'features.las'),
+                "pcbin_path": _runtime_relative_path('working', 'features.pcbin')
             }, status=200)
         except Exception as e:
             print("\n[REQUEST FUNCTION] RESTORE POINT CLOUD BACKUP ERROR " + str(e))
@@ -818,10 +853,7 @@ def start_training(request):
                 return JsonResponse({"error": "Missing 'buffer' binary data"}, status=400)
 
             # Save in the working directory used by the pipeline
-            training_dir = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)),
-                'static', 'viewer', 'data', 'working'
-            )
+            training_dir = _get_working_dir()
             os.makedirs(training_dir, exist_ok=True)
 
             # abs_input = os.path.abspath(os.path.join(settings.BASE_DIR, input_filepath))
@@ -868,7 +900,7 @@ def export_mapping(request):
     - 'buffer'      : Binary blob (2 bytes per point: segment_id, class_id)
     - 'point_count' : Integer (total number of points in the buffer)
     - 'pcbin_path'  : Relative path to features.pcbin (defaults to
-                      'viewer/static/viewer/data/working/features.pcbin')
+                      'runtime_data/working/features.pcbin')
 
     Returns JSON:
     - pcbin_path    : same relative path that was updated
@@ -881,7 +913,7 @@ def export_mapping(request):
             point_count_str = request.POST.get('point_count')
             pcbin_path = request.POST.get(
                 'pcbin_path',
-                'viewer/static/viewer/data/working/features.pcbin'
+                _runtime_relative_path('working', 'features.pcbin')
             )
 
             if not buffer_file:
@@ -912,7 +944,7 @@ def export_mapping(request):
             if not os.path.isfile(abs_pcbin):
                 # features.pcbin doesn't exist yet (e.g. cloud was loaded without running
                 # feature calculation or training). Generate it from features.las first.
-                las_relative = 'viewer/static/viewer/data/working/features.las'
+                las_relative = _runtime_relative_path('working', 'features.las')
                 abs_las = os.path.normpath(os.path.join(settings.BASE_DIR, las_relative))
                 if not os.path.isfile(abs_las):
                     return JsonResponse({"error": "features.las not found — please load a point cloud first"}, status=404)
@@ -1005,11 +1037,11 @@ def package_download_view(request):
             if project_bin and not os.path.isabs(project_bin):
                 project_bin = os.path.join(settings.BASE_DIR, project_bin)
 
-            working_dir = os.path.join(settings.BASE_DIR, 'viewer', 'static', 'viewer', 'data', 'working')
+            working_dir = _get_working_dir()
             if not project_las:
                 project_las = os.path.join(working_dir, 'features.las')
 
-            models_root = os.path.join(settings.BASE_DIR, 'viewer', 'static', 'viewer', 'data', 'models')
+            models_root = _get_models_dir()
 
             # Mark the bin and json generated by /api/start-training/ for cleanup
             # The bin is named labels_TIMESTAMP.bin → the associated json is meta_TIMESTAMP.json
@@ -1026,7 +1058,7 @@ def package_download_view(request):
             items_to_zip = []  # list of (archive_path, file_content_or_path, is_content)
 
             # ── 1. Direct point-cloud files (final pipeline outputs) ────────
-            # Example: viewer/static/viewer/data/working/<model>/predicted.las
+            # Example: runtime_data/working/<model>/predicted.las
             print("Preparing segments for ZIP package...")
             for file_entry in selected_point_cloud_files:
                 raw_path = file_entry.get('path')
@@ -1151,7 +1183,7 @@ def upload_model(request):
                 return JsonResponse({"error": "Only ZIP files are supported"}, status=400)
 
             model_name = os.path.splitext(uploaded_file.name)[0]
-            models_root = os.path.join(settings.BASE_DIR, 'viewer', 'static', 'viewer', 'data', 'models')
+            models_root = _get_models_dir()
             os.makedirs(models_root, exist_ok=True)
             
             model_dir = os.path.join(models_root, model_name)

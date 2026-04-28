@@ -10,3 +10,8 @@ __pycache__
 node_modules
 dist
 build
+old_Dockerfile/
+testC++/
+classifyViewer/staticfiles/
+classifyViewer/db.sqlite3
+classifyViewer/runtime_data/

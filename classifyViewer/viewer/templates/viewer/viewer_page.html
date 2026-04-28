@@ -24,6 +24,12 @@
     <script src="{% static 'viewer/js/babylon_js/babylon.js' %}"></script>
     <script src="{% static 'viewer/js/babylon_js/materialsLibrary/babylonjs.materials.min.js' %}"></script>
     <script src="{% static 'viewer/js/babylon_js/loaders/babylonjs.loaders.min.js' %}"></script>
+    <script>
+    window.__APP_CONFIG = {
+        runtimeDataUrl: "{{ runtime_data_url }}",
+        runtimeDataPathPrefix: "{{ runtime_data_path_prefix }}"
+    };
+    </script>
 </head>
 
 <body>

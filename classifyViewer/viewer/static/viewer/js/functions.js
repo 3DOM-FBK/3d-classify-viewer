@@ -3,6 +3,16 @@ import {
     getPotree2Loader
 } from "./potree2-loader.js";
 
+// --- Runtime path helpers (read from Django-injected config) ---
+const _runtimeUrl = (...parts) => {
+    const base = (window.__APP_CONFIG?.runtimeDataUrl || '/runtime-data').replace(/\/$/, '');
+    return base + '/' + parts.join('/');
+};
+const _runtimePath = (...parts) => {
+    const prefix = window.__APP_CONFIG?.runtimeDataPathPrefix || 'runtime_data';
+    return [prefix, ...parts].join('/');
+};
+
 // =====================================================================
 // UNIFIED POINT CLOUD LOADER - Auto-detects format
 // =====================================================================
@@ -1601,8 +1611,8 @@ export function showDownloadModal() {
                 const seen = new Set();
                 const addCandidate = (modelName) => {
                     if (!modelName) return;
-                    const relPath = `viewer/static/viewer/data/working/${modelName}/predicted.las`;
-                    const publicUrl = `/static/viewer/data/working/${modelName}/predicted.las`;
+                    const relPath = _runtimePath('working', modelName, 'predicted.las');
+                    const publicUrl = _runtimeUrl('working', modelName, 'predicted.las');
                     if (seen.has(relPath)) return;
                     seen.add(relPath);
                     candidates.push({
@@ -2159,8 +2169,8 @@ export function showLoadModal() {
                     activateStep(2);
                     const filename = file.name;
                     const extension = filename.split('.').pop().toLowerCase();
-                    const inputPath = `viewer/static/viewer/data/working/${filename}`;
-                    let lasPath = `viewer/static/viewer/data/working/features.las`;
+                    const inputPath = _runtimePath('working', filename);
+                    let lasPath = _runtimePath('working', 'features.las');
                     const subsampleEnabled = Boolean(subToggle?.checked) && extension !== 'glb';
                     const rawVoxel = parseFloat(voxelInput?.value || '0.05');
                     const voxelSize = Number.isFinite(rawVoxel) && rawVoxel > 0 ? rawVoxel : 0.05;
@@ -2169,7 +2179,7 @@ export function showLoadModal() {
                         let plyInputPath = inputPath;
                         if (subsampleEnabled) {
                             console.log(`🔧 Step 3: Subsampling PLY (voxel ${voxelSize} m)...`);
-                            const plySubsamplePath = `viewer/static/viewer/data/working/features.ply`;
+                            const plySubsamplePath = _runtimePath('working', 'features.ply');
                             const subResponse = await fetch('/subsample_pc/', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
@@ -2236,7 +2246,7 @@ export function showLoadModal() {
                         let lasInputPath = inputPath;
                         if (subsampleEnabled) {
                             console.log(`🔧 Step 3: Subsampling LAS (voxel ${voxelSize} m)...`);
-                            const lasSubsamplePath = `viewer/static/viewer/data/working/features.las`;
+                            const lasSubsamplePath = _runtimePath('working', 'features.las');
                             const subResponse = await fetch('/subsample_pc/', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
@@ -2290,7 +2300,7 @@ export function showLoadModal() {
                         headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
                         body: JSON.stringify({
                             input_filepath: lasPath,
-                            output_filepath: `viewer/static/viewer/data/working/clusters`
+                            output_filepath: _runtimePath('working', 'clusters')
                         })
                     });
                     if (!potreeResponse.ok) {
@@ -2328,7 +2338,7 @@ export function showLoadModal() {
                     window.__selectedModelPath = null;
                     window.dispatchEvent(new CustomEvent('scene-reset'));
 
-                    const pcPath = "/static/viewer/data/working/clusters";
+                    const pcPath = _runtimeUrl('working', 'clusters');
                     const pc = await loadPointCloud(pcPath, scene);
                     if (pc) {
                         if (sceneObjects) sceneObjects.currentPointCloud = pc;
@@ -2341,14 +2351,14 @@ export function showLoadModal() {
                     console.log("✅ Process complete. Potree cloud loaded.");
 
                     // Store for download logic
-                    window.__currentProjectLAS = 'viewer/static/viewer/data/working/features.las';
-                    window.__currentProjectBIN = 'viewer/static/viewer/data/working/features.pcbin';
+                    window.__currentProjectLAS = _runtimePath('working', 'features.las');
+                    window.__currentProjectBIN = _runtimePath('working', 'features.pcbin');
 
                     // Load feature bin if available (populated by Calculate Features)
                     try {
                         const featureBinLoader = window.__babylonScene?.potree2Loader;
                         if (featureBinLoader) {
-                            const featureNames = await featureBinLoader.loadPcBin(`/static/viewer/data/working/features.pcbin`);
+                            const featureNames = await featureBinLoader.loadPcBin(_runtimeUrl('working', 'features.pcbin'));
                             window.dispatchEvent(new CustomEvent('feature-bin-loaded', { detail: { names: featureNames } }));
                         }
                     } catch (binErr) {
@@ -3194,8 +3204,8 @@ export function showTrainingModal(scene, onStart) {
                 const modelNameRaw = (body.querySelector('#model-name-input')?.value || '').trim();
                 // Sanitize: keep only alphanumeric, dash, underscore
                 const modelName = modelNameRaw.replace(/[^a-zA-Z0-9_\-]/g, '_').replace(/^_+|_+$/g, '') || 'my_model';
-                const modelDir = `viewer/static/viewer/data/models/${modelName}/`;
-                const workingDir = `viewer/static/viewer/data/working/${modelName}/`;
+                const modelDir = _runtimePath('models', modelName, '/');
+                const workingDir = _runtimePath('working', modelName, '/');
 
                 // Helper: show error above footer, auto-hide after 4s
                 const showError = (msg) => {
@@ -3398,7 +3408,7 @@ export function showTrainingModal(scene, onStart) {
                     checkCancelled();
                     currentStepIdx = 2;
                     activateStep(2);
-                    const lasSourcePath = 'viewer/static/viewer/data/working/features.las';
+                    const lasSourcePath = _runtimePath('working', 'features.las');
                     const segmentNames = {};
                     segmentNames[trainId] = 'training';
                     segmentNames[valId]   = 'validation';
@@ -3407,7 +3417,7 @@ export function showTrainingModal(scene, onStart) {
                         headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
                         body: JSON.stringify({
                             las_path: lasSourcePath,
-                            pcbin_path: 'viewer/static/viewer/data/working/features.pcbin',
+                            pcbin_path: _runtimePath('working', 'features.pcbin'),
                             output_dir: workingDir,
                             segment_names: segmentNames,
                             exclude_unclassified: true
@@ -4453,8 +4463,8 @@ export function showCalculateFeaturesModal(scene, onConfirm) {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
                         body: JSON.stringify({
-                            input_filepath: 'viewer/static/viewer/data/working/features.las',
-                            output_filepath: 'viewer/static/viewer/data/working/features.las',
+                            input_filepath: _runtimePath('working', 'features.las'),
+                            output_filepath: _runtimePath('working', 'features.las'),
                             feature_list: selectedFeatures,
                             radius_list: radii,
                             use_gpu: useGpu
@@ -4476,8 +4486,8 @@ export function showCalculateFeaturesModal(scene, onConfirm) {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
                         body: JSON.stringify({
-                            las_path: 'viewer/static/viewer/data/working/features.las',
-                            pcbin_path: 'viewer/static/viewer/data/working/features.pcbin'
+                            las_path: _runtimePath('working', 'features.las'),
+                            pcbin_path: _runtimePath('working', 'features.pcbin')
                         })
                     });
                     if (!binResponse.ok) {
@@ -4495,7 +4505,7 @@ export function showCalculateFeaturesModal(scene, onConfirm) {
                     try {
                         const featureBinLoader = window.__babylonScene?.potree2Loader;
                         if (featureBinLoader) {
-                            const featureNames = await featureBinLoader.loadPcBin(`/static/viewer/data/working/features.pcbin`);
+                            const featureNames = await featureBinLoader.loadPcBin(_runtimeUrl('working', 'features.pcbin'));
                             window.dispatchEvent(new CustomEvent('feature-bin-loaded', { detail: { names: featureNames } }));
                         }
                     } catch (binErr) {
@@ -4772,8 +4782,8 @@ export async function showClassifyModal(scene) {
 
                 const modelDir = modelPath.replace(/\/model\.pkl$/, '');
                 const modelName = modelDir.split('/').pop();
-                const classifyWorkingDir = `viewer/static/viewer/data/working/${modelName}/classify_working/`;
-                const outputClassifyName = `viewer/static/viewer/data/working/${modelName}/predicted.las`;
+                const classifyWorkingDir = _runtimePath('working', modelName, 'classify_working/');
+                const outputClassifyName = _runtimePath('working', modelName, 'predicted.las');
                 const needsSplit = splitValue !== '__full__';
 
                 // ── Read model metadata to get the feature list ────────────────
@@ -4888,7 +4898,7 @@ export async function showClassifyModal(scene) {
                 const checkCancelled = () => { if (isCancelled) throw CANCELLED; };
 
                 let currentStepIdx = 0;
-                let testFilepath = 'viewer/static/viewer/data/working/features.las';
+                let testFilepath = _runtimePath('working', 'features.las');
 
                 try {
                     // ── STEP (optional): Data Preparation ─────────────────────
@@ -4915,15 +4925,15 @@ export async function showClassifyModal(scene) {
                         // Ensure features.pcbin exists — it is required by extract-segment-las.
                         // If the user loaded a cloud without running feature calculation or
                         // training, the file won't be present yet: generate it on-the-fly.
-                        const pcbinCheckRes = await fetch('/static/viewer/data/working/features.pcbin', { method: 'HEAD' });
+                        const pcbinCheckRes = await fetch(_runtimeUrl('working', 'features.pcbin'), { method: 'HEAD' });
                         if (!pcbinCheckRes.ok) {
                             console.log('⚙️ features.pcbin not found — generating from features.las…');
                             const binGenRes = await fetch('/las_to_feature_bin/', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
                                 body: JSON.stringify({
-                                    las_path: 'viewer/static/viewer/data/working/features.las',
-                                    pcbin_path: 'viewer/static/viewer/data/working/features.pcbin'
+                                    las_path: _runtimePath('working', 'features.las'),
+                                    pcbin_path: _runtimePath('working', 'features.pcbin')
                                 })
                             });
                             if (!binGenRes.ok) {
@@ -4938,8 +4948,8 @@ export async function showClassifyModal(scene) {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
                             body: JSON.stringify({
-                                las_path: 'viewer/static/viewer/data/working/features.las',
-                                pcbin_path: 'viewer/static/viewer/data/working/features.pcbin',
+                                las_path: _runtimePath('working', 'features.las'),
+                                pcbin_path: _runtimePath('working', 'features.pcbin'),
                                 seg_id: parseInt(splitValue, 10),
                                 out_path: segmentOutPath,
                             })
@@ -5009,7 +5019,7 @@ export async function showClassifyModal(scene) {
                         headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
                         body: JSON.stringify({
                             las_path: outputClassifyName,
-                            pcbin_path: 'viewer/static/viewer/data/working/features.pcbin',
+                            pcbin_path: _runtimePath('working', 'features.pcbin'),
                         })
                     });
                     completeStep(currentStepIdx);
@@ -5024,7 +5034,7 @@ export async function showClassifyModal(scene) {
                         headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
                         body: JSON.stringify({
                             input_filepath: outputClassifyName,
-                            output_filepath: 'viewer/static/viewer/data/working/potree/',
+                            output_filepath: _runtimePath('working', 'potree/'),
                         })
                     });
                     if (!potreeRes.ok) throw new Error("Potree conversion failed.");
@@ -5038,12 +5048,12 @@ export async function showClassifyModal(scene) {
                         const featureBinLoader = window.__babylonScene?.potree2Loader;
                         if (featureBinLoader) {
                             // Reload features from bin
-                            const featureNames = await featureBinLoader.loadPcBin('/static/viewer/data/working/features.pcbin');
+                            const featureNames = await featureBinLoader.loadPcBin(_runtimeUrl('working', 'features.pcbin'));
                             window.dispatchEvent(new CustomEvent('feature-bin-loaded', { detail: { names: featureNames } }));
 
                             // Re-load the entire cloud points from new Potree output
                             if (window.loadActiveCloud) {
-                                await window.loadActiveCloud('viewer/static/viewer/data/working/potree/metadata.json');
+                                await window.loadActiveCloud(_runtimeUrl('working', 'potree', 'metadata.json'));
                             }
                         }
                     } catch (binErr) {

@@ -179,7 +179,12 @@ COPY opt/            /webapp/opt/
 
 WORKDIR /webapp/classifyViewer
 
+RUN python3 manage.py collectstatic --noinput
+
 EXPOSE 8000
 
 # Run Django development server
-ENTRYPOINT [ "python", "manage.py", "runserver", "0.0.0.0:8000" ]
+# ENTRYPOINT [ "python", "manage.py", "runserver", "0.0.0.0:8000" ]
+
+# Run Django production server
+ENTRYPOINT [ "gunicorn", "classifyViewer.wsgi:application", "--bind", "0.0.0.0:8000" ]

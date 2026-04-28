@@ -27,6 +27,16 @@ import {
     getCSRFToken
 } from "./functions.js";
 
+// --- Runtime path helpers (read from Django-injected config) ---
+const _runtimeUrl = (...parts) => {
+    const base = (window.__APP_CONFIG?.runtimeDataUrl || '/runtime-data').replace(/\/$/, '');
+    return base + '/' + parts.join('/');
+};
+const _runtimePath = (...parts) => {
+    const prefix = window.__APP_CONFIG?.runtimeDataPathPrefix || 'runtime_data';
+    return [prefix, ...parts].join('/');
+};
+
 // --- UI Elements ---
 const sidebarLeft = document.getElementById('sidebar-left');
 const sidebarRight = document.getElementById('sidebar-right');
@@ -1302,8 +1312,8 @@ async function refreshModelsList() {
             noteBtn.addEventListener('mouseleave', () => noteBtn.style.opacity = '0.5');
             noteBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                const reportPath = `viewer/static/viewer/data/models/${model.name}/report.txt`;
-                const metaPath = `viewer/static/viewer/data/models/${model.name}/metadata.json`;
+                const reportPath = _runtimePath('models', model.name, 'report.txt');
+                const metaPath = _runtimePath('models', model.name, 'metadata.json');
                 showModelReportModal(model.name, reportPath, metaPath);
             });
 
@@ -2745,7 +2755,7 @@ if (navFileBtn && fileDropdown) {
                 try {
                     const featureBinLoader = window.__babylonScene?.potree2Loader;
                     if (featureBinLoader) {
-                        const featureNames = await featureBinLoader.loadPcBin('/static/viewer/data/working/features.pcbin');
+                        const featureNames = await featureBinLoader.loadPcBin(_runtimeUrl('working', 'features.pcbin'));
                         window.dispatchEvent(new CustomEvent('feature-bin-loaded', { detail: { names: featureNames } }));
                     }
                 } catch (binErr) {

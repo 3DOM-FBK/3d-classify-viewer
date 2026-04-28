@@ -73,7 +73,7 @@ export class Potree2Loader {
         this.root = null;
         this.rootTransform = new BABYLON.TransformNode("Potree2Root", scene);
 
-        const prefixes = ["/static/viewer/data/", "static/viewer/data/"];
+        const prefixes = ["/runtime-data/", "runtime-data/"];
         let foundPrefix = false;
         for (const prefix of prefixes) {
             if (baseUrl.startsWith(prefix)) {
@@ -2822,7 +2822,7 @@ export class Potree2Loader {
         const formData = new FormData();
         formData.append('buffer', new Blob([exportResult.buffer], { type: 'application/octet-stream' }));
         formData.append('point_count', this.metadata.points.toString());
-        formData.append('pcbin_path', 'viewer/static/viewer/data/working/features.pcbin');
+        formData.append('pcbin_path', (window.__APP_CONFIG?.runtimeDataPathPrefix || 'runtime_data') + '/working/features.pcbin');
 
         const response = await fetch('/api/export-mapping/', {
             method: 'POST',

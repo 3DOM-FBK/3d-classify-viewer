@@ -368,12 +368,12 @@
                     </ul>
 
                     <h2 id="view-mode">Different view modes  
-                        <img src="/static/viewer/icons/camera_prosp.png" alt="Perspective view" style="width:17px; height:17px;"> 
-                        <img src="/static/viewer/icons/camera_ortho.png" alt="Orthographic view" style="width:17px; height:17px;"> 
-                        <img src="/static/viewer/icons/camera_top.png" alt="Top view" style="width:17px; height:17px;"> 
-                        <img src="/static/viewer/icons/camera_right.png" alt="Right view" style="width:17px; height:17px;"> 
-                        <img src="/static/viewer/icons/camera_front.png" alt="Front view" style="width:17px; height:17px;"> 
-                        <img src="/static/viewer/icons/camera_left.png" alt="Left view" style="width:17px; height:17px;"> 
+                        <img src="{% static 'viewer/icons/camera_prosp.png' %}" alt="Perspective view" style="width:17px; height:17px;"> 
+                        <img src="{% static 'viewer/icons/camera_ortho.png' %}" alt="Orthographic view" style="width:17px; height:17px;"> 
+                        <img src="{% static 'viewer/icons/camera_top.png' %}" alt="Top view" style="width:17px; height:17px;"> 
+                        <img src="{% static 'viewer/icons/camera_right.png' %}" alt="Right view" style="width:17px; height:17px;"> 
+                        <img src="{% static 'viewer/icons/camera_front.png' %}" alt="Front view" style="width:17px; height:17px;"> 
+                        <img src="{% static 'viewer/icons/camera_left.png' %}" alt="Left view" style="width:17px; height:17px;"> 
                     </h2>
                     <p>There are different view modes available:</p>
                     <ul>
@@ -391,7 +391,7 @@
                     <h2 id="tools">Tools</h2>
                     <p>NB. Hovering the mouse over each tool for about one second will display a tooltip with the related controls and instructions.</p>
                     <h3 id="default-mode">Default mode
-                        <img src="/static/viewer/icons/cursor.png" alt="Default mode" style="width:17px; height:17px;">
+                        <img src="{% static 'viewer/icons/cursor.png' %}" alt="Default mode" style="width:17px; height:17px;">
                     </h3>
                     <p>The default mode allows you to rotate, pan, and zoom the point cloud view using the mouse:</p>
                     <ul>
@@ -401,11 +401,11 @@
                     </ul>
 
                     <h3 id="rect-lasso-pol-tool">Rectangle
-                        <img src="/static/viewer/icons/rec_select.png" alt="Rectangle selection" style="width:17px; height:17px;">
+                        <img src="{% static 'viewer/icons/rec_select.png' %}" alt="Rectangle selection" style="width:17px; height:17px;">
                         , Lasso
-                        <img src="/static/viewer/icons/lasso-select.png" alt="Lasso selection" style="width:17px; height:17px;">
+                        <img src="{% static 'viewer/icons/lasso-select.png' %}" alt="Lasso selection" style="width:17px; height:17px;">
                         and Polygon
-                        <img src="/static/viewer/icons/poly_select.png" alt="Polygon selection" style="width:17px; height:17px;">
+                        <img src="{% static 'viewer/icons/poly_select.png' %}" alt="Polygon selection" style="width:17px; height:17px;">
                         Selection</h3>
                     <p> Rectangle is a selection tool that allows you to select points within a rectangular area. </p>
                     <p> On the other hand, lasso selection allows you to draw a freeform shape to select points within that shape.  </p>
@@ -425,9 +425,9 @@
                     </ul>
 
                     <h3 id="cut-frame-tool">Cut  
-                        <img src="/static/viewer/icons/scissor.png" alt="Cut mode" style="width:17px; height:17px;"> 
+                        <img src="{% static 'viewer/icons/scissor.png' %}" alt="Cut mode" style="width:17px; height:17px;"> 
                         , Frame Selection 
-                        <img src="/static/viewer/icons/frame-to-pcd.png" alt="Frame Selection" style="width:17px; height:17px;">
+                        <img src="{% static 'viewer/icons/frame-to-pcd.png' %}" alt="Frame Selection" style="width:17px; height:17px;">
                         and Merge
                     </h3>
                     <p>The cut mode is useful to isolate specific parts of the point cloud for detailed inspection or editing. 
@@ -439,9 +439,9 @@
                         then with the right mouse button <a class="mouse-icon right"></a> will appear the merge option. </p>
                                
                     <h3 id="trasl-rotat-tool">Translation 
-                        <img src="/static/viewer/icons/move.png" alt="Move" style="width:17px; height:17px;">
+                        <img src="{% static 'viewer/icons/move.png' %}" alt="Move" style="width:17px; height:17px;">
                         and Rotation
-                        <img src="/static/viewer/icons/rotate.png" alt="Rotate" style="width:17px; height:17px;">
+                        <img src="{% static 'viewer/icons/rotate.png' %}" alt="Rotate" style="width:17px; height:17px;">
                     </h3>
                     <p>If the point cloud is imported in wrong way, you can translate or rotate it to the correct position. 
                         Gizmo reference is showned in bottom left corner to understand the orientation of the axis. </p>
@@ -450,9 +450,9 @@
                         increments, you can hold <code>SHIFT</code> and the left mouse button <a class="mouse-icon left"></a>.  </p>
                     
                     <h3 id="measure-tool">Measure Tool 
-                        <img src="/static/viewer/icons/measure.png" alt="measure" style="width:17px; height:17px;">
+                        <img src="{% static 'viewer/icons/measure.png' %}" alt="measure" style="width:17px; height:17px;">
                          and Area Measurement
-                        <img src="/static/viewer/icons/measure-area.png" alt="measure area" style="width:17px; height:17px;">
+                        <img src="{% static 'viewer/icons/measure-area.png' %}" alt="measure area" style="width:17px; height:17px;">
                     </h3>
                     <p>Two measurement modes are available: distance measurement and area measurement. 
                         In the first, you can first click <a class="mouse-icon left"></a> the point A and then second click <a class="mouse-icon left"></a> the point B to measure the distance between them. </p>

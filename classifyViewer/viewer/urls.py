@@ -2,14 +2,15 @@ from django.urls import path
 from .views import main_viewer, documentation
 from .request_functions import save_file, launch_RF_training, launch_RF_classify, subsample_pc, stop_process, get_model_voxel_size, checking_point_id, inspect_las_input
 from .request_functions import mesh2pc, ply2las, feat_extraction, potree_converter, _split_las_by_binary, las_to_feature_bin_view, read_text_file, model_exists, models_list, delete_model, extract_segment_las_view
-from .request_functions import serve_range_file, clear_data, upload_data, start_training, export_mapping, package_download_view, upload_model, backup_pointcloud, restore_pointcloud_backup
+from .request_functions import serve_range_file, serve_runtime_file, clear_data, upload_data, start_training, export_mapping, package_download_view, upload_model, backup_pointcloud, restore_pointcloud_backup
 
 urlpatterns = [
     path('', main_viewer, name='main_viewer'),
     path('documentation/', documentation, name='documentation'),
     # Serve point cloud binary files with Range request support
     path('pointcloud-data/<path:filepath>', serve_range_file, name='serve_range_file'),
-    # Add more path to launch other functions
+    # Serve runtime data files (LAS, JSON, etc.)
+    path('runtime-data/<path:filepath>', serve_runtime_file, name='serve_runtime_file'),
     path("save_file/", save_file),
     path("launch_RF_training/", launch_RF_training),
     path("launch_RF_classify/", launch_RF_classify),

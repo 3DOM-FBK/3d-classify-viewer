@@ -4,6 +4,7 @@ numpy==2.2.6
 pandas
 joblib
 gunicorn
+whitenoise
 tqdm
 open3d
 trimesh
