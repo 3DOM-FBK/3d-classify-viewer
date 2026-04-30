@@ -187,4 +187,4 @@ EXPOSE 8000
 # ENTRYPOINT [ "python", "manage.py", "runserver", "0.0.0.0:8000" ]
 
 # Run Django production server
-ENTRYPOINT [ "gunicorn", "classifyViewer.wsgi:application", "--bind", "0.0.0.0:8000" ]
+ENTRYPOINT [ "gunicorn", "classifyViewer.wsgi:application", "--config", "config/gunicorn.conf.py" ]
