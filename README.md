@@ -1,76 +1,151 @@
 # 3D Classify Viewer
 
-A Django-based web application for the visualization and classification of 3D data.
+A web-based application for interactive visualization and supervised classification of
+3D point clouds. It combines a Django REST backend, a BabylonJS + Potree 2.0 frontend,
+and a GPU-accelerated C++ processing pipeline to support the full workflow — from raw
+3D data upload to labeling, feature extraction, Random Forest training, and classified
+output export.
 
-## Features
+## Key Features
 
--   Interactive 3D visualization using **BabylonJS**.
--   Integration with **Scikit-learn** for classification functionality (under development).
--   Containerized environment with Docker for easy deployment.
+- **Multi-format input** — PLY, LAS, GLB, GLTF meshes are automatically
+  sampled to point clouds
+- **GPU-accelerated feature extraction** — per-point geometric descriptors (anisotropy,
+  linearity, planarity, etc.) computed at multiple radius using CUDA; CPU fallback
+  included
+- **Interactive point selection and labeling** — rectangular, lasso, and polygon
+  selection tools for annotating training regions directly in the 3D viewport
+- **Random Forest classification** — GPU-accelerated training and inference via RAPIDS
+  cuML; scikit-learn CPU fallback for non-GPU environments
+- **LOD streaming** — large point clouds streamed with adaptive level-of-detail via
+  Potree 2.0
+- **Prediction visualization** — discrete per-class coloring and confidence overlay
+- **Export** — download classified segments and trained models as a single ZIP package
+
+## Architecture Overview
+
+The application is structured in three layers:
+
+1. **Frontend** — BabylonJS 3D scene with Potree 2.0 LOD streaming. All user
+   interaction (selection tools, class registry, colormap, segment management) runs
+   in the browser.
+2. **Django backend** — REST API with 30+ endpoints that orchestrate file uploads,
+   C++ pipeline invocation, model management, and file serving (including HTTP Range
+   support for large binary files).
+3. **C++ processing pipeline** — eight pre-compiled binaries at `/webapp/opt/` inside
+   the container, covering format conversion, subsampling, GPU/CPU feature extraction,
+   Potree conversion, and `.pcbin` binary export. Invoked from Python via `subprocess`.
+
+For a detailed breakdown, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## Prerequisites
+
+| Requirement | Version |
+|---|---|
+| Docker | ≥ 20.10 |
+| NVIDIA GPU | Compute Capability ≥ 7.5 (Turing / RTX 20xx or newer) |
+| NVIDIA Driver | ≥ 520 |
+| VRAM | ≥ 8 GB recommended for large point clouds |
+| nvidia-container-toolkit | any current release |
+
+> The application falls back to CPU for feature extraction and RF inference when no
+> CUDA-capable GPU is detected, but processing times will be significantly longer.
+
+## Quick Start
+
+### 1. Build the Docker image
+
+```bash
+docker build -t 3d-classify-viewer .
+```
+
+To speed up the C++ compilation stage, increase the number of parallel build threads:
+
+```bash
+docker build --build-arg NUM_THREADS=16 -t 3d-classify-viewer .
+```
+
+### 2. Run in production
+
+```bash
+docker run -d -p 8000:8000 --gpus all 3d-classify-viewer
+```
+
+The application is served by Gunicorn on port **8000**. Open `http://localhost:8000`
+in a browser.
+
+### 3. Run in development
+
+```bash
+docker run -it -p 8000:8000 --gpus all \
+  -v "$(pwd)/classifyViewer:/webapp/classifyViewer" \
+  3d-classify-viewer \
+  python classifyViewer/manage.py runserver 0.0.0.0:8000
+```
+
+Mounting the source directory enables live code reloading without rebuilding the image.
 
 ## Project Structure
 
-The project is organized as follows:
+```
+3d-classify-viewer/
+├── Dockerfile                      # Multi-stage build: CUDA 11.8 builder → runtime image
+├── requirements.txt                # Python dependencies
+├── classifyViewer/
+│   ├── manage.py
+│   ├── config/
+│   │   └── gunicorn.conf.py        # Gunicorn production server configuration
+│   ├── classifyViewer/             # Django project configuration
+│   │   ├── settings.py
+│   │   └── urls.py
+│   └── viewer/                     # Main Django application
+│       ├── views.py                # Page views (viewer and documentation)
+│       ├── urls.py                 # URL patterns and API routes
+│       ├── request_functions.py    # REST API request handlers
+│       ├── functions.py            # JobManager and C++ subprocess wrappers
+│       ├── utils_functions/
+│       │   ├── RF_training.py      # Random Forest training
+│       │   └── RF_classify.py      # Random Forest inference (CPU/GPU)
+│       ├── static/viewer/
+│       │   ├── js/                 # BabylonJS app, Potree 2.0 loader, UI logic
+│       │   ├── css/                # Application and documentation styles
+│       │   └── images/             # Workflow diagrams
+│       └── templates/viewer/
+│           ├── viewer_page.html    # Main 3D viewer page
+│           └── docs_page.html      # In-app documentation page
+└── opt/                            # Pre-compiled C++ processing binaries
+    ├── feature_extraction_viewer_gpu
+    ├── feature_extraction_viewer_cpu
+    ├── subsample_pc
+    ├── mesh2pc
+    ├── ply2las
+    ├── split_las_by_binary
+    ├── las_to_feature_bin
+    └── check_point_id
+```
 
--   `classifyViewer/`: The Django project root.
-    -   `classifyViewer/`: Contains project configuration settings (settings, urls, wsgi).
-    -   `viewer/`: The main Django application handling the viewer logic.
-        -   `static/`: Contains static files (Javascript, CSS, 3D models).
-        -   `templates/`: Contains HTML templates.
-        -   `views.py`: Handles HTTP requests and visualization logic.
-    -   `manage.py`: Django management script for running tasks like migrations and the development server.
--   `Dockerfile`: Configuration for containerizing the development and production environment.
--   `requirements.txt`: List of required Python dependencies.
+## Documentation
 
-## Requirements
+| Document | Description |
+|---|---|
+| [Installation Guide](docs/INSTALLATION.md) | Hardware and software requirements, Docker setup, environment validation |
+| [User Guide](docs/USER_GUIDE.md) | Full usage walkthrough: data loading, labeling, training, classification, export |
+| [Architecture](docs/ARCHITECTURE.md) | System design, data flow, Python ↔ C++ integration, ML pipeline |
+| [API Reference](docs/API_REFERENCE.md) | All REST endpoints with request and response schemas |
+| [C++ Binaries Reference](docs/BINARIES.md) | CLI reference for all processing binaries in `opt/` |
 
--   Python 3.11+ (if running locally)
--   Docker (optional, but recommended for environment consistency)
+## Python Dependencies
 
-## Installation and Execution
+Key Python packages (`requirements.txt` for the full list):
 
-### Option 1: Using Docker (Recommended)
-
-1.  **Build the Docker image:**
-    ```bash
-    docker build -t 3d-classify-viewer .
-    ```
-
-2.  **Run the container:**
-    ```bash
-    docker run -it -p 8000:8000 -v "$(pwd):/app" 3d-classify-viewer python classifyViewer/manage.py runserver 0.0.0.0:8000
-    ```
-    *Note: The command above mounts the current directory into the container to reflect code changes in real-time and starts the Django development server.*
-
-### Option 2: Local Installation
-
-1.  **Create and activate a virtual environment:**
-    ```bash
-    python -m venv venv
-    # On Windows:
-    .\venv\Scripts\activate
-    # On macOS/Linux:
-    source venv/bin/activate
-    ```
-
-2.  **Install dependencies:**
-    ```bash
-    pip install -r requirements.txt
-    ```
-
-3.  **Prepare the database (if necessary):**
-    ```bash
-    cd classifyViewer
-    python manage.py migrate
-    ```
-
-4.  **Start the development server:**
-    ```bash
-    python manage.py runserver
-    ```
-    The application will be accessible at `http://127.0.0.1:8000/`.
-
-## Development Notes
-
--   Ensure dependencies are updated in the `requirements.txt` file.
--   The 3D viewer uses **BabylonJS** or similar technologies integrated into the templates within the `viewer/templates` folder.
+| Package | Purpose |
+|---|---|
+| Django | Web framework |
+| Gunicorn + Whitenoise | Production WSGI server and static file serving |
+| scikit-learn | Random Forest training and inference (CPU) |
+| numpy, pandas | Numerical computation and data handling |
+| laspy | LAS/LAZ point cloud I/O |
+| open3d | Point cloud processing utilities |
+| trimesh, pygltflib | Mesh file I/O (GLB/GLTF/OBJ) |
+| torch (CUDA 11.8) | GPU compute backend |
+| cupy-cuda11x, cuml-cu11 | GPU-accelerated ML via RAPIDS |
