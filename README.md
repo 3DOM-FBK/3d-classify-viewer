@@ -53,7 +53,16 @@ For a detailed breakdown, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Quick Start
 
+A pre-built Docker image is available on Docker Hub and can be used directly without
+compiling from source:
+
+```bash
+docker pull 3domfbk/3d-classify-viewer:v1.0.0-beta.9
+```
+
 ### 1. Build the Docker image
+
+Skip this step if you are using the pre-built image from Docker Hub.
 
 ```bash
 docker build -t 3d-classify-viewer .
@@ -66,6 +75,9 @@ docker build --build-arg NUM_THREADS=16 -t 3d-classify-viewer .
 ```
 
 ### 2. Run in production
+
+Replace `3d-classify-viewer` with `3domfbk/3d-classify-viewer:v1.0.0-beta.9` if using
+the pre-built image.
 
 ```bash
 docker run -d -p 8000:8000 --gpus all 3d-classify-viewer
